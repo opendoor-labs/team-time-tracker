@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Team Time Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Login Screen -->
+  <div class="login-screen" id="loginScreen">
+    <h1>⏱ Team Time Tracker</h1>
+    <p>Shift: 8:00 PM – 5:00 AM IST</p>
+    <input type="text" id="nameInput" placeholder="Enter your name" autocomplete="off">
+    <button class="btn-start" id="btnStart" disabled>Start Shift</button>
+    <span class="settings-link" id="settingsLink">⚙ Google Sheets Settings</span>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal">
+      <h2>Google Sheets Settings</h2>
+      <label>Google Apps Script Web App URL</label>
+      <input type="text" id="sheetUrlInput" placeholder="https://script.google.com/macros/s/...">
+      <div class="modal-buttons">
+        <button class="btn-cancel" id="btnSettingsCancel">Cancel</button>
+        <button class="btn-save" id="btnSettingsSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MANDATORY PRODUCTION OVERLAY -->
+  <div class="mandatory-overlay" id="mandatoryOverlay">
+    <div class="mandatory-content">
+      <div class="mandatory-icon">🚀</div>
+      <h2>Start Your Shift</h2>
+      <p>You must click <strong>Production</strong> to begin working.</p>
+      <p class="mandatory-sub">No other tools or activities are available until you start Production.</p>
+      <button class="btn-force-production" id="btnForceProduction">
+        ⚙ Start Production
+      </button>
+    </div>
+  </div>
+
+  <!-- INACTIVITY ALERT BANNER -->
+  <div class="inactivity-banner" id="inactivityBanner">
+    <span class="inactivity-icon">⚠️</span>
+    <span>Auto-Break started — No activity detected for 15 minutes</span>
+    <button class="btn-resume" id="btnResume">Resume Production</button>
+  </div>
+
+  <!-- Dashboard -->
+  <div class="dashboard" id="dashboard">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-left">
+        <h2 id="welcomeUser">Welcome, User</h2>
+        <span>Shift: 8:00 PM – 5:00 AM IST</span>
+      </div>
+      <div class="header-right">
+        <div class="shift-badge">
+          Shift Elapsed: <span id="shiftElapsed">00:00:00</span>
+        </div>
+        <div class="idle-badge" id="idleBadge">
+          Idle: <span id="idleTimer">00:00</span> / 15:00
+        </div>
+        <button class="btn-end-shift" id="btnEndShift">End Shift</button>
+      </div>
+    </div>
+
+    <!-- Current Activity -->
+    <div class="current-activity">
+      <div class="label">CURRENT ACTIVITY</div>
+      <div class="activity-name" id="currentActivityName">Not Started</div>
+      <div class="timer" id="currentTimer">00:00:00</div>
+    </div>
+
+    <!-- Activity Buttons -->
+    <div class="activity-buttons">
+      <button class="activity-btn btn-production" data-activity="Production" id="btnProduction">
+        <span class="icon">⚙</span>
+        <span>Production</span>
+        <span class="btn-timer" id="timerProduction">00:00:00</span>
+      </button>
+      <button class="activity-btn btn-break" data-activity="Break" id="btnBreak">
+        <span class="icon">☕</span>
+        <span>Break</span>
+        <span class="btn-timer" id="timerBreak">00:00:00</span>
+      </button>
+      <button class="activity-btn btn-lunch" data-activity="Lunch/Dinner" id="btnLunch">
+        <span class="icon">🍽</span>
+        <span>Lunch/Dinner</span>
+        <span class="btn-timer" id="timerLunch">00:00:00</span>
+      </button>
+      <button class="activity-btn btn-meeting" data-activity="Meeting" id="btnMeeting">
+        <span class="icon">👥</span>
+        <span>Meeting</span>
+        <span class="btn-timer" id="timerMeeting">00:00:00</span>
+      </button>
+      <button class="activity-btn btn-training" data-activity="Training" id="btnTraining">
+        <span class="icon">📚</span>
+        <span>Training</span>
+        <span class="btn-timer" id="timerTraining">00:00:00</span>
+      </button>
+    </div>
+
+    <!-- Break Tracker -->
+    <div class="break-tracker">
+      <div class="break-header">
+        <span>Break Time (1 hr allowed)</span>
+        <span class="break-time" id="breakTimeDisplay">00:00 / 60:00</span>
+      </div>
+      <div class="break-bar">
+        <div class="break-bar-fill" id="breakBarFill"></div>
+      </div>
+      <div class="break-exceeded-badge" id="breakExceeded">Break Exceeded!</div>
+    </div>
+
+    <!-- Daily Summary -->
+    <div class="daily-summary">
+      <h3>Today's Summary</h3>
+      <div class="summary-grid">
+        <div class="summary-card production">
+          <div class="card-label">Production</div>
+          <div class="card-value" id="summaryProduction">00:00</div>
+        </div>
+        <div class="summary-card break-card">
+          <div class="card-label">Break</div>
+          <div class="card-value" id="summaryBreak">00:00</div>
+        </div>
+        <div class="summary-card lunch">
+          <div class="card-label">Lunch/Dinner</div>
+          <div class="card-value" id="summaryLunch">00:00</div>
+        </div>
+        <div class="summary-card meeting">
+          <div class="card-label">Meeting</div>
+          <div class="card-value" id="summaryMeeting">00:00</div>
+        </div>
+        <div class="summary-card training">
+          <div class="card-label">Training</div>
+          <div class="card-value" id="summaryTraining">00:00</div>
+        </div>
+      </div>
+
+      <div class="activity-log">
+        <h4>Activity Log</h4>
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>Activity</th>
+              <th>Start</th>
+              <th>End</th>
+              <th>Duration</th>
+              <th>Type</th>
+            </tr>
+          </thead>
+          <tbody id="logBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

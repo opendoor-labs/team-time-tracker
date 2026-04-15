@@ -1,0 +1,12 @@
+# Binaries
+TeamTimeTracker
+team-tracker-monitor
+TeamTimeTracker.app/
+*.app/
+
+# Node
+node_modules/
+
+# System
+.DS_Store
+.claude/

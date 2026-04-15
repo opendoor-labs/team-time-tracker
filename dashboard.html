@@ -1,0 +1,1548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Team Time Tracker - Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0f1724;
+    --card: #1a2236;
+    --card-hover: #1e2842;
+    --border: #2a3552;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --text-muted: #64748b;
+    --green: #22c55e;
+    --green-bg: rgba(34,197,94,0.12);
+    --orange: #f59e0b;
+    --orange-bg: rgba(245,158,11,0.12);
+    --blue: #3b82f6;
+    --blue-bg: rgba(59,130,246,0.12);
+    --red: #ef4444;
+    --red-bg: rgba(239,68,68,0.12);
+    --purple: #a855f7;
+    --purple-bg: rgba(168,85,247,0.12);
+    --deep-orange: #f97316;
+    --deep-orange-bg: rgba(249,115,22,0.12);
+    --cyan: #06b6d4;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+
+  .container {
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .header-left { display: flex; align-items: center; gap: 16px; }
+
+  .header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--green), var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+
+  .datetime {
+    font-size: 13px;
+    color: var(--text-dim);
+    text-align: right;
+  }
+
+  .datetime .date { font-weight: 600; color: var(--text); font-size: 14px; }
+
+  .refresh-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .countdown-ring {
+    width: 32px;
+    height: 32px;
+    position: relative;
+  }
+
+  .countdown-ring svg {
+    transform: rotate(-90deg);
+    width: 32px;
+    height: 32px;
+  }
+
+  .countdown-ring circle {
+    fill: none;
+    stroke-width: 3;
+  }
+
+  .countdown-ring .bg { stroke: var(--border); }
+
+  .countdown-ring .progress {
+    stroke: var(--green);
+    stroke-dasharray: 82;
+    stroke-dashoffset: 0;
+    transition: stroke-dashoffset 1s linear;
+    stroke-linecap: round;
+  }
+
+  .countdown-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    animation: pulse 2s infinite;
+  }
+
+  .status-dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .status-dot.exceeded { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  /* Summary Cards */
+  .cards-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+
+  .card:hover {
+    transform: translateY(-2px);
+    border-color: var(--text-muted);
+  }
+
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .card.green::before { background: linear-gradient(90deg, var(--green), var(--cyan)); }
+  .card.orange::before { background: linear-gradient(90deg, var(--orange), #fbbf24); }
+  .card.red::before { background: linear-gradient(90deg, var(--red), #f87171); }
+  .card.blue::before { background: linear-gradient(90deg, var(--blue), var(--purple)); }
+
+  .card-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+
+  .card-value {
+    font-size: 36px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .card.green .card-value { color: var(--green); }
+  .card.orange .card-value { color: var(--orange); }
+  .card.red .card-value { color: var(--red); }
+  .card.blue .card-value { color: var(--blue); }
+
+  .card-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .card-icon {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    font-size: 28px;
+    opacity: 0.15;
+  }
+
+  /* Section */
+  .section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-title {
+    font-size: 16px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .section-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+
+  .badge-green { background: var(--green-bg); color: var(--green); }
+  .badge-red { background: var(--red-bg); color: var(--red); }
+  .badge-orange { background: var(--orange-bg); color: var(--orange); }
+
+  /* Tables */
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  thead th {
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    background: rgba(15,23,36,0.5);
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+  }
+
+  tbody td {
+    padding: 10px 14px;
+    border-top: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  tbody tr {
+    transition: background 0.15s;
+  }
+
+  tbody tr:hover {
+    background: rgba(42,53,82,0.3);
+  }
+
+  tr.exceeded-row {
+    background: rgba(239,68,68,0.06);
+  }
+
+  tr.exceeded-row:hover {
+    background: rgba(239,68,68,0.1);
+  }
+
+  .name-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+  }
+
+  /* Activity Badge */
+  .activity-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .activity-Production { background: var(--green-bg); color: var(--green); }
+  .activity-Break { background: var(--orange-bg); color: var(--orange); }
+  .activity-Lunch { background: var(--deep-orange-bg); color: var(--deep-orange); }
+  .activity-Meeting { background: var(--blue-bg); color: var(--blue); }
+  .activity-Training { background: var(--purple-bg); color: var(--purple); }
+  .activity-Idle { background: var(--red-bg); color: var(--red); }
+  .activity-Auto { background: rgba(100,116,139,0.15); color: var(--text-muted); }
+
+  .exceeded-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .exceeded-yes { background: var(--red-bg); color: var(--red); }
+  .exceeded-no { background: rgba(34,197,94,0.08); color: var(--text-muted); }
+
+  .number-cell {
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+  }
+
+  .highlight-high {
+    color: var(--green);
+    font-weight: 600;
+  }
+
+  /* Activity Feed */
+  .feed-list {
+    padding: 0;
+    max-height: 450px;
+    overflow-y: auto;
+  }
+
+  .feed-list::-webkit-scrollbar { width: 6px; }
+  .feed-list::-webkit-scrollbar-track { background: transparent; }
+  .feed-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .feed-item {
+    display: flex;
+    gap: 12px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    align-items: flex-start;
+    transition: background 0.15s;
+  }
+
+  .feed-item:hover { background: rgba(42,53,82,0.2); }
+  .feed-item:last-child { border-bottom: none; }
+
+  .feed-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 72px;
+    font-variant-numeric: tabular-nums;
+    padding-top: 2px;
+  }
+
+  .feed-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-top: 6px;
+    flex-shrink: 0;
+  }
+
+  .feed-content {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.4;
+  }
+
+  .feed-content strong { color: var(--text); font-weight: 600; }
+
+  /* Idle Alerts */
+  .alert-list {
+    padding: 0;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .alert-item {
+    display: flex;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    transition: background 0.15s;
+  }
+
+  .alert-item:hover { background: rgba(42,53,82,0.2); }
+  .alert-item:last-child { border-bottom: none; }
+
+  .alert-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    background: var(--orange-bg);
+  }
+
+  .alert-text {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.4;
+  }
+
+  .alert-text strong { color: var(--text); }
+
+  .alert-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  /* Two Column Layout */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 20px;
+  }
+
+  /* Loading / Error */
+  .loading-overlay {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    gap: 16px;
+  }
+
+  .spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--border);
+    border-top-color: var(--green);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-text {
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+
+  .error-state {
+    text-align: center;
+    padding: 60px 20px;
+  }
+
+  .error-state .icon { font-size: 48px; margin-bottom: 12px; }
+
+  .error-state h3 {
+    font-size: 18px;
+    color: var(--red);
+    margin-bottom: 8px;
+  }
+
+  .error-state p {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
+
+  .btn-retry {
+    background: var(--green);
+    color: #fff;
+    border: none;
+    padding: 8px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .btn-retry:hover { opacity: 0.85; }
+
+  /* Animations */
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .animate-in {
+    animation: fadeInUp 0.4s ease-out forwards;
+    opacity: 0;
+  }
+
+  .delay-1 { animation-delay: 0.05s; }
+  .delay-2 { animation-delay: 0.1s; }
+  .delay-3 { animation-delay: 0.15s; }
+  .delay-4 { animation-delay: 0.2s; }
+  .delay-5 { animation-delay: 0.25s; }
+  .delay-6 { animation-delay: 0.3s; }
+  .delay-7 { animation-delay: 0.35s; }
+
+  /* Responsive */
+  @media (max-width: 1024px) {
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 768px) {
+    .container { padding: 12px; }
+    .cards-row { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .header { flex-direction: column; align-items: flex-start; }
+    .header-right { width: 100%; justify-content: space-between; }
+    .card-value { font-size: 28px; }
+    .section-header { padding: 12px 16px; }
+    thead th, tbody td { padding: 8px 10px; font-size: 12px; }
+    .feed-item, .alert-item { padding: 8px 16px; }
+  }
+
+  @media (max-width: 480px) {
+    .cards-row { grid-template-columns: 1fr 1fr; }
+    .card { padding: 14px; }
+    .card-value { font-size: 24px; }
+    .header h1 { font-size: 18px; }
+  }
+
+  /* Date Picker */
+  .date-picker-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .date-nav-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    transition: all 0.15s;
+  }
+
+  .date-nav-btn:hover { border-color: var(--green); color: var(--green); }
+  .date-nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .date-input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+
+  .date-input:hover { border-color: var(--text-muted); }
+  .date-input:focus { outline: none; border-color: var(--green); }
+
+  .date-input::-webkit-calendar-picker-indicator {
+    filter: invert(0.7);
+    cursor: pointer;
+  }
+
+  .date-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+  }
+
+  .today-btn {
+    background: var(--green-bg);
+    border: 1px solid var(--green);
+    color: var(--green);
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+
+  .today-btn:hover { background: var(--green); color: #fff; }
+
+  .archive-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .archive-indicator.live-mode {
+    background: var(--green-bg);
+    color: var(--green);
+  }
+
+  .archive-indicator.archive-mode {
+    background: var(--orange-bg);
+    color: var(--orange);
+  }
+
+  .archive-dates-dropdown {
+    position: relative;
+    display: inline-block;
+  }
+
+  .archive-dates-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+
+  .archive-dates-btn:hover { border-color: var(--text-muted); color: var(--text); }
+
+  .archive-dates-list {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 0;
+    min-width: 220px;
+    max-height: 300px;
+    overflow-y: auto;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+
+  .archive-dates-list.show { display: block; }
+
+  .archive-date-item {
+    padding: 8px 16px;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+
+  .archive-date-item:hover {
+    background: rgba(42,53,82,0.4);
+    color: var(--text);
+  }
+
+  .archive-date-item.active {
+    background: var(--green-bg);
+    color: var(--green);
+    font-weight: 600;
+  }
+
+  .no-archives {
+    padding: 16px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  /* Scrollbar */
+  .table-wrap::-webkit-scrollbar { height: 6px; }
+  .table-wrap::-webkit-scrollbar-track { background: transparent; }
+  .table-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* Empty state */
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  /* Tab filter */
+  .filter-pills {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .pill {
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    transition: all 0.15s;
+  }
+
+  .pill:hover { border-color: var(--text-muted); color: var(--text-dim); }
+  .pill.active { background: var(--green-bg); border-color: var(--green); color: var(--green); }
+</style>
+</head>
+<body>
+
+<div class="container" id="app">
+
+  <!-- Header -->
+  <div class="header animate-in delay-1">
+    <div class="header-left">
+      <h1>Team Time Tracker</h1>
+      <span class="status-dot live" id="statusDot"></span>
+    </div>
+    <div class="header-right">
+      <span class="archive-indicator live-mode" id="modeIndicator">
+        <span class="status-dot live" style="width:6px;height:6px;animation:pulse 2s infinite;"></span> LIVE
+      </span>
+      <div class="date-picker-wrap">
+        <button class="date-nav-btn" id="prevDate" onclick="window.__changeDate(-1)" title="Previous day">&#9664;</button>
+        <div>
+          <input type="date" class="date-input" id="datePicker" onchange="window.__onDateChange(this.value)">
+          <div class="date-label" id="dateLabel">Today</div>
+        </div>
+        <button class="date-nav-btn" id="nextDate" onclick="window.__changeDate(1)" title="Next day">&#9654;</button>
+        <button class="today-btn" id="todayBtn" onclick="window.__goToday()" style="display:none;">Today</button>
+      </div>
+      <div class="archive-dates-dropdown">
+        <button class="archive-dates-btn" onclick="window.__toggleArchiveList()">&#128197; Archives</button>
+        <div class="archive-dates-list" id="archiveDatesList"></div>
+      </div>
+      <div class="datetime">
+        <div class="date" id="currentDate"></div>
+        <div id="currentTime"></div>
+      </div>
+      <div class="refresh-info">
+        <div class="countdown-ring">
+          <svg viewBox="0 0 32 32">
+            <circle class="bg" cx="16" cy="16" r="13"/>
+            <circle class="progress" id="countdownCircle" cx="16" cy="16" r="13"/>
+          </svg>
+          <span class="countdown-text" id="countdownText">60</span>
+        </div>
+        <div>
+          <div style="font-size: 11px; color: var(--text-dim);">Auto-refresh</div>
+          <div id="lastRefreshed" style="font-size: 10px;">--</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary Cards -->
+  <div class="cards-row">
+    <div class="card green animate-in delay-2">
+      <div class="card-icon">&#128101;</div>
+      <div class="card-label">Members Online</div>
+      <div class="card-value" id="cardOnline">--</div>
+      <div class="card-sub" id="cardOnlineSub">Loading...</div>
+    </div>
+    <div class="card orange animate-in delay-3">
+      <div class="card-icon">&#9203;</div>
+      <div class="card-label">Avg Production (min)</div>
+      <div class="card-value" id="cardAvgProd">--</div>
+      <div class="card-sub" id="cardAvgProdSub">Loading...</div>
+    </div>
+    <div class="card red animate-in delay-4">
+      <div class="card-icon">&#9888;</div>
+      <div class="card-label">Idle Alerts Today</div>
+      <div class="card-value" id="cardIdle">--</div>
+      <div class="card-sub" id="cardIdleSub">Loading...</div>
+    </div>
+    <div class="card blue animate-in delay-5">
+      <div class="card-icon">&#128340;</div>
+      <div class="card-label">Break Exceeded</div>
+      <div class="card-value" id="cardExceeded">--</div>
+      <div class="card-sub" id="cardExceededSub">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Live Status -->
+  <div class="section animate-in delay-5" id="liveSection">
+    <div class="section-header">
+      <div class="section-title">
+        <span id="liveTitle">Live Status</span>
+        <span class="section-badge badge-green" id="liveBadge">0 online</span>
+      </div>
+      <div class="filter-pills">
+        <button class="pill active" onclick="filterLive('all')">All</button>
+        <button class="pill" onclick="filterLive('Production')">Production</button>
+        <button class="pill" onclick="filterLive('Break')">Break</button>
+        <button class="pill" onclick="filterLive('Lunch')">Lunch</button>
+        <button class="pill" onclick="filterLive('Meeting')">Meeting</button>
+        <button class="pill" onclick="filterLive('exceeded')">Exceeded</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Shift Start</th>
+            <th>Activity</th>
+            <th>Production</th>
+            <th>Break</th>
+            <th>Lunch</th>
+            <th>Meeting</th>
+            <th>Training</th>
+            <th>Idle</th>
+            <th>Break Exceeded</th>
+            <th>Shift Elapsed</th>
+          </tr>
+        </thead>
+        <tbody id="liveBody">
+          <tr><td colspan="11"><div class="loading-overlay"><div class="spinner"></div><div class="loading-text">Loading live data...</div></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Two Column: Activity Feed + Idle Alerts -->
+  <div class="two-col">
+    <!-- Activity Feed -->
+    <div class="section animate-in delay-6">
+      <div class="section-header">
+        <div class="section-title">
+          Recent Activity
+          <span class="section-badge badge-green" id="activityBadge">0 events</span>
+        </div>
+      </div>
+      <div class="feed-list" id="activityFeed">
+        <div class="loading-overlay"><div class="spinner"></div><div class="loading-text">Loading activity...</div></div>
+      </div>
+    </div>
+
+    <!-- Idle Alerts -->
+    <div class="section animate-in delay-7">
+      <div class="section-header">
+        <div class="section-title">
+          Idle Alerts
+          <span class="section-badge badge-orange" id="idleBadge">0 alerts</span>
+        </div>
+      </div>
+      <div class="alert-list" id="idleAlerts">
+        <div class="loading-overlay"><div class="spinner"></div><div class="loading-text">Loading alerts...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shift Summary -->
+  <div class="section animate-in delay-7" id="summarySection">
+    <div class="section-header">
+      <div class="section-title">
+        Shift Summary
+        <span class="section-badge badge-green" id="summaryBadge">Today</span>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Shift Start</th>
+            <th>Shift End</th>
+            <th>Production</th>
+            <th>Break</th>
+            <th>Lunch</th>
+            <th>Meeting</th>
+            <th>Training</th>
+            <th>Idle</th>
+            <th>Break Exceeded</th>
+            <th>Exceeded By</th>
+            <th>Unmarked Break</th>
+          </tr>
+        </thead>
+        <tbody id="summaryBody">
+          <tr><td colspan="12"><div class="loading-overlay"><div class="spinner"></div><div class="loading-text">Loading summary...</div></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ---- Configuration ----
+  const API_URL = 'https://script.google.com/macros/s/AKfycbwSSg3hotZSK9io6_wPyH3PMQKL1LlIQlsCzsia2uKcTQSkYUVJbAt6vrbMTdeicZmVBA/exec';
+  const REFRESH_INTERVAL = 60; // seconds
+  const IST_OFFSET = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+
+  // ---- State ----
+  let dashboardData = null;
+  let countdown = REFRESH_INTERVAL;
+  let countdownTimer = null;
+  let currentFilter = 'all';
+  let fetchInProgress = false;
+  let selectedDate = ''; // empty = today (live)
+  let isArchiveMode = false;
+  let availableDates = [];
+
+  // ---- Utility Functions ----
+  function getIST() {
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    return new Date(utc + IST_OFFSET);
+  }
+
+  function formatISTDate(d) {
+    if (!d) d = getIST();
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    return days[d.getDay()] + ', ' + d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
+  }
+
+  function formatISTTime(d) {
+    if (!d) d = getIST();
+    let h = d.getHours();
+    const m = String(d.getMinutes()).padStart(2, '0');
+    const s = String(d.getSeconds()).padStart(2, '0');
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return h + ':' + m + ':' + s + ' ' + ampm + ' IST';
+  }
+
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    const div = document.createElement('div');
+    div.textContent = String(str);
+    return div.innerHTML;
+  }
+
+  function getActivityClass(activity) {
+    if (!activity) return 'activity-Auto';
+    const a = String(activity).toLowerCase();
+    if (a.includes('production')) return 'activity-Production';
+    if (a.includes('break') && !a.includes('auto')) return 'activity-Break';
+    if (a.includes('auto-break') || a.includes('auto break')) return 'activity-Auto';
+    if (a.includes('lunch') || a.includes('dinner')) return 'activity-Lunch';
+    if (a.includes('meeting')) return 'activity-Meeting';
+    if (a.includes('training')) return 'activity-Training';
+    if (a.includes('idle')) return 'activity-Idle';
+    return 'activity-Auto';
+  }
+
+  function getActivityDotColor(activity) {
+    if (!activity) return 'var(--text-muted)';
+    const a = String(activity).toLowerCase();
+    if (a.includes('production')) return 'var(--green)';
+    if (a.includes('break')) return 'var(--orange)';
+    if (a.includes('lunch') || a.includes('dinner')) return 'var(--deep-orange)';
+    if (a.includes('meeting')) return 'var(--blue)';
+    if (a.includes('training')) return 'var(--purple)';
+    if (a.includes('idle')) return 'var(--red)';
+    return 'var(--text-muted)';
+  }
+
+  function parseTimeStr(timeStr) {
+    // Try to extract a time like "HH:MM:SS AM/PM" from strings
+    if (!timeStr) return '';
+    const s = String(timeStr);
+    const match = s.match(/(\d{1,2}:\d{2}:\d{2}\s*[AP]M)/i);
+    if (match) return match[1];
+    // Try "HH:MM:SS" without AM/PM
+    const match2 = s.match(/(\d{1,2}:\d{2}:\d{2})/);
+    if (match2) return match2[1];
+    return s;
+  }
+
+  function shortTime(timeStr) {
+    if (!timeStr) return '--';
+    const s = String(timeStr);
+    const match = s.match(/(\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M)/i);
+    if (match) {
+      // Remove seconds for display
+      return match[1].replace(/:\d{2}(\s*[AP]M)/i, '$1');
+    }
+    const match2 = s.match(/(\d{1,2}:\d{2})/);
+    if (match2) return match2[1];
+    return s;
+  }
+
+  // ---- Clock ----
+  function updateClock() {
+    const ist = getIST();
+    document.getElementById('currentDate').textContent = formatISTDate(ist);
+    document.getElementById('currentTime').textContent = formatISTTime(ist);
+  }
+
+  // ---- Countdown ----
+  function startCountdown() {
+    countdown = REFRESH_INTERVAL;
+    if (countdownTimer) clearInterval(countdownTimer);
+    countdownTimer = setInterval(() => {
+      countdown--;
+      const pct = (countdown / REFRESH_INTERVAL);
+      const circle = document.getElementById('countdownCircle');
+      if (circle) {
+        circle.style.strokeDashoffset = (1 - pct) * 82;
+        if (countdown <= 10) {
+          circle.style.stroke = 'var(--orange)';
+        } else {
+          circle.style.stroke = 'var(--green)';
+        }
+      }
+      const txt = document.getElementById('countdownText');
+      if (txt) txt.textContent = countdown;
+
+      if (countdown <= 0) {
+        fetchData();
+        countdown = REFRESH_INTERVAL;
+      }
+    }, 1000);
+  }
+
+  // ---- Date Helpers ----
+  function getTodayPST() {
+    // Get today in PST (America/Los_Angeles) as MM-dd-yyyy
+    const now = new Date();
+    const pst = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+    const mm = String(pst.getMonth() + 1).padStart(2, '0');
+    const dd = String(pst.getDate()).padStart(2, '0');
+    return mm + '-' + dd + '-' + pst.getFullYear();
+  }
+
+  function dateToAPIFormat(dateStr) {
+    // Convert yyyy-mm-dd (input[type=date]) to MM-dd-yyyy (API format)
+    if (!dateStr) return '';
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return dateStr;
+    return parts[1] + '-' + parts[2] + '-' + parts[0];
+  }
+
+  function apiToInputFormat(apiDate) {
+    // Convert MM-dd-yyyy to yyyy-mm-dd (input[type=date] format)
+    if (!apiDate) return '';
+    const parts = apiDate.split('-');
+    if (parts.length !== 3) return apiDate;
+    return parts[2] + '-' + parts[0] + '-' + parts[1];
+  }
+
+  function formatDateLabel(apiDate) {
+    if (!apiDate) return 'Today';
+    const today = getTodayPST();
+    if (apiDate === today) return 'Today (Live)';
+    const parts = apiDate.split('-');
+    const d = new Date(parts[2], parseInt(parts[0]) - 1, parseInt(parts[1]));
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return days[d.getDay()] + ', ' + d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
+  }
+
+  function updateDateUI() {
+    const indicator = document.getElementById('modeIndicator');
+    const todayBtn = document.getElementById('todayBtn');
+    const dateLabel = document.getElementById('dateLabel');
+    const datePicker = document.getElementById('datePicker');
+    const nextBtn = document.getElementById('nextDate');
+    const today = getTodayPST();
+
+    if (!selectedDate || selectedDate === today) {
+      // Live mode
+      isArchiveMode = false;
+      indicator.className = 'archive-indicator live-mode';
+      indicator.innerHTML = '<span class="status-dot live" style="width:6px;height:6px;animation:pulse 2s infinite;"></span> LIVE';
+      todayBtn.style.display = 'none';
+      dateLabel.textContent = 'Today (Live)';
+      datePicker.value = apiToInputFormat(today);
+      nextBtn.disabled = true;
+    } else {
+      // Archive mode
+      isArchiveMode = true;
+      indicator.className = 'archive-indicator archive-mode';
+      indicator.innerHTML = '&#128230; ARCHIVED';
+      todayBtn.style.display = 'inline-block';
+      dateLabel.textContent = formatDateLabel(selectedDate);
+      datePicker.value = apiToInputFormat(selectedDate);
+      // Disable next if selected date is today
+      nextBtn.disabled = (selectedDate === today);
+    }
+
+    // Update archive list active state
+    document.querySelectorAll('.archive-date-item').forEach(item => {
+      item.classList.toggle('active', item.dataset.date === selectedDate);
+    });
+  }
+
+  // ---- Date Navigation ----
+  window.__onDateChange = function(inputVal) {
+    const apiDate = dateToAPIFormat(inputVal);
+    const today = getTodayPST();
+    selectedDate = (apiDate === today) ? '' : apiDate;
+    updateDateUI();
+    fetchData();
+  };
+
+  window.__changeDate = function(delta) {
+    const today = getTodayPST();
+    const current = selectedDate || today;
+    const parts = current.split('-');
+    const d = new Date(parts[2], parseInt(parts[0]) - 1, parseInt(parts[1]));
+    d.setDate(d.getDate() + delta);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const newDate = mm + '-' + dd + '-' + d.getFullYear();
+
+    // Don't go into the future
+    const todayD = new Date(today.replace(/(\d{2})-(\d{2})-(\d{4})/, '$3-$1-$2'));
+    if (d > todayD) return;
+
+    selectedDate = (newDate === today) ? '' : newDate;
+    updateDateUI();
+    fetchData();
+  };
+
+  window.__goToday = function() {
+    selectedDate = '';
+    updateDateUI();
+    fetchData();
+  };
+
+  window.__toggleArchiveList = function() {
+    const list = document.getElementById('archiveDatesList');
+    list.classList.toggle('show');
+
+    // Close on click outside
+    if (list.classList.contains('show')) {
+      setTimeout(() => {
+        document.addEventListener('click', function closeList(e) {
+          if (!e.target.closest('.archive-dates-dropdown')) {
+            list.classList.remove('show');
+            document.removeEventListener('click', closeList);
+          }
+        });
+      }, 10);
+    }
+  };
+
+  window.__selectArchiveDate = function(apiDate) {
+    const today = getTodayPST();
+    selectedDate = (apiDate === today) ? '' : apiDate;
+    updateDateUI();
+    fetchData();
+    document.getElementById('archiveDatesList').classList.remove('show');
+  };
+
+  function renderArchiveDates(dates) {
+    availableDates = dates || [];
+    const list = document.getElementById('archiveDatesList');
+    const today = getTodayPST();
+
+    if (availableDates.length === 0) {
+      list.innerHTML = '<div class="no-archives">No archived dates yet</div>';
+      return;
+    }
+
+    let html = '<div class="archive-date-item' + (!selectedDate ? ' active' : '') + '" data-date="" onclick="window.__selectArchiveDate(\'\')">&#128994; Today (Live)</div>';
+    availableDates.forEach(d => {
+      const isActive = d.date === selectedDate;
+      html += '<div class="archive-date-item' + (isActive ? ' active' : '') + '" data-date="' + d.date + '" onclick="window.__selectArchiveDate(\'' + d.date + '\')">&#128230; ' + d.label + '</div>';
+    });
+    list.innerHTML = html;
+  }
+
+  // ---- Data Fetching ----
+  function fetchData() {
+    if (fetchInProgress) return;
+    fetchInProgress = true;
+
+    const dot = document.getElementById('statusDot');
+    if (dot) { dot.style.background = 'var(--orange)'; dot.style.boxShadow = '0 0 8px var(--orange)'; }
+
+    // Build URL with optional date parameter
+    let url = API_URL + '?action=dashboard';
+    if (selectedDate) {
+      url += '&date=' + encodeURIComponent(selectedDate);
+    }
+
+    fetch(url, { redirect: 'follow' })
+      .then(response => {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+      })
+      .then(data => {
+        dashboardData = data;
+        isArchiveMode = data.isArchive || false;
+
+        // Update archive dates dropdown
+        if (data.availableDates) {
+          renderArchiveDates(data.availableDates);
+        }
+
+        // Handle "no archive found" error
+        if (data.error) {
+          showError(data.error);
+          fetchInProgress = false;
+          return;
+        }
+
+        renderDashboard();
+        document.getElementById('lastRefreshed').textContent = formatISTTime(getIST());
+        if (dot) { dot.className = 'status-dot live'; dot.style.background = ''; dot.style.boxShadow = ''; }
+        fetchInProgress = false;
+        countdown = REFRESH_INTERVAL;
+      })
+      .catch(err => {
+        console.error('Fetch error:', err);
+        if (dot) { dot.className = 'status-dot exceeded'; dot.style.background = ''; dot.style.boxShadow = ''; }
+        fetchInProgress = false;
+        if (!dashboardData) {
+          showError(err.message);
+        }
+      });
+  }
+
+  function showError(msg) {
+    const bodies = ['liveBody', 'summaryBody'];
+    bodies.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.innerHTML = '<tr><td colspan="12"><div class="error-state"><div class="icon">&#128268;</div><h3>Connection Error</h3><p>' + escapeHtml(msg) + '</p><button class="btn-retry" onclick="window.__retryFetch()">Retry Now</button></div></td></tr>';
+      }
+    });
+    ['activityFeed', 'idleAlerts'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.innerHTML = '<div class="error-state"><div class="icon">&#128268;</div><h3>Connection Error</h3><p>' + escapeHtml(msg) + '</p><button class="btn-retry" onclick="window.__retryFetch()">Retry Now</button></div>';
+      }
+    });
+  }
+
+  window.__retryFetch = function() { fetchData(); };
+
+  // ---- Rendering ----
+  function renderDashboard() {
+    if (!dashboardData) return;
+    renderCards();
+    renderLiveTable();
+    renderSummaryTable();
+    renderActivityFeed();
+    renderIdleAlerts();
+  }
+
+  function renderCards() {
+    const live = dashboardData.live || [];
+    const idle = dashboardData.idle || [];
+
+    // Online count
+    const onlineCount = live.length;
+    document.getElementById('cardOnline').textContent = onlineCount;
+    const memberLabel = isArchiveMode ? ' members tracked' : ' members active';
+    document.getElementById('cardOnlineSub').textContent = onlineCount + memberLabel;
+    document.getElementById('liveBadge').textContent = isArchiveMode ? onlineCount + ' members' : onlineCount + ' online';
+    document.getElementById('liveTitle').textContent = isArchiveMode ? 'Archived Status' : 'Live Status';
+
+    // Avg Production
+    const prods = live.map(r => parseFloat(r['Production (min)']) || 0);
+    const avgProd = prods.length > 0 ? Math.round(prods.reduce((a,b) => a+b, 0) / prods.length) : 0;
+    document.getElementById('cardAvgProd').textContent = avgProd;
+    const maxProd = Math.max(...prods, 0);
+    document.getElementById('cardAvgProdSub').textContent = 'Highest: ' + maxProd + ' min';
+
+    // Idle alerts count
+    const idleCount = idle.length;
+    document.getElementById('cardIdle').textContent = idleCount;
+    const uniqueIdlers = [...new Set(idle.map(r => r['Name']).filter(Boolean))];
+    document.getElementById('cardIdleSub').textContent = uniqueIdlers.length + ' unique member' + (uniqueIdlers.length !== 1 ? 's' : '');
+
+    // Break exceeded
+    const exceeded = live.filter(r => String(r['Break Exceeded']).toUpperCase() === 'YES');
+    document.getElementById('cardExceeded').textContent = exceeded.length;
+    document.getElementById('cardExceededSub').textContent = exceeded.length + ' of ' + onlineCount + ' members';
+  }
+
+  function renderLiveTable() {
+    const live = dashboardData.live || [];
+    const tbody = document.getElementById('liveBody');
+
+    if (live.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="11"><div class="empty-state">No team members currently online</div></td></tr>';
+      return;
+    }
+
+    // Sort by production descending
+    const sorted = [...live].sort((a, b) => {
+      return (parseFloat(b['Production (min)']) || 0) - (parseFloat(a['Production (min)']) || 0);
+    });
+
+    // Filter
+    let filtered = sorted;
+    if (currentFilter === 'exceeded') {
+      filtered = sorted.filter(r => String(r['Break Exceeded']).toUpperCase() === 'YES');
+    } else if (currentFilter !== 'all') {
+      filtered = sorted.filter(r => {
+        const act = String(r['Current Activity'] || '').toLowerCase();
+        return act.includes(currentFilter.toLowerCase());
+      });
+    }
+
+    if (filtered.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="11"><div class="empty-state">No members match the selected filter</div></td></tr>';
+      return;
+    }
+
+    let html = '';
+    filtered.forEach(row => {
+      const isExceeded = String(row['Break Exceeded']).toUpperCase() === 'YES';
+      const activity = String(row['Current Activity'] || '');
+      const actClass = getActivityClass(activity);
+      const prod = parseFloat(row['Production (min)']) || 0;
+      const maxProd = Math.max(...live.map(r => parseFloat(r['Production (min)']) || 0), 1);
+      const isTop = prod >= maxProd * 0.9;
+
+      html += '<tr class="' + (isExceeded ? 'exceeded-row' : '') + '">';
+      html += '<td><div class="name-cell"><span class="status-dot ' + (isExceeded ? 'exceeded' : 'live') + '" style="animation-duration: 2s;"></span>' + escapeHtml(row['Name']) + '</div></td>';
+      html += '<td>' + shortTime(row['Shift Start']) + '</td>';
+      html += '<td><span class="activity-badge ' + actClass + '">' + escapeHtml(activity) + '</span></td>';
+      html += '<td class="number-cell ' + (isTop ? 'highlight-high' : '') + '">' + prod + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Break (min)']) || 0) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Lunch/Dinner (min)']) || 0) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Meeting (min)']) || 0) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Training (min)']) || 0) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Idle (min)']) || 0) + '</td>';
+      html += '<td><span class="exceeded-badge ' + (isExceeded ? 'exceeded-yes' : 'exceeded-no') + '">' + (isExceeded ? 'YES' : 'NO') + '</span></td>';
+      html += '<td class="number-cell">' + escapeHtml(row['Shift Elapsed'] || '--') + '</td>';
+      html += '</tr>';
+    });
+
+    tbody.innerHTML = html;
+  }
+
+  function renderSummaryTable() {
+    const summary = dashboardData.summary || [];
+    const tbody = document.getElementById('summaryBody');
+
+    let displayData;
+    if (isArchiveMode) {
+      // Archive mode: show all data (it's already filtered to that date)
+      displayData = summary;
+    } else {
+      // Live mode: filter to today's data
+      const todayStr = getTodayDateStr();
+      const todayData = summary.filter(r => {
+        const d = String(r['Date'] || '');
+        return d.includes(todayStr);
+      });
+      displayData = todayData.length > 0 ? todayData : summary.slice(0, 20);
+    }
+
+    if (displayData.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="12"><div class="empty-state">No summary data available</div></td></tr>';
+      return;
+    }
+
+    const badgeLabel = isArchiveMode ? formatDateLabel(selectedDate) + ' - ' + displayData.length + ' shifts' : displayData.length + ' shifts today';
+    document.getElementById('summaryBadge').textContent = badgeLabel;
+
+    // Sort by production descending
+    const sorted = [...displayData].sort((a, b) => {
+      return (parseFloat(b['Production (min)']) || 0) - (parseFloat(a['Production (min)']) || 0);
+    });
+
+    let html = '';
+    sorted.forEach(row => {
+      const isExceeded = String(row['Break Exceeded']).toUpperCase() === 'YES';
+
+      html += '<tr class="' + (isExceeded ? 'exceeded-row' : '') + '">';
+      html += '<td><div class="name-cell">' + escapeHtml(row['Name']) + '</div></td>';
+      html += '<td>' + shortTime(row['Shift Start']) + '</td>';
+      html += '<td>' + shortTime(row['Shift End']) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Production (min)']) || 0) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Break (min)']) || 0) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Lunch/Dinner (min)']) || 0) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Meeting (min)']) || 0) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Training (min)']) || 0) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Idle (min)']) || 0) + '</td>';
+      html += '<td><span class="exceeded-badge ' + (isExceeded ? 'exceeded-yes' : 'exceeded-no') + '">' + (isExceeded ? 'YES' : 'NO') + '</span></td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Exceeded By (min)']) || 0) + '</td>';
+      html += '<td class="number-cell">' + (parseFloat(row['Break Not Marked (min)']) || 0) + '</td>';
+      html += '</tr>';
+    });
+
+    tbody.innerHTML = html;
+  }
+
+  function renderActivityFeed() {
+    const activity = dashboardData.activity || [];
+    const container = document.getElementById('activityFeed');
+
+    // Get last 25 entries (they're appended chronologically, so take from end)
+    const recent = activity.slice(-25).reverse();
+
+    if (recent.length === 0) {
+      container.innerHTML = '<div class="empty-state">No recent activity</div>';
+      return;
+    }
+
+    document.getElementById('activityBadge').textContent = recent.length + ' recent';
+
+    let html = '';
+    recent.forEach(row => {
+      const name = escapeHtml(row['Name'] || '');
+      const act = escapeHtml(row['Activity'] || '');
+      const start = shortTime(row['Start Time']);
+      const duration = escapeHtml(row['Duration'] || '');
+      const dotColor = getActivityDotColor(row['Activity']);
+      const endTime = shortTime(row['End Time']);
+
+      html += '<div class="feed-item">';
+      html += '<div class="feed-time">' + start + '</div>';
+      html += '<div class="feed-dot" style="background: ' + dotColor + ';"></div>';
+      html += '<div class="feed-content"><strong>' + name + '</strong> ';
+      html += 'switched to <strong>' + act + '</strong>';
+      if (duration) html += ' <span style="color: var(--text-muted);">(' + duration + ')</span>';
+      html += '</div>';
+      html += '</div>';
+    });
+
+    container.innerHTML = html;
+  }
+
+  function renderIdleAlerts() {
+    const idle = dashboardData.idle || [];
+    const container = document.getElementById('idleAlerts');
+
+    // Take last 25 and reverse for most recent first
+    const recent = idle.slice(-25).reverse();
+
+    if (recent.length === 0) {
+      container.innerHTML = '<div class="empty-state">No idle alerts today</div>';
+      return;
+    }
+
+    document.getElementById('idleBadge').textContent = idle.length + ' alerts';
+
+    let html = '';
+    recent.forEach(row => {
+      const name = escapeHtml(row['Name'] || '');
+      const mins = escapeHtml(row['Idle Minutes'] || '');
+      const act = escapeHtml(row['Current Activity'] || '');
+      const event = escapeHtml(row['Event'] || '');
+      const time = shortTime(row['Time']);
+
+      html += '<div class="alert-item">';
+      html += '<div class="alert-icon">&#9888;</div>';
+      html += '<div class="alert-text">';
+      if (event) {
+        html += event;
+      } else {
+        html += '<strong>' + name + '</strong> was idle for <strong>' + mins + ' min</strong> during ' + act;
+      }
+      html += '</div>';
+      html += '<div class="alert-time">' + time + '</div>';
+      html += '</div>';
+    });
+
+    container.innerHTML = html;
+  }
+
+  function getTodayDateStr() {
+    const ist = getIST();
+    const mm = String(ist.getMonth() + 1).padStart(2, '0');
+    const dd = String(ist.getDate()).padStart(2, '0');
+    const yyyy = ist.getFullYear();
+    return mm + '/' + dd + '/' + yyyy;
+  }
+
+  // ---- Filter ----
+  window.filterLive = function(filter) {
+    currentFilter = filter;
+    // Update pills
+    document.querySelectorAll('.filter-pills .pill').forEach(pill => {
+      pill.classList.remove('active');
+      if (pill.textContent.toLowerCase() === filter.toLowerCase() ||
+          (filter === 'all' && pill.textContent === 'All') ||
+          (filter === 'exceeded' && pill.textContent === 'Exceeded')) {
+        pill.classList.add('active');
+      }
+    });
+    renderLiveTable();
+  };
+
+  // ---- Initialize ----
+  function init() {
+    updateClock();
+    setInterval(updateClock, 1000);
+
+    // Set date picker to today
+    const today = getTodayPST();
+    const datePicker = document.getElementById('datePicker');
+    datePicker.value = apiToInputFormat(today);
+    datePicker.max = apiToInputFormat(today); // Can't go to future
+    updateDateUI();
+
+    fetchData();
+    startCountdown();
+  }
+
+  // Run on DOM ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+})();
+</script>
+
+</body>
+</html>
