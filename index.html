@@ -2574,8 +2574,11 @@ function startClock() {
     document.getElementById('sIdle').textContent = fmtHM(state.idleTotalMs || 0);
     document.getElementById('sCount').textContent = state.tasksDone;
 
-    // My Performance — headline metrics
-    updatePerfCard();
+    // My Performance — headline metrics (throttled: every 10s, not every tick)
+    if (!window._lastPerfTick || (Date.now() - window._lastPerfTick) >= 10000) {
+      window._lastPerfTick = Date.now();
+      updatePerfCard();
+    }
 
     // Break-exceeded banner check — flips on when break total crosses 60 min
     updateBreakLimitBanner();
@@ -2710,6 +2713,9 @@ function switchActivity(act) {
     state.breakStartedAt = null;
     state.breakWasManual = false;
   }
+
+  // Refresh perf card immediately on activity switch (bypass 10s throttle)
+  window._lastPerfTick = 0;
 
   toast(ACT_EMO[act], `Status: ${ACT_LABEL[act]}`);
 }
