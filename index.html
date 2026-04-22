@@ -512,6 +512,36 @@
   .idle-banner .imain { flex: 1; }
   .idle-banner .imain b { color: var(--teal); }
 
+  /* Break-exceeded banner — shown when total break exceeds the daily allowance */
+  .break-limit-banner {
+    display: none;
+    margin: 8px 22px 0;
+    padding: 11px 14px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(255,69,58,0.18), rgba(255,159,10,0.12));
+    border: 1px solid rgba(255,69,58,0.45);
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: #ffd1cc;
+  }
+  .break-limit-banner.show { display: flex; }
+  .break-limit-banner .bdot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #ff6b5b;
+    box-shadow: 0 0 10px #ff6b5b;
+    animation: blink 1.2s ease-in-out infinite;
+  }
+  .break-limit-banner .bmain { flex: 1; }
+  .break-limit-banner .bmain b { color: #ff9f8a; }
+  .break-limit-banner .bexceed {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 700;
+    color: #ff6b5b;
+    white-space: nowrap;
+  }
+
   /* Task picker */
   .task-row {
     padding: 16px 22px;
@@ -1500,6 +1530,15 @@
             <div id="idleTimer" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--teal); font-weight: 700;">0s</div>
           </div>
 
+          <!-- Break-exceeded banner — appears only after break total > 60 min -->
+          <div class="break-limit-banner" id="breakLimitBanner">
+            <div class="bdot"></div>
+            <div class="bmain">
+              <b>⚠️ Break limit exceeded</b> — daily allowance is <b>1 hour</b>. Extra break time is logged.
+            </div>
+            <div class="bexceed" id="breakExceedAmount">+0m</div>
+          </div>
+
           <div class="form-wrap" id="taskFormCard">
             <div class="form-head">
               <span class="lbl">Log this task</span>
@@ -1806,6 +1845,9 @@ const RULES = {
 
   // Welcome-back modal: only show for MANUAL breaks longer than this
   MANUAL_BREAK_WELCOME_SEC: 300, // 5 min — production value
+
+  // Daily break allowance — beyond this, warn the user + log "Break Exceeded" to Sessions
+  BREAK_ALLOWANCE_MIN: 60,  // 1 hour
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2534,7 +2576,33 @@ function startClock() {
 
     // My Performance — headline metrics
     updatePerfCard();
+
+    // Break-exceeded banner check — flips on when break total crosses 60 min
+    updateBreakLimitBanner();
   }, 200);
+}
+
+// Show/hide the break-exceeded banner. Toasts once when the user first crosses the line.
+function updateBreakLimitBanner() {
+  const t = state.totals || {};
+  const breakMs = (t.break || 0) + (t.auto_break || 0);
+  const breakMin = breakMs / 60000;
+  const limit = RULES.BREAK_ALLOWANCE_MIN || 60;
+  const banner = document.getElementById('breakLimitBanner');
+  if (!banner) return;
+
+  if (breakMin > limit) {
+    const excessMin = Math.floor(breakMin - limit);
+    banner.classList.add('show');
+    const lbl = document.getElementById('breakExceedAmount');
+    if (lbl) lbl.textContent = '+' + excessMin + 'm';
+    if (!state._breakExceededToasted) {
+      state._breakExceededToasted = true;
+      toast('⚠️', `Break limit (${limit}m) exceeded — extra time is logged`);
+    }
+  } else {
+    banner.classList.remove('show');
+  }
 }
 
 // Compute & render the 4 headline metrics: Utilization %, Tasks, Throughput, Prod hrs.
@@ -3013,14 +3081,22 @@ async function confirmEndShiftFinal() {
   state.shiftEnded = true;
   state.shiftEndTime = Date.now();
 
-  // Tell backend the session is done (fire-and-forget)
+  // Tell backend the session is done — shape matches closeSession_ in Apps Script.
+  // Backend writes these directly into the 11-column Sessions schema:
+  //   Name, Date, Start, End, Production(min), Break(min), Dinner(min),
+  //   Meeting(min), Training(min), Idle(min), Break Exceeded(min)
+  // Break Exceeded is computed server-side as max(0, breakMin - 60).
+  const t = state.totals || {};
+  const toMin = (ms) => Math.round((ms || 0) / 60000);
   nativeFire('closeSession', {
-    user: state.user,
-    team: state.homeTeam,
-    tasksDone: state.tasksDone || 0,
-    totals: state.totals || {},
-    idleMs: state.idleTotalMs || 0,
-    endedAt: new Date().toISOString()
+    user:        state.user,
+    productionMin: toMin(t.production),
+    breakMin:    toMin((t.break || 0) + (t.auto_break || 0)),
+    dinnerMin:   toMin(t.dinner),
+    meetingMin:  toMin(t.meeting),
+    trainingMin: toMin(t.training),
+    idleMin:     toMin(state.idleTotalMs),
+    endedAt:     new Date().toISOString()
   });
 
   // Build the end-of-day summary text
