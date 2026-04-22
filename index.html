@@ -3106,7 +3106,6 @@ async function confirmEndShiftFinal() {
   });
 
   // Build the end-of-day summary text
-  const t = state.totals || {};
   const firstName = (state.user || '').split(/\s+/)[0] || 'you';
   document.getElementById('endOfDayGreet').textContent = `Nice work today, ${firstName}!`;
   document.getElementById('endOfDayDate').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
