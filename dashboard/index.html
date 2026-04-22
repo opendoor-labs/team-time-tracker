@@ -1193,7 +1193,8 @@
     if (state.liveLoading) return;
     state.liveLoading = true;
     try {
-      const res = await fetch(`${API_URL}?action=liveActivity`, { method: 'GET' });
+      const email = encodeURIComponent(state.email || '');
+      const res = await fetch(`${API_URL}?action=liveActivity&email=${email}`, { method: 'GET' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (!json.ok) throw new Error(json.error || 'unknown_error');
