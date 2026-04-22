@@ -2327,6 +2327,21 @@ function startWorking(skipIntro) {
   nativeFire('markAttendance', { user: state.user, team: state.homeTeam, status: 'Present' });
   nativeFire('clearForceReset', { user: state.user });
 
+  // Record shift start in Live sheet (IST wall-clock, "YYYY-MM-DD HH:MM:SS")
+  const istNow = new Date().toLocaleString('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  }).replace(/(\d{2})\/(\d{2})\/(\d{4}),?\s*/, '$3-$2-$1 ');
+  state.shiftStartedAt = istNow;
+  nativeFire('shiftStart', {
+    user: state.user,
+    homeTeam: state.homeTeam,
+    team: state.team,
+    shiftStartAt: istNow
+  });
+
   if (!skipIntro) {
     toast(`✨`, `Let's have a great day, ${state.user.split(' ')[0]}!`);
   }
@@ -2659,6 +2674,7 @@ function sendHeartbeat() {
     breakMin:      Math.round(((state.totals.break || 0) + (state.totals.auto_break || 0)) / 60000),
     idleMin:       Math.round((state.idleTotalMs || 0) / 60000),
     taskStartedAt: state.taskStartedAt || 0,
+    shiftStartAt:  state.shiftStartedAt || '',
   });
 }
 

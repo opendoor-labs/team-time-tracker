@@ -569,6 +569,12 @@
     margin-top: 2px;
     font-style: italic;
   }
+  .live-user-shift {
+    font-size: 11px;
+    color: #30d158;
+    margin-top: 2px;
+    font-weight: 500;
+  }
   .live-badge {
     display: inline-block;
     padding: 2px 8px;
@@ -1294,6 +1300,12 @@
         const staleHtml = age > 2
           ? `<div class="live-user-stale">⚠️ stale ${Math.round(age)}m ago</div>`
           : '';
+        // Shift start — show only the HH:MM of IST wall clock (e.g. "09:12")
+        const shiftStart = String(u.shiftStartAt || '');
+        const shiftStartHm = (shiftStart.match(/\s(\d{2}:\d{2})/) || [])[1] || '';
+        const shiftHtml = shiftStartHm
+          ? `<div class="live-user-shift">🟢 Shift: ${shiftStartHm} IST</div>`
+          : '';
         return `
           <div class="live-user">
             <div class="live-user-name">
@@ -1301,6 +1313,7 @@
               <span class="live-badge ${act}">${escapeHtml(String(u.activity || 'idle'))}</span>
             </div>
             <div class="live-user-meta">${tasks} tasks · ${prod}m prod · ${brk}m break</div>
+            ${shiftHtml}
             ${staleHtml}
           </div>`;
       }).join('');

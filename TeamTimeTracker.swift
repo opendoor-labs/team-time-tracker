@@ -220,6 +220,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
             }
         case "heartbeat":
             postToApi(action: "heartbeat", payload: payload) { _ in }
+        case "shiftStart":
+            postToApi(action: "shiftStart", payload: payload) { _ in }
         case "idleAlert":
             postToApi(action: "idleAlert", payload: payload) { _ in }
         case "clearForceReset":
