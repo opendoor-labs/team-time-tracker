@@ -2660,6 +2660,17 @@ function unlockMac() {
   // If auto-break was triggered, show the unlock welcome modal asking to resume
   if (state.activity === 'break' && state.autoBreak) {
     showUnlockWelcome(lockedMs);
+  }
+  // NEW: If user was on a MANUAL break and the break lasted ≥ threshold,
+  // nudge them back to Production on unlock with the welcome modal.
+  else if (state.activity === 'break' && state.breakWasManual && state.breakStartedAt) {
+    const breakMs = Date.now() - state.breakStartedAt;
+    if (breakMs >= RULES.MANUAL_BREAK_WELCOME_SEC * 1000) {
+      showWelcomeBack(breakMs, 'manual');
+    } else {
+      updateIdleBanner();
+      toast('🔓', 'Mac unlocked');
+    }
   } else {
     updateIdleBanner();
     toast('🔓', 'Mac unlocked');
