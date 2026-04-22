@@ -292,6 +292,43 @@
     transform: scale(0.97);
   }
 
+  /* ─── Leaderboard summary (above the log table) ───────────────────── */
+  .lb-wrap {
+    margin: 14px 18px 6px;
+    padding: 14px 16px 12px;
+    background: linear-gradient(135deg, rgba(91,140,255,0.06), rgba(191,90,242,0.04));
+    border: 1px solid rgba(91,140,255,0.2);
+    border-radius: 10px;
+  }
+  .lb-head {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+  }
+  .lb-head .lb-sub { font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 11px; }
+  .lb-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .lb-table th {
+    text-align: left; font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 6px 10px; border-bottom: 1px solid var(--border);
+  }
+  .lb-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(34,43,56,0.5);
+    color: var(--text);
+  }
+  .lb-table tr:last-child td { border-bottom: none; }
+  .lb-rank { font-weight: 700; color: var(--muted); width: 42px; text-align: center; }
+  .lb-rank.gold   { color: #fbbf24; font-size: 14px; }
+  .lb-rank.silver { color: #c0c0c0; font-size: 13px; }
+  .lb-rank.bronze { color: #cd7f32; font-size: 13px; }
+  .lb-name { font-weight: 600; }
+  .lb-num  { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; white-space: nowrap; }
+  .lb-util-good { color: #4ade80; font-weight: 700; }
+  .lb-util-ok   { color: #fbbf24; font-weight: 700; }
+  .lb-util-low  { color: #ff6b5b; font-weight: 700; }
+  .lb-empty { text-align: center; padding: 14px; color: var(--muted); font-size: 12px; }
+
   .table-wrap {
     overflow-x: auto;
     max-height: calc(100vh - 340px);
@@ -785,6 +822,11 @@
       return;
     }
 
+    // For team tabs (not admin tabs), compute & render the leaderboard
+    const leaderboardHtml = !sel.startsWith('__')
+      ? buildLeaderboardHtml(sel, header, rows, data.sessions)
+      : '';
+
     contentEl.innerHTML = `
       <div class="data-card">
         <div class="data-header">
@@ -794,6 +836,7 @@
             <button class="csv-btn" id="csvExportBtn" title="Download as CSV">⬇ Export CSV</button>
           </div>
         </div>
+        ${leaderboardHtml}
         <div class="table-wrap">
           <table>
             <thead>
@@ -811,6 +854,167 @@
     if (csvBtn) {
       csvBtn.addEventListener('click', () => downloadCsv(title, header, rows, dateStr));
     }
+  }
+
+  // ── Leaderboard ────────────────────────────────────────────────────
+  // Aggregates rows by user and computes: Tasks, Prod hrs, Throughput, Utilization %.
+  //   Tasks       = count of non-system rows where activity === 'production'
+  //   Prod hrs    = sum of durations (from Duration column, parsed from "Xh Ym Zs")
+  //   Throughput  = Tasks / Prod hrs
+  //   Util %      = Sessions-tab productionMin / (prodMin + breakMin + idleMin) * 100
+  //                 if Sessions row exists for this user+date (end-of-shift data).
+  //                 Fallback: prod time / (last-first task timestamp span) — shown as "*".
+  function buildLeaderboardHtml(team, header, rows, sessionsBlock) {
+    if (!rows || !rows.length) return '';
+
+    // Locate columns by header label (resilient to per-team col variations)
+    const hLower = header.map(h => String(h).toLowerCase());
+    const userIdx  = hLower.indexOf('user');
+    const actIdx   = hLower.indexOf('activity');
+    const durIdx   = hLower.indexOf('duration');
+    const sysIdx   = hLower.indexOf('system');
+    const timeIdx  = 0; // first col is always timestamp
+
+    if (userIdx < 0 || durIdx < 0) return ''; // can't compute without these
+
+    // Parse "Xh Ym Zs" → seconds
+    const parseDur = (s) => {
+      const str = String(s || '');
+      const h = /(\d+)\s*h/i.exec(str); const hr = h ? +h[1] : 0;
+      const m = /(\d+)\s*m/i.exec(str); const mn = m ? +m[1] : 0;
+      const sec = /(\d+)\s*s/i.exec(str); const sc = sec ? +sec[1] : 0;
+      return hr * 3600 + mn * 60 + sc;
+    };
+
+    const users = {}; // user → { tasks, prodSec, firstTs, lastTs }
+    rows.forEach(r => {
+      const user = String(r[userIdx] || '').trim();
+      if (!user) return;
+      const act = String(r[actIdx] || 'production').toLowerCase();
+      const isSystem = sysIdx >= 0 && String(r[sysIdx] || '').toUpperCase() === 'TRUE';
+      const durSec = parseDur(r[durIdx]);
+      const ts = String(r[timeIdx] || '');
+
+      const u = users[user] || (users[user] = { tasks: 0, prodSec: 0, firstTs: ts, lastTs: ts });
+      if (ts && ts < u.firstTs) u.firstTs = ts;
+      if (ts && ts > u.lastTs)  u.lastTs  = ts;
+      if (act === 'production' && !isSystem) {
+        u.tasks += 1;
+        u.prodSec += durSec;
+      }
+    });
+
+    // Pull Sessions data for util % if available
+    const sessMap = {}; // user → { prodMin, breakMin, idleMin }
+    if (sessionsBlock && sessionsBlock.header && sessionsBlock.rows) {
+      const sh = sessionsBlock.header.map(h => String(h).toLowerCase());
+      const sUserIdx = sh.indexOf('user');
+      const sProdIdx = sh.findIndex(x => x.includes('production'));
+      const sBreakIdx = sh.findIndex(x => x.includes('break'));
+      const sIdleIdx = sh.findIndex(x => x.includes('idle'));
+      if (sUserIdx >= 0) {
+        sessionsBlock.rows.forEach(sr => {
+          const u = String(sr[sUserIdx] || '').trim();
+          if (!u) return;
+          sessMap[u] = {
+            prodMin:  Number(sr[sProdIdx]) || 0,
+            breakMin: Number(sr[sBreakIdx]) || 0,
+            idleMin:  Number(sr[sIdleIdx]) || 0
+          };
+        });
+      }
+    }
+
+    // Compute final stats per user
+    const list = Object.keys(users).map(u => {
+      const { tasks, prodSec, firstTs, lastTs } = users[u];
+      const prodHrs = prodSec / 3600;
+      const throughput = prodHrs >= 0.05 && tasks > 0 ? (tasks / prodHrs) : null;
+
+      // Utilization: prefer Sessions tab data (end-of-shift)
+      let util = null, utilSource = null;
+      const sess = sessMap[u];
+      if (sess && (sess.prodMin + sess.breakMin + sess.idleMin) > 0) {
+        util = Math.round((sess.prodMin / (sess.prodMin + sess.breakMin + sess.idleMin)) * 100);
+        utilSource = 'session';
+      } else if (firstTs && lastTs && firstTs !== lastTs) {
+        // Fallback: span between first and last task timestamp (approximate)
+        const spanSec = (new Date(lastTs).getTime() - new Date(firstTs).getTime()) / 1000;
+        if (spanSec > 60) {
+          util = Math.min(100, Math.round((prodSec / spanSec) * 100));
+          utilSource = 'approx';
+        }
+      }
+
+      return { user: u, tasks, prodHrs, throughput, util, utilSource };
+    });
+
+    // Rank by tasks desc, then prodHrs desc
+    list.sort((a, b) => (b.tasks - a.tasks) || (b.prodHrs - a.prodHrs));
+
+    if (!list.length) return '';
+
+    const fmtHrs = (h) => {
+      const totalMin = Math.round(h * 60);
+      const hr = Math.floor(totalMin / 60);
+      const mn = totalMin % 60;
+      return `${hr}h ${String(mn).padStart(2,'0')}m`;
+    };
+
+    const rankSymbol = (i) => {
+      if (i === 0) return { label: '🥇', cls: 'gold' };
+      if (i === 1) return { label: '🥈', cls: 'silver' };
+      if (i === 2) return { label: '🥉', cls: 'bronze' };
+      return { label: String(i + 1), cls: '' };
+    };
+
+    const rowsHtml = list.map((p, i) => {
+      const r = rankSymbol(i);
+      let utilCell = '<span style="color:var(--muted);">—</span>';
+      if (p.util !== null) {
+        const cls = p.util >= 75 ? 'lb-util-good' : (p.util >= 50 ? 'lb-util-ok' : 'lb-util-low');
+        const mark = p.utilSource === 'approx' ? '<span title="approximate — end-of-shift data not yet available" style="color:var(--muted); font-size:10px;"> *</span>' : '';
+        utilCell = `<span class="${cls}">${p.util}%</span>${mark}`;
+      }
+      const tputCell = p.throughput !== null
+        ? `${(p.throughput >= 10 ? p.throughput.toFixed(0) : p.throughput.toFixed(1))}/hr`
+        : '—';
+      return `
+        <tr>
+          <td class="lb-rank ${r.cls}">${r.label}</td>
+          <td class="lb-name">${escapeHtml(p.user)}</td>
+          <td class="lb-num" style="text-align:right;">${p.tasks}</td>
+          <td class="lb-num" style="text-align:right;">${utilCell}</td>
+          <td class="lb-num" style="text-align:right;">${tputCell}</td>
+          <td class="lb-num" style="text-align:right;">${fmtHrs(p.prodHrs)}</td>
+        </tr>`;
+    }).join('');
+
+    const anyApprox = list.some(p => p.utilSource === 'approx');
+    const hint = anyApprox
+      ? 'Util % marked <b>*</b> is approximate (end-of-shift data not yet written).'
+      : 'Ranked by Tasks completed.';
+
+    return `
+      <div class="lb-wrap">
+        <div class="lb-head">
+          <span>🏆 Team Leaderboard — ${escapeHtml(team)}</span>
+          <span class="lb-sub">${hint}</span>
+        </div>
+        <table class="lb-table">
+          <thead>
+            <tr>
+              <th style="width:42px;">#</th>
+              <th>Name</th>
+              <th style="text-align:right;">Tasks</th>
+              <th style="text-align:right;">Utilization</th>
+              <th style="text-align:right;">Throughput</th>
+              <th style="text-align:right;">Prod hrs</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>`;
   }
 
   // ── CSV export ────────────────────────────────────────────────────

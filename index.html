@@ -883,6 +883,40 @@
   .stat .v.teal { color: var(--teal); }
   .stat .l { font-size: 10px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.5px; }
 
+  /* My Performance card — headline metrics above the stats-foot */
+  .perf-card {
+    margin-top: 16px;
+    padding: 14px 14px 12px;
+    background: linear-gradient(135deg, rgba(91,140,255,0.08), rgba(191,90,242,0.06));
+    border: 1px solid rgba(91,140,255,0.22);
+    border-radius: 14px;
+  }
+  .perf-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+    font-size: 11px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.8px;
+  }
+  .perf-head .perf-hint { color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; font-size: 10px; }
+  .perf-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+  }
+  .perf-tile {
+    text-align: center;
+    padding: 10px 6px;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+  }
+  .perf-tile .pv { font-size: 22px; font-weight: 800; letter-spacing: -0.3px; font-family: 'JetBrains Mono', monospace; }
+  .perf-tile .pl { font-size: 10px; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .perf-tile .pv.util-good  { color: var(--green); }
+  .perf-tile .pv.util-ok    { color: var(--yellow); }
+  .perf-tile .pv.util-low   { color: #ff6b5b; }
+  .perf-tile .pv.tasks      { color: var(--purple); }
+  .perf-tile .pv.tput       { color: var(--teal); }
+  .perf-tile .pv.prod       { color: var(--green); }
+
   /* ═══════════════════════════════════════════
      Modal overlays (auto-break warning, welcome back, etc)
   ═══════════════════════════════════════════ */
@@ -1479,6 +1513,32 @@
             </div>
             <div class="recent-list" id="recentList">
               <div class="recent-empty">Nothing logged yet — fill the form above and click Log Task.</div>
+            </div>
+          </div>
+
+          <!-- My Performance — headline metrics (utilization, tasks, throughput, prod hrs) -->
+          <div class="perf-card">
+            <div class="perf-head">
+              <span>⚡ My Performance · Today</span>
+              <span class="perf-hint">Utilization = Prod ÷ logged-in time</span>
+            </div>
+            <div class="perf-grid">
+              <div class="perf-tile">
+                <div class="pv util-low" id="pUtil">—</div>
+                <div class="pl">Utilization</div>
+              </div>
+              <div class="perf-tile">
+                <div class="pv tasks" id="pTasks">0</div>
+                <div class="pl">Tasks</div>
+              </div>
+              <div class="perf-tile">
+                <div class="pv tput" id="pTput">—</div>
+                <div class="pl">Throughput</div>
+              </div>
+              <div class="perf-tile">
+                <div class="pv prod" id="pProdHrs">0h 00m</div>
+                <div class="pl">Prod hrs</div>
+              </div>
             </div>
           </div>
 
@@ -2432,7 +2492,57 @@ function startClock() {
     document.getElementById('sMeet').textContent = fmtHM(state.totals.meeting);
     document.getElementById('sIdle').textContent = fmtHM(state.idleTotalMs || 0);
     document.getElementById('sCount').textContent = state.tasksDone;
+
+    // My Performance — headline metrics
+    updatePerfCard();
   }, 200);
+}
+
+// Compute & render the 4 headline metrics: Utilization %, Tasks, Throughput, Prod hrs.
+function updatePerfCard() {
+  const t = state.totals || {};
+  const prodMs   = t.production || 0;
+  const breakMs  = (t.break || 0) + (t.auto_break || 0);
+  const meetMs   = t.meeting || 0;
+  const trainMs  = t.training || 0;
+  const lunchMs  = t.lunch || 0;
+  const dinnerMs = t.dinner || 0;
+  const idleMs   = state.idleTotalMs || 0;
+
+  const loggedInMs = prodMs + breakMs + meetMs + trainMs + lunchMs + dinnerMs + idleMs;
+  const tasks      = state.tasksDone || 0;
+  const prodHrs    = prodMs / 3600000;
+
+  // Utilization % — Production ÷ total logged-in time
+  let utilPct = 0;
+  if (loggedInMs > 0) utilPct = Math.round((prodMs / loggedInMs) * 100);
+  const pUtil = document.getElementById('pUtil');
+  if (pUtil) {
+    pUtil.textContent = loggedInMs > 30000 ? (utilPct + '%') : '—';
+    pUtil.classList.remove('util-good','util-ok','util-low');
+    if (utilPct >= 75)      pUtil.classList.add('util-good');
+    else if (utilPct >= 50) pUtil.classList.add('util-ok');
+    else                    pUtil.classList.add('util-low');
+  }
+
+  // Tasks
+  const pTasks = document.getElementById('pTasks');
+  if (pTasks) pTasks.textContent = tasks;
+
+  // Throughput — tasks per production hour (skip if < 3 min prod to avoid noise)
+  const pTput = document.getElementById('pTput');
+  if (pTput) {
+    if (prodHrs < 0.05 || tasks === 0) {
+      pTput.textContent = '—';
+    } else {
+      const rate = tasks / prodHrs;
+      pTput.textContent = (rate >= 10 ? rate.toFixed(0) : rate.toFixed(1)) + '/hr';
+    }
+  }
+
+  // Prod hrs (same as Production stat but in the headline row)
+  const pProdHrs = document.getElementById('pProdHrs');
+  if (pProdHrs) pProdHrs.textContent = fmtHM(prodMs);
 }
 function stopClock() {
   if (clockInterval) clearInterval(clockInterval);
