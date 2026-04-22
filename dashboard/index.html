@@ -425,98 +425,123 @@
     justify-content: center;
   }
 
-  /* Okta login gate */
+  /* TL gate — whitelist-only email access */
   .email-prompt {
-    max-width: 460px;
-    margin: 80px auto;
+    max-width: 500px;
+    margin: 60px auto;
     padding: 40px 36px;
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 14px;
+    border-radius: 16px;
     text-align: center;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.35);
   }
   .email-prompt .logo-circle {
-    width: 64px;
-    height: 64px;
-    border-radius: 16px;
-    background: linear-gradient(135deg, #5b8cff 0%, #bf5af2 100%);
+    width: 72px;
+    height: 72px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #ff9f0a 0%, #ff453a 100%);
     display: flex;
     align-items: center;
     justify-content: center;
-    margin: 0 auto 16px;
-    font-size: 32px;
+    margin: 0 auto 18px;
+    font-size: 36px;
+    box-shadow: 0 12px 28px rgba(255,159,10,0.35);
   }
   .email-prompt h2 {
     margin: 0 0 6px 0;
-    font-size: 20px;
+    font-size: 22px;
     font-weight: 700;
   }
   .email-prompt .sub {
     color: var(--muted);
-    margin: 0 0 24px 0;
+    margin: 0 0 20px 0;
     font-size: 13px;
     line-height: 1.5;
   }
-  .okta-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    width: 100%;
-    padding: 12px 16px;
-    background: #007dc1;
-    color: white;
-    border: none;
-    border-radius: 8px;
+  /* Daily quote card */
+  .quote-card {
+    background: linear-gradient(135deg, rgba(91,140,255,0.10), rgba(191,90,242,0.06));
+    border: 1px solid rgba(91,140,255,0.25);
+    padding: 16px 18px;
+    border-radius: 12px;
+    margin: 0 0 22px 0;
+    text-align: left;
+  }
+  .quote-text {
     font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.15s;
+    line-height: 1.55;
+    color: #e8eaed;
+    font-style: italic;
   }
-  .okta-btn:hover { background: #0c5d94; }
-  .okta-btn .logo {
-    font-weight: 900;
-    font-size: 16px;
-    background: white;
-    color: #007dc1;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .divider-or {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 20px 0;
-    color: var(--muted);
+  .quote-author {
     font-size: 11px;
-    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-top: 8px;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
   }
-  .divider-or::before,
-  .divider-or::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-  }
+  /* Form */
   .email-prompt form {
     display: flex;
-    gap: 8px;
+    flex-direction: column;
+    gap: 10px;
   }
-  .email-prompt input { flex: 1; }
+  .email-prompt input {
+    padding: 13px 14px;
+    font-size: 14px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    text-align: center;
+  }
+  .email-prompt input:focus {
+    outline: none;
+    border-color: rgba(255,159,10,0.55);
+    box-shadow: 0 0 0 3px rgba(255,159,10,0.15);
+  }
+  .start-day-btn {
+    padding: 14px 18px;
+    background: linear-gradient(135deg, #ff9f0a, #ff453a);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 10px 28px rgba(255,69,58,0.30), inset 0 1px 0 rgba(255,255,255,0.22);
+    transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+    letter-spacing: 0.2px;
+  }
+  .start-day-btn:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.04);
+    box-shadow: 0 14px 34px rgba(255,69,58,0.42), inset 0 1px 0 rgba(255,255,255,0.28);
+  }
+  .start-day-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
   .gate-hint {
     margin-top: 16px;
     font-size: 11px;
     color: var(--muted);
     line-height: 1.5;
   }
-  .gate-step2 { display: none; }
-  .gate-step2.visible { display: block; }
+  .gate-error {
+    margin-top: 14px;
+    padding: 11px 14px;
+    background: rgba(255,69,58,0.12);
+    border: 1px solid rgba(255,69,58,0.35);
+    border-radius: 10px;
+    color: #ff8b80;
+    font-size: 13px;
+    text-align: left;
+    display: none;
+  }
+  .gate-error.show { display: block; }
 
   .error-card {
     background: rgba(248, 113, 113, 0.08);
@@ -596,36 +621,29 @@
 <body>
   <div class="container">
 
-    <!-- Okta login gate (shown when no email in URL) -->
+    <!-- TL whitelist gate (shown until email verified against Whitelist tab) -->
     <div id="emailPrompt" class="email-prompt hidden">
-      <div class="logo-circle">☀️</div>
-      <h2>Team Time Tracker — TL Dashboard</h2>
-      <p class="sub">Sign in with your Opendoor Okta account to view your team's time logs.</p>
+      <div class="logo-circle">🌅</div>
+      <h2 id="gateGreet">Good morning, Team Lead</h2>
+      <p class="sub">Enter your Opendoor email to open your team's dashboard.</p>
 
-      <!-- Step 1: Okta login button -->
-      <div id="gateStep1">
-        <button class="okta-btn" id="oktaSignInBtn">
-          <span class="logo">O</span>
-          <span>Sign in with Opendoor Okta</span>
-        </button>
-        <p class="gate-hint">
-          You'll be taken to <b>opendoor.okta.com</b> to sign in.
-          Once you see the Okta home, come back to this tab.
-        </p>
+      <!-- Daily leadership quote -->
+      <div class="quote-card">
+        <div class="quote-text" id="quoteText">—</div>
+        <div class="quote-author" id="quoteAuthor">—</div>
       </div>
 
-      <!-- Step 2: Email confirmation (revealed after user clicks Okta) -->
-      <div id="gateStep2" class="gate-step2">
-        <div class="divider-or">Once signed in</div>
-        <form id="emailForm">
-          <input type="email" id="emailInput" placeholder="you@opendoor.com" required />
-          <button type="submit">Open Dashboard</button>
-        </form>
-        <p class="gate-hint">
-          Your access is restricted to the teams listed in the TL whitelist.
-          If you're not on the whitelist, you'll get an access-denied message.
-        </p>
-      </div>
+      <form id="emailForm">
+        <input type="email" id="emailInput" placeholder="you@opendoor.com" required autocomplete="email" />
+        <button type="submit" class="start-day-btn" id="startDayBtn">🌅 Start Your Day</button>
+      </form>
+
+      <div id="gateError" class="gate-error"></div>
+
+      <p class="gate-hint">
+        Access is restricted to emails on the TL Whitelist.<br>
+        If you need access, message <b>@arun</b> on Slack.
+      </p>
     </div>
 
     <!-- Main dashboard -->
@@ -1414,57 +1432,148 @@
     if (!state.loading) fetchData();
   });
 
+  // ── Leadership quotes — rotate daily by day-of-year ───────────────
+  const LEADERSHIP_QUOTES = [
+    { q: "A leader is one who knows the way, goes the way, and shows the way.", a: "John C. Maxwell" },
+    { q: "The strength of the team is each individual member. The strength of each member is the team.", a: "Phil Jackson" },
+    { q: "The price of greatness is responsibility.", a: "Winston Churchill" },
+    { q: "A good leader takes a little more than their share of the blame, a little less than their share of the credit.", a: "Arnold H. Glasow" },
+    { q: "Leaders become great not because of their power but because of their ability to empower others.", a: "John C. Maxwell" },
+    { q: "The function of leadership is to produce more leaders, not more followers.", a: "Ralph Nader" },
+    { q: "People don't buy what you do, they buy why you do it.", a: "Simon Sinek" },
+    { q: "The best way to predict the future is to create it.", a: "Peter Drucker" },
+    { q: "Great leaders don't set out to be a leader — they set out to make a difference.", a: "Jeremy Bravo" },
+    { q: "A leader is best when people barely know he exists; when his work is done, his aim fulfilled, they will say: we did it ourselves.", a: "Lao Tzu" },
+    { q: "Do not follow where the path may lead. Go instead where there is no path and leave a trail.", a: "Ralph Waldo Emerson" },
+    { q: "The leader has to be practical and a realist, yet must talk the language of the visionary and the idealist.", a: "Eric Hoffer" },
+    { q: "Management is doing things right; leadership is doing the right things.", a: "Peter Drucker" },
+    { q: "Before you are a leader, success is all about growing yourself. When you become a leader, success is all about growing others.", a: "Jack Welch" },
+    { q: "Leadership is the capacity to translate vision into reality.", a: "Warren Bennis" },
+    { q: "The greatest leader is not necessarily the one who does the greatest things. He is the one who gets the people to do the greatest things.", a: "Ronald Reagan" },
+    { q: "You don't lead by pointing and telling people some place to go. You lead by going to that place and making a case.", a: "Ken Kesey" },
+    { q: "Earn your leadership every day.", a: "Michael Jordan" },
+    { q: "Leadership is not about titles, positions, or flowcharts. It is about one life influencing another.", a: "John C. Maxwell" },
+    { q: "If your actions inspire others to dream more, learn more, do more, and become more, you are a leader.", a: "John Quincy Adams" },
+    { q: "The pessimist complains about the wind. The optimist expects it to change. The leader adjusts the sails.", a: "John Maxwell" },
+    { q: "Whatever you are, be a good one.", a: "Abraham Lincoln" },
+    { q: "Success is not final, failure is not fatal: It is the courage to continue that counts.", a: "Winston Churchill" },
+    { q: "Don't watch the clock; do what it does. Keep going.", a: "Sam Levenson" },
+    { q: "The way to get started is to quit talking and begin doing.", a: "Walt Disney" },
+    { q: "Quality is not an act, it is a habit.", a: "Aristotle" },
+    { q: "It always seems impossible until it's done.", a: "Nelson Mandela" },
+    { q: "A ship in harbor is safe, but that is not what ships are built for.", a: "John A. Shedd" },
+    { q: "If you want to lift yourself up, lift up someone else.", a: "Booker T. Washington" },
+    { q: "The best executive is the one who has sense enough to pick good men to do what he wants done, and self-restraint enough to keep from meddling with them.", a: "Theodore Roosevelt" },
+    { q: "Don't find fault, find a remedy.", a: "Henry Ford" },
+    { q: "A leader takes people where they want to go. A great leader takes people where they don't necessarily want to go, but ought to be.", a: "Rosalynn Carter" },
+    { q: "If you think you are leading and turn around to see no one following, then you are just taking a walk.", a: "Benjamin Hooks" },
+    { q: "The task of the leader is to get his people from where they are to where they have not been.", a: "Henry Kissinger" },
+    { q: "Leadership is the art of getting someone else to do something you want done because he wants to do it.", a: "Dwight D. Eisenhower" },
+    { q: "Do what you can, with what you have, where you are.", a: "Theodore Roosevelt" },
+    { q: "Excellence is doing ordinary things extraordinarily well.", a: "John W. Gardner" },
+    { q: "The secret of getting ahead is getting started.", a: "Mark Twain" },
+    { q: "Coming together is a beginning. Keeping together is progress. Working together is success.", a: "Henry Ford" },
+    { q: "When you coach, mentor, or simply help others, the reward is in the reward.", a: "Anonymous" },
+  ];
+  function dayOfYear(d) {
+    const start = new Date(d.getFullYear(), 0, 0);
+    return Math.floor((d - start) / 86400000);
+  }
+  function renderDailyQuote() {
+    const q = LEADERSHIP_QUOTES[dayOfYear(new Date()) % LEADERSHIP_QUOTES.length];
+    const qt = $('quoteText');
+    const qa = $('quoteAuthor');
+    if (qt) qt.textContent = `"${q.q}"`;
+    if (qa) qa.textContent = `— ${q.a}`;
+  }
+  function renderGreeting() {
+    const hr = new Date().getHours();
+    const greet = hr < 12 ? 'Good morning' : (hr < 17 ? 'Good afternoon' : 'Good evening');
+    const g = $('gateGreet');
+    if (g) g.textContent = `${greet}, Team Lead`;
+  }
+
+  // ── Gate: verify email against Whitelist before granting access ───
+  function showGateError(msg) {
+    const box = $('gateError');
+    box.textContent = msg;
+    box.classList.add('show');
+  }
+  function hideGateError() {
+    const box = $('gateError');
+    box.classList.remove('show');
+    box.textContent = '';
+  }
+
+  async function verifyEmailAndEnter(email) {
+    hideGateError();
+    const btn = $('startDayBtn');
+    btn.disabled = true;
+    btn.textContent = '🔐 Verifying access…';
+    try {
+      const res = await fetch(`${API_URL}?action=whoami&email=${encodeURIComponent(email)}`);
+      const json = await res.json();
+      if (!json.ok) {
+        showGateError(`Access denied — ${email} is not on the TL Whitelist. Message @arun on Slack to request access.`);
+        btn.disabled = false;
+        btn.textContent = '🌅 Start Your Day';
+        return;
+      }
+      // Whitelisted — persist for next visit, update URL, show dashboard
+      try { localStorage.setItem('ttk_dash_email', email.toLowerCase()); } catch (e) {}
+      const d = state.date || todayIsoLocal();
+      const newUrl = `${location.pathname}?email=${encodeURIComponent(email)}&date=${encodeURIComponent(d)}`;
+      history.replaceState(null, '', newUrl);
+      state.email = email.toLowerCase();
+      state.date = d;
+      emailPrompt.classList.add('hidden');
+      dashboard.classList.remove('hidden');
+      datePicker.value = state.date;
+      fetchData();
+    } catch (err) {
+      showGateError(`Couldn't reach the server: ${err.message || err}. Check your connection and try again.`);
+      btn.disabled = false;
+      btn.textContent = '🌅 Start Your Day';
+    }
+  }
+
   emailForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    const v = emailInput.value.trim();
+    const v = emailInput.value.trim().toLowerCase();
     if (!v) return;
     if (!/@opendoor\.com$/i.test(v)) {
-      alert('Please use your @opendoor.com email address.');
+      showGateError('Please use your @opendoor.com email address.');
       return;
     }
-    const d = state.date || todayIsoLocal();
-    window.location.search = `?email=${encodeURIComponent(v)}&date=${encodeURIComponent(d)}`;
+    verifyEmailAndEnter(v);
   });
-
-  // ── Okta login gate ───────────────────────────────────────────────
-  // Opens Opendoor Okta in a new tab so the user authenticates there,
-  // then reveals the email confirmation step on this tab. The server-side
-  // Whitelist check is what actually enforces per-TL team restrictions.
-  const OKTA_SIGNIN_URL = 'https://opendoor.okta.com/';
-  const oktaBtn = $('oktaSignInBtn');
-  if (oktaBtn) {
-    oktaBtn.addEventListener('click', () => {
-      // Open Okta in a new tab (user signs in there)
-      window.open(OKTA_SIGNIN_URL, '_blank', 'noopener,noreferrer');
-      // Reveal the email input after a short delay so they have time to sign in
-      setTimeout(() => {
-        const step2 = document.getElementById('gateStep2');
-        if (step2) step2.classList.add('visible');
-        const input = document.getElementById('emailInput');
-        if (input) input.focus();
-      }, 600);
-    });
-  }
 
   // ---- Init ----
   function init() {
-    const params = getParams();
+    renderGreeting();
+    renderDailyQuote();
 
-    if (!params.email) {
+    const params = getParams();
+    // Prefer URL param; fall back to localStorage so returning TLs skip re-entry
+    let email = params.email;
+    if (!email) {
+      try { email = localStorage.getItem('ttk_dash_email') || ''; } catch (e) { email = ''; }
+    }
+
+    if (!email) {
       emailPrompt.classList.remove('hidden');
       dashboard.classList.add('hidden');
+      setTimeout(() => { try { emailInput.focus(); } catch(e){} }, 50);
       return;
     }
 
-    state.email = params.email;
+    // Pre-fill and show gate while we verify — prevents flash of dashboard
+    // to a stale/forged email before whitelist check returns.
+    emailInput.value = email;
     state.date = params.date || todayIsoLocal();
-
-    dashboard.classList.remove('hidden');
-    emailPrompt.classList.add('hidden');
-
-    datePicker.value = state.date;
-
-    fetchData();
+    emailPrompt.classList.remove('hidden');
+    dashboard.classList.add('hidden');
+    verifyEmailAndEnter(email);
   }
 
   init();
