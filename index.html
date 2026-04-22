@@ -112,24 +112,26 @@
   ═══════════════════════════════════════════ */
   .desktop {
     min-height: 100vh;
-    padding-top: 26px;
-    padding-bottom: 80px;
+    padding: 0;
     position: relative;
     z-index: 2;
     display: flex;
-    align-items: center;
+    align-items: stretch;
     justify-content: center;
   }
 
   .stage {
     width: 100%;
-    max-width: 1280px;
-    padding: 40px 24px;
+    max-width: 720px;
+    padding: 0;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 30px;
+    align-items: stretch;
+    gap: 0;
   }
+
+  /* Marketing hero is for the web landing page only — hide inside the Mac app */
+  .hero { display: none; }
 
   /* ═══════════════════════════════════════════
      Hero header
@@ -176,7 +178,7 @@
   ═══════════════════════════════════════════ */
   .window {
     width: 100%;
-    max-width: 680px;
+    max-width: 720px;
     background: rgba(18,18,24,0.72);
     backdrop-filter: blur(40px) saturate(180%);
     -webkit-backdrop-filter: blur(40px) saturate(180%);

@@ -112,7 +112,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
 
     // ── Window + WebView ───────────────────────────────────────────────
     func buildWindow() {
-        let frame = NSRect(x: 0, y: 0, width: 1100, height: 760)
+        let frame = NSRect(x: 0, y: 0, width: 720, height: 860)
         window = NSWindow(
             contentRect: frame,
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
