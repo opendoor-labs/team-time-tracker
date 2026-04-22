@@ -2764,9 +2764,26 @@ function handleConfig(cfg) {
   if (!IS_NATIVE) return;
   const u = await nativeCall('getUser', {});
   if (u && u.fullName) {
-    state.user = u.fullName;
-    const el = document.getElementById('userName');
-    if (el) el.textContent = u.fullName;
+    const fullName = u.fullName;
+    const firstName = (fullName.split(/\s+/)[0] || fullName);
+    // Greeting of the hour
+    const hr = new Date().getHours();
+    const greet = hr < 12 ? 'Good morning' : (hr < 17 ? 'Good afternoon' : 'Good evening');
+    state.user = fullName;
+    // Replace all hardcoded placeholder names with the real Mac user
+    const setText = (id, text) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = text;
+    };
+    setText('userName', fullName);
+    setText('greetHead', `${greet}, ${firstName}`);
+    setText('headName', fullName);
+    setText('welcomeTitle', `Welcome back, ${firstName}!`);
+    // Avatar initials (e.g. "Arun Mohan" → "AM")
+    const initials = fullName.split(/\s+/).map(w => w[0] || '').join('').slice(0, 2).toUpperCase();
+    document.querySelectorAll('.avatar').forEach(a => {
+      if (a.textContent && a.textContent.length <= 3) a.textContent = initials;
+    });
   }
   // Hide demo panel in production — it's only for local testing
   const dp = document.getElementById('demoPanel');
