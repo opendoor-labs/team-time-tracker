@@ -268,6 +268,28 @@
   .data-meta {
     color: var(--muted);
     font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  /* Export CSV button, lives in the table header */
+  .csv-btn {
+    background: rgba(91,140,255,0.12);
+    color: #5b8cff;
+    border: 1px solid rgba(91,140,255,0.3);
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .csv-btn:hover {
+    background: rgba(91,140,255,0.2);
+  }
+  .csv-btn:active {
+    transform: scale(0.97);
   }
 
   .table-wrap {
@@ -767,7 +789,10 @@
       <div class="data-card">
         <div class="data-header">
           <div class="data-title">${escapeHtml(title)}</div>
-          <div class="data-meta">${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} · ${escapeHtml(dateStr)}</div>
+          <div class="data-meta">
+            ${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} · ${escapeHtml(dateStr)}
+            <button class="csv-btn" id="csvExportBtn" title="Download as CSV">⬇ Export CSV</button>
+          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -780,6 +805,43 @@
           </table>
         </div>
       </div>`;
+
+    // Wire up CSV export for the currently selected tab
+    const csvBtn = document.getElementById('csvExportBtn');
+    if (csvBtn) {
+      csvBtn.addEventListener('click', () => downloadCsv(title, header, rows, dateStr));
+    }
+  }
+
+  // ── CSV export ────────────────────────────────────────────────────
+  // Builds a CSV from the currently rendered table and triggers a download.
+  // Filename format: "SD_2026-04-22.csv" (tab name, slashes/spaces sanitized).
+  function downloadCsv(title, header, rows, dateStr) {
+    const escapeCsv = (v) => {
+      if (v == null) return '';
+      const s = String(v);
+      // Quote if the value contains quote, comma, newline
+      if (/["\n,\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    };
+    const lines = [];
+    lines.push(header.map(escapeCsv).join(','));
+    rows.forEach(row => {
+      const padded = header.map((_, i) => (row && row[i] !== undefined) ? row[i] : '');
+      lines.push(padded.map(escapeCsv).join(','));
+    });
+    const csv = '\uFEFF' + lines.join('\n');  // BOM for Excel UTF-8 compat
+    const safeTitle = String(title).replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '');
+    const filename = `${safeTitle}_${dateStr}.csv`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
   function renderRow(row, header) {
