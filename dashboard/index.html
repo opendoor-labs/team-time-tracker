@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Per-Team Sheet Logging — Demo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Google+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --sheet-green: #188038;
+    --sheet-green-dark: #0d652d;
+    --sheet-green-hover: #1a7333;
+    --grid: #e0e0e0;
+    --grid-strong: #bdbdbd;
+    --header-bg: #f8f9fa;
+    --cell-hover: #f1f3f4;
+    --row-alt: #f9fbfc;
+    --chip-live: #34a853;
+    --chip-live-bg: #e6f4ea;
+    --link: #1a73e8;
+    --text: #202124;
+    --muted: #5f6368;
+    --aurora: #0a0b10;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: 'Google Sans', 'Inter', -apple-system, sans-serif;
+    background:
+      radial-gradient(1100px 700px at 12% 8%, rgba(10,132,255,0.14), transparent 60%),
+      radial-gradient(900px 600px at 88% 92%, rgba(94,92,230,0.14), transparent 60%),
+      var(--aurora);
+    color: #e5e5e7;
+    min-height: 100vh;
+  }
+
+  .page-head {
+    text-align: center;
+    padding: 40px 24px 16px;
+    max-width: 980px;
+    margin: 0 auto;
+  }
+  .page-head .eyebrow {
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #9a9aa3;
+    margin-bottom: 12px;
+  }
+  .page-head h1 {
+    font-family: 'Inter', sans-serif;
+    font-size: 34px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 12px;
+    background: linear-gradient(135deg, #ffffff, #b9c4ff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .page-head p {
+    color: #b0b0ba;
+    font-size: 15px;
+    line-height: 1.6;
+    margin: 0 auto;
+    max-width: 720px;
+  }
+
+  /* Google Sheets chrome */
+  .sheet-window {
+    width: min(1400px, 96vw);
+    margin: 28px auto 40px;
+    background: #fff;
+    color: var(--text);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow:
+      0 40px 100px rgba(0,0,0,0.55),
+      0 0 0 1px rgba(255,255,255,0.08);
+    font-family: 'Google Sans', 'Inter', sans-serif;
+  }
+
+  .g-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: #fff;
+    border-bottom: 1px solid #e8eaed;
+  }
+  .g-logo {
+    width: 28px; height: 28px;
+    background: var(--sheet-green);
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 15px;
+    box-shadow: inset 0 -6px 0 rgba(0,0,0,0.1);
+  }
+  .g-title {
+    font-size: 17px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .g-title .star {
+    color: #5f6368;
+    margin-left: 6px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .g-title .folder {
+    color: #5f6368;
+    font-size: 12px;
+    margin-left: 8px;
+  }
+  .g-toolbar {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .g-share {
+    background: #c2e7ff;
+    color: #001d35;
+    border: none;
+    padding: 8px 16px 8px 34px;
+    border-radius: 20px;
+    font-weight: 500;
+    font-size: 13px;
+    cursor: pointer;
+    position: relative;
+    font-family: inherit;
+  }
+  .g-share::before {
+    content: '🔒';
+    position: absolute;
+    left: 10px; top: 50%;
+    transform: translateY(-50%);
+    font-size: 13px;
+  }
+  .g-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: linear-gradient(135deg,#4285f4,#5e5ce6);
+    color: #fff; font-weight: 600; font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .g-menubar {
+    display: flex;
+    padding: 4px 14px;
+    background: #fff;
+    border-bottom: 1px solid #e8eaed;
+    font-size: 13px;
+    color: #3c4043;
+    gap: 2px;
+  }
+  .g-menubar div {
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: default;
+  }
+  .g-menubar div:hover { background: var(--cell-hover); }
+
+  .g-controls {
+    display: flex;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid #e8eaed;
+    align-items: center;
+    background: #fff;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .g-controls .chip {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: var(--chip-live-bg);
+    color: var(--chip-live);
+    font-weight: 500;
+    font-size: 12px;
+  }
+  .g-controls .chip .pulse {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--chip-live);
+    animation: pulse 1.4s infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(1.4); }
+  }
+  .g-controls .spacer { flex: 1; }
+  .g-controls button {
+    background: var(--sheet-green);
+    color: #fff;
+    border: none;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .g-controls button:hover { background: var(--sheet-green-hover); }
+  .g-controls .ghost {
+    background: transparent;
+    color: var(--sheet-green);
+    border: 1px solid var(--sheet-green);
+  }
+  .g-controls .ghost:hover { background: rgba(24,128,56,0.06); }
+
+  /* Sheet grid */
+  .grid-wrap {
+    overflow-x: auto;
+    background: #fff;
+    max-height: 540px;
+  }
+  table.grid {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 12.5px;
+    font-family: 'Arial', sans-serif;
+  }
+  table.grid thead th {
+    position: sticky; top: 0;
+    background: var(--header-bg);
+    border-right: 1px solid var(--grid);
+    border-bottom: 2px solid var(--grid-strong);
+    padding: 8px 10px;
+    text-align: left;
+    font-weight: 500;
+    color: var(--muted);
+    white-space: nowrap;
+    z-index: 5;
+  }
+  table.grid thead th.rownum {
+    background: #f1f3f4;
+    color: var(--muted);
+    text-align: center;
+    width: 44px;
+    min-width: 44px;
+    font-weight: 400;
+  }
+  table.grid tbody td {
+    border-right: 1px solid var(--grid);
+    border-bottom: 1px solid var(--grid);
+    padding: 6px 10px;
+    color: var(--text);
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  table.grid tbody td.rownum {
+    background: #f8f9fa;
+    color: var(--muted);
+    text-align: center;
+    font-family: 'Arial', sans-serif;
+    font-size: 11px;
+  }
+  table.grid tbody tr:hover td:not(.rownum) { background: var(--cell-hover); }
+  table.grid tbody td a { color: var(--link); text-decoration: none; }
+  table.grid tbody td a:hover { text-decoration: underline; }
+
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+  }
+  .pill.prod { background: #e6f4ea; color: #137333; }
+  .pill.break { background: #fef7e0; color: #ea8600; }
+  .pill.auto-break { background: #fce8e6; color: #b3261e; }
+  .pill.meet { background: #e8f0fe; color: #1967d2; }
+  .pill.lunch { background: #f3e8fd; color: #8430ce; }
+  .pill.train { background: #e6f4f4; color: #007b83; }
+  .pill.dinner { background: #fde7f3; color: #a8337b; }
+  .pill.comp { background: #e6f4ea; color: #137333; }
+  .pill.prog { background: #fef7e0; color: #b06000; }
+  .pill.leave { background: #fff4e5; color: #c75400; }
+  .pill.weekoff { background: #ede9fe; color: #6d28d9; }
+  .pill.system { background: #f1f3f4; color: #5f6368; border: 1px dashed #bdbdbd; }
+
+  .mono { font-family: 'JetBrains Mono', 'Roboto Mono', monospace; font-size: 11.5px; color: var(--muted); }
+
+  /* Sheet tabs at bottom */
+  .sheet-tabs {
+    display: flex;
+    align-items: center;
+    background: #f1f3f4;
+    border-top: 1px solid #e8eaed;
+    padding: 0 10px;
+    overflow-x: auto;
+  }
+  .sheet-tabs .add {
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted);
+    font-size: 18px;
+    cursor: pointer;
+  }
+  .sheet-tabs .tab {
+    padding: 9px 16px;
+    font-size: 13px;
+    color: var(--text);
+    background: transparent;
+    border: none;
+    border-right: 1px solid #e0e0e0;
+    cursor: pointer;
+    white-space: nowrap;
+    font-family: inherit;
+    position: relative;
+    transition: background 0.15s;
+  }
+  .sheet-tabs .tab:hover { background: #e8eaed; }
+  .sheet-tabs .tab.active {
+    background: #fff;
+    font-weight: 500;
+    color: var(--sheet-green);
+    border-top: 2px solid var(--sheet-green);
+    padding-top: 7px;
+  }
+  .sheet-tabs .tab .cnt {
+    background: rgba(24,128,56,0.1);
+    color: var(--sheet-green);
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    margin-left: 6px;
+    font-weight: 500;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .sheet-tabs .tab:not(.active) .cnt {
+    background: #e8eaed;
+    color: var(--muted);
+  }
+  .sheet-tabs .tab.locked {
+    color: #b0b0ba;
+    background: repeating-linear-gradient(45deg, #f1f3f4, #f1f3f4 6px, #ebedef 6px, #ebedef 12px);
+    cursor: not-allowed;
+  }
+  .sheet-tabs .tab.locked:hover {
+    background: repeating-linear-gradient(45deg, #fce8e6, #fce8e6 6px, #f7dad7 6px, #f7dad7 12px);
+    color: #b3261e;
+  }
+  .sheet-tabs .tab.locked .cnt {
+    background: #ddd;
+    color: #999;
+  }
+
+  /* New row flash */
+  @keyframes rowFlash {
+    0% { background: #fffbe0; }
+    100% { background: transparent; }
+  }
+  .flash td:not(.rownum) { animation: rowFlash 1.6s ease-out; }
+
+  /* Sidebar / right-side detail — the "why" */
+  .legend {
+    max-width: min(1400px, 96vw);
+    margin: 0 auto 48px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    padding: 0 4px;
+  }
+  @media (max-width: 900px) { .legend { grid-template-columns: 1fr; } }
+  .legend-card {
+    background: rgba(28,28,34,0.7);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 18px 20px;
+  }
+  .legend-card h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e5e5e7;
+    margin: 0 0 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .legend-card h4 .ico {
+    width: 28px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  .legend-card p {
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: #b0b0ba;
+    margin: 0;
+  }
+  .legend-card code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    background: rgba(255,255,255,0.06);
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: #40c8e0;
+  }
+
+  /* Demo panel */
+  .demo-panel {
+    position: fixed;
+    right: 18px; bottom: 18px;
+    width: 330px;
+    background: rgba(22,22,28,0.92);
+    backdrop-filter: blur(40px) saturate(180%);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px;
+    padding: 16px 18px;
+    color: #e5e5e7;
+    font-size: 12px;
+    box-shadow: 0 28px 60px rgba(0,0,0,0.6);
+    z-index: 100;
+  }
+  .demo-panel .tag {
+    display: inline-block;
+    font-size: 9.5px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #40c8e0;
+    background: rgba(64,200,224,0.1);
+    padding: 3px 8px;
+    border-radius: 999px;
+    margin-bottom: 8px;
+  }
+  .demo-panel h5 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+  .demo-panel .sub { font-size: 11.5px; color: #9a9aa3; line-height: 1.55; margin-bottom: 12px; }
+  .demo-panel .row { display: flex; flex-direction: column; gap: 6px; }
+  .demo-panel button {
+    background: rgba(255,255,255,0.06);
+    color: #e5e5e7;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .demo-panel button:hover { background: rgba(255,255,255,0.1); }
+  .demo-panel button.go {
+    background: linear-gradient(135deg, #0a84ff, #5e5ce6);
+    color: #fff;
+    border: none;
+    font-weight: 500;
+  }
+  .demo-panel button.warn {
+    border-color: rgba(255,159,10,0.35);
+    color: #ff9f0a;
+  }
+  .back-link {
+    position: fixed; top: 14px; left: 14px;
+    color: #b0b0ba;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 6px 12px;
+    border-radius: 999px;
+    text-decoration: none;
+    font-size: 12px;
+    font-family: 'Inter', sans-serif;
+  }
+  .back-link:hover { color: #fff; background: rgba(255,255,255,0.08); }
+</style>
+</head>
+<body>
+
+<a href="app-premium-demo.html" class="back-link">← Back to app demo</a>
+
+<div class="page-head">
+  <div class="eyebrow">PER-TEAM SHEET LOGGING · DEMO</div>
+  <h1>How task data lands in the shared Google Sheet</h1>
+  <p>
+    Every task you log in the app writes one row into your team's dedicated tab.
+    Each team has its <b>own</b> columns (matching the Google Doc spec), so Listings
+    never see SD fields, HQI gets the dual ticket-link column, and so on.
+    The TL dashboard reads directly from these tabs.
+  </p>
+</div>
+
+<div class="sheet-window">
+  <!-- Google Sheets title bar -->
+  <div class="g-titlebar">
+    <div class="g-logo">⊞</div>
+    <div class="g-title">
+      Team_Tracker_Logs_2026 <span class="star">☆</span>
+      <span class="folder">📁 Shared with team</span>
+    </div>
+    <div class="g-toolbar">
+      <button class="g-share">Share</button>
+      <div class="g-avatar">A</div>
+    </div>
+  </div>
+
+  <!-- Menu bar (decorative) -->
+  <div class="g-menubar">
+    <div>File</div><div>Edit</div><div>View</div><div>Insert</div>
+    <div>Format</div><div>Data</div><div>Tools</div><div>Extensions</div><div>Help</div>
+  </div>
+
+  <!-- Controls -->
+  <div class="g-controls">
+    <span class="chip"><span class="pulse"></span> Live · API writes enabled</span>
+    <span class="mono" id="statusBar">Last write: —</span>
+    <div class="spacer"></div>
+    <span class="mono" style="margin-right:4px;">View as:</span>
+    <select id="viewerSelect" onchange="changeViewer()" style="font-family:inherit;font-size:12px;padding:6px 10px;border:1px solid #e0e0e0;border-radius:4px;color:var(--text);background:#fff;">
+      <option value="__ADMIN__">🛡 Super Admin (sees all)</option>
+      <option value="Listings">👤 Listings TL (scoped)</option>
+      <option value="SD">👤 SD TL (scoped)</option>
+      <option value="HQI">👤 HQI TL (scoped)</option>
+      <option value="PhotoReview">👤 Photo Review TL (scoped)</option>
+      <option value="Dispatch">👤 Dispatch TL (scoped)</option>
+    </select>
+    <button class="ghost" onclick="resetAll()">↺ Reset demo</button>
+    <button onclick="simulateLog()">+ Simulate log from app</button>
+  </div>
+
+  <!-- The grid — re-rendered per tab -->
+  <div class="grid-wrap" id="gridWrap">
+    <!-- Table renders here -->
+  </div>
+
+  <!-- Sheet tabs (bottom, Google-Sheets style) -->
+  <div class="sheet-tabs" id="sheetTabs">
+    <div class="add">+</div>
+    <!-- tabs inject here -->
+  </div>
+</div>
+
+<!-- Legend / "how it works" -->
+<div class="legend">
+  <div class="legend-card">
+    <h4><span class="ico" style="background:rgba(10,132,255,0.15);color:#60a5fa;">📝</span> One write per task</h4>
+    <p>
+      When you click <b>Log Task</b> in the app, a single row is appended via <code>sheets.values.append</code>
+      to <code>{Team}_Log</code>. No SELECT *, no cross-team mixing — each team's tab stays clean.
+    </p>
+  </div>
+  <div class="legend-card">
+    <h4><span class="ico" style="background:rgba(52,168,83,0.15);color:#34a853;">🧩</span> Columns match the doc</h4>
+    <p>
+      Columns come verbatim from the <b>Task Field Doc</b>. Listings gets <code>Task / Ticket Link / MARKETS / Sub Task</code>;
+      HQI gets both <code>Ticket Link/Property Address</code> AND <code>Ticket Link</code>; Dispatch uses <code>Property Address/Ticket Link</code>, etc.
+    </p>
+  </div>
+  <div class="legend-card">
+    <h4><span class="ico" style="background:rgba(191,90,242,0.15);color:#bf5af2;">🔒</span> Privacy by design</h4>
+    <p>
+      Try the <b>"View as"</b> dropdown above — switch to <b>SD TL</b> and watch Listings_Log / HQI_Log / etc.
+      lock up with a 🔒 icon. The TL dashboard pulls ONLY tabs the TL is scoped to via
+      <code>whitelist[tl_email] → [team]</code>. Attendance &amp; Sessions are the only cross-team reads.
+    </p>
+  </div>
+</div>
+
+<!-- Demo panel -->
+<div class="demo-panel">
+  <div class="tag">DEMO · Sheet logging</div>
+  <h5>Fire test rows</h5>
+  <div class="sub">
+    Each button simulates a task being logged from the app — watch the row appear in the current tab with a yellow flash, then settle.
+  </div>
+  <div class="row">
+    <button class="go" onclick="simulateLog()">+ Log a task in current tab</button>
+    <button onclick="simulateLog('Listings')">→ Listings log row</button>
+    <button onclick="simulateLog('SD')">→ SD log row</button>
+    <button onclick="simulateLog('HQI')">→ HQI log row</button>
+    <button onclick="simulateLog('PhotoReview')">→ Photo Review log row</button>
+    <button onclick="simulateLog('Dispatch')">→ Dispatch log row</button>
+    <button class="warn" onclick="simulateAutoBreak()">🔒 Auto-break row (system)</button>
+    <button onclick="simulateAttendance()">🌴 Attendance (Leave)</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// Each tab = one team. Columns come verbatim from the Task Field doc.
+// ═══════════════════════════════════════════════════════════════════
+const MARKETS = [
+  'TX - Dallas','TX - Houston','TX - Austin','TX - San Antonio',
+  'AZ - Phoenix','AZ - Tucson','FL - Tampa','FL - Orlando','FL - Miami',
+  'NC - Charlotte','NC - Raleigh','GA - Atlanta','CO - Denver',
+  'NV - Las Vegas','CA - Sacramento','CA - Riverside','MN - Twin Cities',
+  'TN - Nashville','OR - Portland','WA - Seattle'
+];
+
+const USERS = [
+  { name: 'Aswini Ramesh',       team: 'Listings'     },
+  { name: 'Priya Sharma',        team: 'Listings'     },
+  { name: 'Rahul Venkat',        team: 'Listings'     },
+  { name: 'Sneha Iyer',          team: 'SD'           },
+  { name: 'Karthik Nair',        team: 'SD'           },
+  { name: 'Deepa Krishnan',      team: 'SD'           },
+  { name: 'Mohammed Rafi',       team: 'HQI'          },
+  { name: 'Charumathi Dhasarathan', team: 'HQI'       },
+  { name: 'Vignesh Muthu',       team: 'PhotoReview'  },
+  { name: 'Lavanya Pillai',      team: 'PhotoReview'  },
+  { name: 'Arjun Patel',         team: 'Dispatch'     },
+  { name: 'Anitha Suresh',       team: 'Dispatch'     },
+];
+
+const TABS = [
+  {
+    key: 'Listings', label: 'Listings_Log',
+    columns: ['Timestamp','User','Activity','Task','Ticket Link/Property Address','MARKETS','Sub Task/Action Taken','Duration','Status'],
+    taskPool: ['Photo Review','DEF','Create Listing','Additional Thread','JIRA','BOM Ticket','Home TOM/BOM Date Passed','Violation Ticket','5 days ago Ticket','QC','RAMP','QC - Extra Audits','Lock Box','Zillow 3D','Reno VA','Showami','Late Photo Task'],
+    subPool: ['Opened','Closed','Escalated','Reviewed','Approved','Sent back for rework','Waiting on vendor','Price verified','MLS updated'],
+  },
+  {
+    key: 'SD', label: 'SD_Log',
+    columns: ['Timestamp','User','Activity','Task type','Ticket Link / Property Address','MARKETS','Sub Task / Action Taken','Duration','Status'],
+    taskPool: ['New Create','FT Closed','FT Pending','WO Update','WO No - Changes','JIRA Closed','JIRA Pending','QC','DEF - Listings','QC - Extra Audits','Reno Process','Photo Review - Listings','TX QC Check','Additional Thread'],
+    subPool: ['Closed','Pending','Updated','No changes','Escalated','Awaiting doc','QC complete','Rejected'],
+  },
+  {
+    key: 'HQI', label: 'HQI_Log',
+    columns: ['Timestamp','User','Activity','Task','Ticket Link/Property Address','Ticket Link','MARKETS','Sub Task/Action Taken','Duration','Status'],
+    taskPool: ['HQI Audit','Repair Scoping','Vendor Follow-up','Reno Validation','Quality Check','Additional Thread','Escalation'],
+    subPool: ['Audit complete','Scope approved','Vendor confirmed','Pending photos','Sent to ops','Rejected','Returned'],
+  },
+  {
+    key: 'PhotoReview', label: 'PhotoReview_Log',
+    columns: ['Timestamp','User','Activity','Project/Task','Ticket Link','Sub Task/Action Taken','MARKETS','Duration','Status'],
+    taskPool: ['Photo QC','Listing Photos','Reno Photos','3D Scan Review','Late Photo Task','Re-shoot Request'],
+    subPool: ['Approved','Rejected','Re-shoot requested','Passed QC','Flagged angle','Blur detected'],
+  },
+  {
+    key: 'Dispatch', label: 'Dispatch_Log',
+    columns: ['Timestamp','User','Activity','Task','MARKETS','Property Address/Ticket Link','Sub Task/Action taken','Duration','Status'],
+    taskPool: ['Vendor Assignment','Route Planning','Emergency Dispatch','Follow-up','Schedule Change','Cancellation'],
+    subPool: ['Dispatched','Rescheduled','Vendor assigned','Cancelled','Confirmed','Awaiting ETA'],
+  },
+  {
+    key: 'Attendance', label: 'Attendance',
+    columns: ['Date','User','Team','Status','Marked at','Device','Notes'],
+    isAttendance: true,
+  },
+  {
+    key: 'Sessions', label: 'Sessions',
+    columns: ['Date','User','Team','Start','End','Production','Break','Meeting','Lunch','Idle (after 5m)','Auto-break count','Tasks done'],
+    isSessions: true,
+  },
+];
+
+const ADDRS_L = [
+  '4521 Elm St, Dallas TX 75201','88 Camelback Rd, Phoenix AZ 85013','302 Maple Ave, Tampa FL 33602',
+  '1900 Oak Ridge Dr, Charlotte NC 28202','744 Cherry Blvd, Denver CO 80202','210 Riverside Ln, Atlanta GA 30303',
+  '55 Sunset Cir, Nashville TN 37203','9821 Pine Crossing, Austin TX 78701','412 Desert Way, Tucson AZ 85701',
+];
+const TICKETS = ['LIST-12849','LIST-12850','SD-8841','SD-8842','HQI-4421','HQI-4422','PR-11204','PR-11205','DISP-9921','DISP-9922','JIRA-8812','BOM-7741'];
+
+let activeTab = 'Listings';
+let rows = {};  // key: tab key, value: array of row arrays
+let currentViewer = '__ADMIN__';  // '__ADMIN__' or a team key (TL scope)
+
+// Which tabs each viewer can read. Super Admin sees all; team TLs see ONLY their team's log
+// plus the shared Attendance + Sessions tabs (read-only summary views).
+function allowedTabsForViewer() {
+  if (currentViewer === '__ADMIN__') return TABS.map(t => t.key);
+  return [currentViewer, 'Attendance', 'Sessions'];
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Seed 12–15 rows per tab (mixing users/tasks/status)
+// ═══════════════════════════════════════════════════════════════════
+function hh(h, m) { return pad(h) + ':' + pad(m) + ':' + pad(Math.floor(Math.random()*60)); }
+function pad(n) { return n.toString().padStart(2, '0'); }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function dur() {
+  const m = 5 + Math.floor(Math.random() * 55);
+  return m < 60 ? m + 'm' : Math.floor(m/60) + 'h ' + (m%60) + 'm';
+}
+function ts(date, h, m) {
+  return `2026-04-22 ${pad(h)}:${pad(m)}:${pad(Math.floor(Math.random()*60))}`;
+}
+function ticketLink(t) {
+  return `<a href="#" onclick="return false">${t}</a>`;
+}
+function actPill(act) {
+  const map = { production: 'prod', break: 'break', auto_break: 'auto-break', meeting: 'meet', lunch: 'lunch', training: 'train', dinner: 'dinner' };
+  const labelMap = { production: 'Production', break: 'Break', auto_break: '🔒 Auto Break', meeting: 'Meeting', lunch: 'Lunch', training: 'Training', dinner: 'Dinner' };
+  return `<span class="pill ${map[act] || 'prod'}">${labelMap[act] || act}</span>`;
+}
+function statusPill(s) {
+  if (s === 'Completed') return '<span class="pill comp">✓ Completed</span>';
+  if (s === 'In Progress') return '<span class="pill prog">⏳ In Progress</span>';
+  return `<span class="pill prog">${s}</span>`;
+}
+
+function seedRows() {
+  rows = {};
+  TABS.forEach(tab => { rows[tab.key] = []; });
+
+  const teamUsers = (team) => USERS.filter(u => u.team === team);
+
+  // seed Listings (14 rows)
+  for (let i = 0; i < 14; i++) {
+    const u = pick(teamUsers('Listings'));
+    const hour = 9 + Math.floor(i * 9 / 14);
+    const min = (i * 7) % 60;
+    const act = i === 3 ? 'break' : i === 7 ? 'lunch' : i === 11 ? 'meeting' : 'production';
+    const task = pick(TABS[0].taskPool);
+    rows.Listings.push([
+      ts('', hour, min),
+      u.name,
+      actPill(act),
+      task,
+      ticketLink(pick(TICKETS)) + ' · ' + pick(ADDRS_L),
+      pick(MARKETS),
+      pick(TABS[0].subPool),
+      dur(),
+      statusPill(i % 4 === 0 ? 'In Progress' : 'Completed'),
+    ]);
+  }
+
+  // seed SD (12 rows)
+  for (let i = 0; i < 12; i++) {
+    const u = pick(teamUsers('SD'));
+    const hour = 9 + Math.floor(i * 9 / 12);
+    const min = (i * 11) % 60;
+    const act = i === 5 ? 'auto_break' : i === 9 ? 'break' : 'production';
+    rows.SD.push([
+      ts('', hour, min),
+      u.name,
+      actPill(act),
+      pick(TABS[1].taskPool),
+      ticketLink(pick(TICKETS)) + ' · ' + pick(ADDRS_L),
+      pick(MARKETS),
+      pick(TABS[1].subPool),
+      dur(),
+      statusPill(i % 3 === 0 ? 'In Progress' : 'Completed'),
+    ]);
+  }
+
+  // seed HQI (10 rows) — note HQI has BOTH Ticket Link/Property Address AND Ticket Link
+  for (let i = 0; i < 10; i++) {
+    const u = pick(teamUsers('HQI'));
+    const hour = 9 + i;
+    const min = (i * 13) % 60;
+    rows.HQI.push([
+      ts('', hour, min),
+      u.name,
+      actPill(i === 4 ? 'lunch' : 'production'),
+      pick(TABS[2].taskPool),
+      pick(ADDRS_L),
+      ticketLink(pick(TICKETS)),
+      pick(MARKETS),
+      pick(TABS[2].subPool),
+      dur(),
+      statusPill(i % 3 === 0 ? 'In Progress' : 'Completed'),
+    ]);
+  }
+
+  // seed PhotoReview (10 rows)
+  for (let i = 0; i < 10; i++) {
+    const u = pick(teamUsers('PhotoReview'));
+    rows.PhotoReview.push([
+      ts('', 9 + i, (i * 9) % 60),
+      u.name,
+      actPill(i === 6 ? 'training' : 'production'),
+      pick(TABS[3].taskPool),
+      ticketLink(pick(TICKETS)),
+      pick(TABS[3].subPool),
+      pick(MARKETS),
+      dur(),
+      statusPill(i % 4 === 0 ? 'In Progress' : 'Completed'),
+    ]);
+  }
+
+  // seed Dispatch (10 rows)
+  for (let i = 0; i < 10; i++) {
+    const u = pick(teamUsers('Dispatch'));
+    rows.Dispatch.push([
+      ts('', 9 + i, (i * 6) % 60),
+      u.name,
+      actPill(i === 3 ? 'break' : i === 8 ? 'dinner' : 'production'),
+      pick(TABS[4].taskPool),
+      pick(MARKETS),
+      pick(ADDRS_L) + ' · ' + ticketLink(pick(TICKETS)),
+      pick(TABS[4].subPool),
+      dur(),
+      statusPill(i % 5 === 0 ? 'In Progress' : 'Completed'),
+    ]);
+  }
+
+  // Attendance (one row per user today)
+  USERS.forEach((u, i) => {
+    const status = i === 6 ? '<span class="pill leave">🌴 Leave</span>'
+                 : i === 7 ? '<span class="pill weekoff">🏖️ Week Off</span>'
+                 : '<span class="pill comp">✓ Present</span>';
+    rows.Attendance.push([
+      '2026-04-22',
+      u.name,
+      u.team,
+      status,
+      i === 6 || i === 7 ? '—' : `${pad(9 + Math.floor(Math.random()*2))}:${pad(Math.floor(Math.random()*30))}`,
+      'MacBook',
+      i === 6 ? 'Marked via Start-of-Day popup' : i === 7 ? 'Week off auto-applied' : '',
+    ]);
+  });
+
+  // Sessions (per-user daily summary)
+  USERS.forEach((u, i) => {
+    if (i === 6 || i === 7) {
+      rows.Sessions.push([
+        '2026-04-22', u.name, u.team, '—', '—', '0h 00m','0h 00m','0h 00m','0h 00m','0h 00m','0','0'
+      ]);
+    } else {
+      const prodH = 5 + Math.floor(Math.random() * 3);
+      const prodM = Math.floor(Math.random() * 59);
+      const brM = 20 + Math.floor(Math.random() * 40);
+      const meetM = 10 + Math.floor(Math.random() * 90);
+      const lunchM = 30 + Math.floor(Math.random() * 25);
+      const idleM = Math.floor(Math.random() * 35);
+      const ab = Math.floor(Math.random() * 3);
+      const tasks = 8 + Math.floor(Math.random() * 20);
+      rows.Sessions.push([
+        '2026-04-22', u.name, u.team,
+        `${pad(9)}:${pad(Math.floor(Math.random()*30))}`,
+        `${pad(18)}:${pad(Math.floor(Math.random()*59))}`,
+        `${prodH}h ${pad(prodM)}m`,
+        `0h ${pad(brM)}m`,
+        `${Math.floor(meetM/60)}h ${pad(meetM%60)}m`,
+        `0h ${pad(lunchM)}m`,
+        `0h ${pad(idleM)}m`,
+        String(ab),
+        String(tasks),
+      ]);
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Render
+// ═══════════════════════════════════════════════════════════════════
+function renderTabs() {
+  const bar = document.getElementById('sheetTabs');
+  bar.querySelectorAll('.tab').forEach(el => el.remove());
+  const allowed = allowedTabsForViewer();
+  TABS.forEach(tab => {
+    const btn = document.createElement('button');
+    const isAllowed = allowed.includes(tab.key);
+    const isActive = tab.key === activeTab;
+    btn.className = 'tab' + (isActive ? ' active' : '') + (isAllowed ? '' : ' locked');
+    btn.onclick = () => {
+      if (!isAllowed) { flashDenied(tab); return; }
+      activeTab = tab.key; renderAll();
+    };
+    const lockIcn = isAllowed ? '' : ' 🔒';
+    btn.innerHTML = `${tab.label}${lockIcn} <span class="cnt">${rows[tab.key].length}</span>`;
+    bar.appendChild(btn);
+  });
+}
+
+function flashDenied(tab) {
+  setStatus(`❌ 403 FORBIDDEN — "${tab.label}" is outside your scope (you are ${viewerLabel()})`);
+  // briefly flash the status bar red
+  const sb = document.getElementById('statusBar');
+  sb.style.color = '#b3261e';
+  setTimeout(() => sb.style.color = '', 2200);
+}
+
+function viewerLabel() {
+  if (currentViewer === '__ADMIN__') return 'Super Admin';
+  return `${currentViewer} TL`;
+}
+
+function changeViewer() {
+  currentViewer = document.getElementById('viewerSelect').value;
+  // If the currently-open tab is now forbidden, snap to an allowed one
+  const allowed = allowedTabsForViewer();
+  if (!allowed.includes(activeTab)) activeTab = allowed[0];
+  renderAll();
+  setStatus(`Viewer switched → ${viewerLabel()} · ${allowed.length} tabs readable`);
+}
+
+function renderGrid(flashIdx) {
+  const wrap = document.getElementById('gridWrap');
+  const tab = TABS.find(t => t.key === activeTab);
+  const cols = tab.columns;
+  const data = rows[tab.key];
+
+  let html = `<table class="grid"><thead><tr><th class="rownum"></th>`;
+  cols.forEach((c, i) => {
+    html += `<th>${String.fromCharCode(65 + i)}&nbsp;&nbsp;<span style="color:#3c4043;font-weight:500">${c}</span></th>`;
+  });
+  html += `</tr></thead><tbody>`;
+
+  data.forEach((row, rIdx) => {
+    const flash = flashIdx === rIdx ? ' class="flash"' : '';
+    html += `<tr${flash}><td class="rownum">${rIdx + 2}</td>`;
+    row.forEach(cell => {
+      html += `<td>${cell}</td>`;
+    });
+    html += `</tr>`;
+  });
+
+  // empty rows to simulate sheet
+  const emptyRows = Math.max(0, 18 - data.length);
+  for (let i = 0; i < emptyRows; i++) {
+    html += `<tr><td class="rownum">${data.length + i + 2}</td>`;
+    cols.forEach(() => html += `<td>&nbsp;</td>`);
+    html += `</tr>`;
+  }
+
+  html += `</tbody></table>`;
+  wrap.innerHTML = html;
+}
+
+function renderAll(flashIdx) {
+  renderTabs();
+  renderGrid(flashIdx);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Simulate: fires a row into the chosen tab (default = current)
+// ═══════════════════════════════════════════════════════════════════
+function simulateLog(targetKey) {
+  const key = targetKey || activeTab;
+  if (key === 'Attendance' || key === 'Sessions') {
+    // switch to a team tab if user clicked +Log while on Attendance
+    activeTab = 'Listings';
+    return simulateLog('Listings');
+  }
+  const tab = TABS.find(t => t.key === key);
+  if (!tab) return;
+  const u = pick(USERS.filter(x => x.team === key));
+  const now = new Date();
+  const t = `2026-04-22 ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  let row;
+  if (key === 'Listings') {
+    row = [t, u.name, actPill('production'), pick(tab.taskPool),
+      ticketLink(pick(TICKETS)) + ' · ' + pick(ADDRS_L),
+      pick(MARKETS), pick(tab.subPool), dur(), statusPill('Completed')];
+  } else if (key === 'SD') {
+    row = [t, u.name, actPill('production'), pick(tab.taskPool),
+      ticketLink(pick(TICKETS)) + ' · ' + pick(ADDRS_L),
+      pick(MARKETS), pick(tab.subPool), dur(), statusPill('Completed')];
+  } else if (key === 'HQI') {
+    row = [t, u.name, actPill('production'), pick(tab.taskPool),
+      pick(ADDRS_L), ticketLink(pick(TICKETS)),
+      pick(MARKETS), pick(tab.subPool), dur(), statusPill('Completed')];
+  } else if (key === 'PhotoReview') {
+    row = [t, u.name, actPill('production'), pick(tab.taskPool),
+      ticketLink(pick(TICKETS)), pick(tab.subPool), pick(MARKETS),
+      dur(), statusPill('Completed')];
+  } else if (key === 'Dispatch') {
+    row = [t, u.name, actPill('production'), pick(tab.taskPool),
+      pick(MARKETS),
+      pick(ADDRS_L) + ' · ' + ticketLink(pick(TICKETS)),
+      pick(tab.subPool), dur(), statusPill('Completed')];
+  }
+
+  activeTab = key;
+  rows[key].unshift(row);
+  setStatus(`Wrote 1 row → ${tab.label} · ${u.name}`);
+  renderAll(0);
+  // scroll grid to top so the new row is visible
+  setTimeout(() => {
+    const w = document.getElementById('gridWrap');
+    if (w) w.scrollTop = 0;
+  }, 10);
+}
+
+function simulateAutoBreak() {
+  const teams = ['Listings','SD','HQI','PhotoReview','Dispatch'];
+  const key = teams.includes(activeTab) ? activeTab : 'Listings';
+  const tab = TABS.find(t => t.key === key);
+  const u = pick(USERS.filter(x => x.team === key));
+  const now = new Date();
+  const t = `2026-04-22 ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  const systemCell = '<span class="pill system">⚙ system-generated · Mac locked ≥ 15 min</span>';
+  let row;
+  if (key === 'Listings' || key === 'SD') {
+    row = [t, u.name, actPill('auto_break'), '🔒 Auto Break',
+      systemCell, '—', 'Mac locked', '—', '<span class="pill system">_system</span>'];
+  } else if (key === 'HQI') {
+    row = [t, u.name, actPill('auto_break'), '🔒 Auto Break',
+      systemCell, '—', '—', 'Mac locked', '—', '<span class="pill system">_system</span>'];
+  } else if (key === 'PhotoReview') {
+    row = [t, u.name, actPill('auto_break'), '🔒 Auto Break',
+      systemCell, 'Mac locked', '—', '—', '<span class="pill system">_system</span>'];
+  } else if (key === 'Dispatch') {
+    row = [t, u.name, actPill('auto_break'), '🔒 Auto Break',
+      '—', systemCell, 'Mac locked', '—', '<span class="pill system">_system</span>'];
+  }
+  activeTab = key;
+  rows[key].unshift(row);
+  setStatus(`Wrote 1 system row → ${tab.label} · ${u.name} (auto-break)`);
+  renderAll(0);
+  setTimeout(() => {
+    const w = document.getElementById('gridWrap');
+    if (w) w.scrollTop = 0;
+  }, 10);
+}
+
+function simulateAttendance() {
+  const u = pick(USERS);
+  const now = new Date();
+  const row = [
+    '2026-04-22', u.name, u.team,
+    '<span class="pill leave">🌴 Leave</span>',
+    '—', 'MacBook', 'Marked via Start-of-Day popup'
+  ];
+  activeTab = 'Attendance';
+  rows.Attendance.unshift(row);
+  setStatus(`Wrote 1 row → Attendance · ${u.name} marked Leave`);
+  renderAll(0);
+  setTimeout(() => {
+    const w = document.getElementById('gridWrap');
+    if (w) w.scrollTop = 0;
+  }, 10);
+}
+
+function setStatus(txt) {
+  const now = new Date();
+  document.getElementById('statusBar').textContent =
+    `Last write: ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())} · ${txt}`;
+}
+
+function resetAll() {
+  seedRows();
+  activeTab = 'Listings';
+  renderAll();
+  setStatus('Seeded demo with ~70 rows across 7 tabs');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Live mode — pulls real data from Apps Script when ?live=1 is in URL
+// ═══════════════════════════════════════════════════════════════════
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxkBAtowwxWuKkaga-aR93ssyxuygFZC-zYXsdm22aVKhXWB45E4YKMKVmc0Ty_ByFk/exec';
+
+function isLive() {
+  const p = new URLSearchParams(location.search);
+  return p.get('live') === '1';
+}
+function viewerEmail() {
+  const p = new URLSearchParams(location.search);
+  return p.get('email') || 'arun.mohan@opendoor.com';
+}
+function viewerDate() {
+  const p = new URLSearchParams(location.search);
+  return p.get('date') || new Date().toISOString().slice(0,10);
+}
+
+async function loadLive() {
+  setStatus('Loading live data from Google Sheets…');
+  const url = `${APPS_SCRIPT_URL}?action=tlDashboard&email=${encodeURIComponent(viewerEmail())}&date=${viewerDate()}`;
+  try {
+    const r = await fetch(url);
+    const j = await r.json();
+    if (!j.ok) { setStatus('Access denied: ' + (j.error || 'check Whitelist tab')); return; }
+    rows = {};
+    TABS.forEach(t => { rows[t.key] = []; });
+    // v2.7 shape: j.logs[teamName] = { header: [...], rows: [[...]] }
+    // Only teams present in TABS[] will render; unknown teams silently skipped.
+    Object.keys(j.logs || {}).forEach(teamName => {
+      const bundle = j.logs[teamName] || { rows: [] };
+      if (rows[teamName] !== undefined) rows[teamName] = bundle.rows || [];
+    });
+    if (j.attendance && j.attendance.rows) rows.Attendance = j.attendance.rows;
+    if (j.sessions   && j.sessions.rows)   rows.Sessions   = j.sessions.rows;
+    if (!j.isAdmin && j.teams && j.teams.length) currentViewer = j.teams[0];
+    renderAll();
+    const totals = Object.values(rows).reduce((a,b) => a + b.length, 0);
+    const scope = j.isAdmin ? 'ALL' : (j.teams || []).join(',');
+    setStatus(`Live · ${totals} rows for ${viewerDate()} · ${j.role} · scope=${scope}`);
+  } catch (err) {
+    setStatus('Failed to load live data: ' + err.message);
+  }
+}
+
+// Go
+if (isLive()) {
+  // Start with empty skeleton, then hydrate
+  TABS.forEach(t => { rows[t.key] = []; });
+  renderAll();
+  setStatus('Live mode — loading…');
+  loadLive();
+  // Refresh every 2 min
+  setInterval(loadLive, 120000);
+} else {
+  seedRows();
+  renderAll();
+  setStatus('Demo mode · ~70 seeded rows · append ?live=1 to URL for real data');
+}
+</script>
+</body>
+</html>

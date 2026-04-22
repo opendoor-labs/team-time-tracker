@@ -1,166 +1,2791 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Team Time Tracker</title>
-  <link rel="stylesheet" href="styles.css">
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Team Time Tracker · Premium App Demo</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+  :root {
+    --blue: #0a84ff;
+    --green: #30d158;
+    --orange: #ff9f0a;
+    --red: #ff453a;
+    --yellow: #ffd60a;
+    --purple: #bf5af2;
+    --pink: #ff375f;
+    --teal: #40c8e0;
+    --indigo: #5e5ce6;
+    --text: #ffffff;
+    --muted: rgba(255,255,255,0.62);
+    --dim: rgba(255,255,255,0.38);
+    --card: rgba(28,28,35,0.68);
+    --card-hover: rgba(38,38,48,0.78);
+    --border: rgba(255,255,255,0.1);
+    --border-bright: rgba(255,255,255,0.18);
+  }
+
+  html, body {
+    font-family: 'Inter', -apple-system, 'SF Pro Display', BlinkMacSystemFont, system-ui, sans-serif;
+    color: var(--text);
+    height: 100%;
+    letter-spacing: -0.01em;
+  }
+
+  /* Animated premium background — aurora gradient */
+  body {
+    min-height: 100vh;
+    background: #05060b;
+    overflow-x: hidden;
+    position: relative;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(1200px 700px at 10% 10%, rgba(94,92,230,0.35), transparent 60%),
+      radial-gradient(1100px 600px at 85% 20%, rgba(10,132,255,0.28), transparent 60%),
+      radial-gradient(900px 550px at 70% 90%, rgba(191,90,242,0.22), transparent 60%),
+      radial-gradient(700px 400px at 20% 80%, rgba(48,209,88,0.18), transparent 60%);
+    filter: blur(20px);
+    animation: pulse 18s ease-in-out infinite alternate;
+    z-index: 0;
+  }
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' /%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.4'/%3E%3C/svg%3E");
+    opacity: 0.035;
+    mix-blend-mode: overlay;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  @keyframes pulse {
+    0% { transform: scale(1) rotate(0deg); opacity: 0.9; }
+    100% { transform: scale(1.08) rotate(4deg); opacity: 1; }
+  }
+
+  /* ═══════════════════════════════════════════
+     macOS Menu Bar (simulated desktop chrome)
+  ═══════════════════════════════════════════ */
+  .menubar {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: 26px;
+    background: rgba(14,14,20,0.6);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    border-bottom: 0.5px solid rgba(255,255,255,0.08);
+    display: flex; align-items: center;
+    padding: 0 14px;
+    font-size: 13px;
+    font-weight: 500;
+    z-index: 100;
+    color: rgba(255,255,255,0.92);
+  }
+  .menubar .apple { font-size: 15px; margin-right: 14px; }
+  .menubar .app-name { font-weight: 700; margin-right: 18px; }
+  .menubar .menu-item { margin-right: 16px; opacity: 0.85; }
+  .menubar .spacer { flex: 1; }
+  .menubar .right-item {
+    margin-left: 14px;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px;
+    opacity: 0.88;
+  }
+  .menubar .tracker-icon {
+    background: linear-gradient(135deg, var(--blue), var(--indigo));
+    width: 18px; height: 18px;
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(10,132,255,0.5);
+  }
+
+  /* ═══════════════════════════════════════════
+     Main layout container
+  ═══════════════════════════════════════════ */
+  .desktop {
+    min-height: 100vh;
+    padding-top: 26px;
+    padding-bottom: 80px;
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .stage {
+    width: 100%;
+    max-width: 1280px;
+    padding: 40px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 30px;
+  }
+
+  /* ═══════════════════════════════════════════
+     Hero header
+  ═══════════════════════════════════════════ */
+  .hero {
+    text-align: center;
+    max-width: 780px;
+  }
+  .hero .badge {
+    display: inline-block;
+    padding: 6px 14px;
+    border-radius: 20px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.78);
+    margin-bottom: 18px;
+    backdrop-filter: blur(10px);
+  }
+  .hero h1 {
+    font-size: 44px;
+    font-weight: 800;
+    line-height: 1.08;
+    letter-spacing: -0.03em;
+    background: linear-gradient(180deg, #fff 0%, rgba(255,255,255,0.72) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    margin-bottom: 12px;
+  }
+  .hero p {
+    font-size: 15px;
+    color: var(--muted);
+    line-height: 1.5;
+    max-width: 620px;
+    margin: 0 auto;
+  }
+
+  /* ═══════════════════════════════════════════
+     macOS window chrome
+  ═══════════════════════════════════════════ */
+  .window {
+    width: 100%;
+    max-width: 680px;
+    background: rgba(18,18,24,0.72);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow:
+      0 30px 80px rgba(0,0,0,0.55),
+      0 10px 30px rgba(0,0,0,0.4),
+      inset 0 1px 0 rgba(255,255,255,0.06);
+    overflow: hidden;
+    position: relative;
+  }
+
+  .titlebar {
+    display: flex;
+    align-items: center;
+    padding: 12px 14px;
+    background: rgba(12,12,18,0.6);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .traffic { display: flex; gap: 8px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot.red { background: #ff5f57; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2); }
+  .dot.yellow { background: #febc2e; }
+  .dot.green { background: #28c840; }
+  .titlebar .tb-title {
+    position: absolute;
+    left: 0; right: 0;
+    text-align: center;
+    font-size: 12px;
+    color: rgba(255,255,255,0.6);
+    font-weight: 500;
+    pointer-events: none;
+  }
+
+  /* ═══════════════════════════════════════════
+     Start Your Day popup
+  ═══════════════════════════════════════════ */
+  .screen { display: none; }
+  .screen.show { display: block; animation: screenIn 0.45s cubic-bezier(0.2,0.9,0.25,1); }
+  @keyframes screenIn {
+    0% { opacity: 0; transform: translateY(16px) scale(0.985); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .start-day {
+    padding: 40px 44px 44px;
+    text-align: center;
+    position: relative;
+  }
+
+  .start-day .logo-orb {
+    width: 72px; height: 72px;
+    margin: 0 auto 22px;
+    border-radius: 22px;
+    background:
+      radial-gradient(circle at 30% 30%, rgba(255,255,255,0.4), transparent 55%),
+      linear-gradient(135deg, var(--blue) 0%, var(--indigo) 50%, var(--purple) 100%);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 34px;
+    box-shadow:
+      0 15px 40px rgba(10,132,255,0.45),
+      0 4px 12px rgba(94,92,230,0.35),
+      inset 0 1px 0 rgba(255,255,255,0.3);
+    animation: orbFloat 5s ease-in-out infinite;
+  }
+  @keyframes orbFloat {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-5px) rotate(3deg); }
+  }
+
+  .start-day h2 {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 6px;
+  }
+  .start-day .greeting-sub {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 22px;
+  }
+  .start-day .greeting-sub b { color: rgba(255,255,255,0.92); }
+
+  /* Motivational quote card */
+  .quote-card {
+    padding: 20px 22px;
+    margin: 0 0 26px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(255,214,10,0.08), rgba(191,90,242,0.08));
+    border: 1px solid rgba(255,214,10,0.18);
+    text-align: left;
+    position: relative;
+    overflow: hidden;
+  }
+  .quote-card::before {
+    content: '"';
+    position: absolute;
+    top: -30px; left: 8px;
+    font-size: 140px;
+    font-family: Georgia, serif;
+    color: rgba(255,214,10,0.12);
+    line-height: 1;
+  }
+  .quote-card .quote-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: var(--yellow);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .quote-card .quote-text {
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.55;
+    color: rgba(255,255,255,0.92);
+    font-style: italic;
+  }
+  .quote-card .quote-author {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    font-style: normal;
+    font-weight: 500;
+  }
+
+  /* Team selector */
+  .team-select-wrap {
+    margin-bottom: 20px;
+    text-align: left;
+  }
+  .team-select-wrap .lbl {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    font-weight: 700;
+    color: var(--muted);
+    margin-bottom: 8px;
+    display: block;
+  }
+  .team-select {
+    width: 100%;
+    padding: 13px 16px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: white;
+    border-radius: 11px;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: inherit;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath fill='rgba(255,255,255,0.6)' d='M3 5l4 4 4-4z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+  }
+  .team-select:focus { outline: none; border-color: var(--blue); }
+
+  /* Action buttons */
+  .action-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .action-btn {
+    padding: 16px 20px;
+    border-radius: 13px;
+    border: none;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: transform 0.15s ease, box-shadow 0.2s ease;
+    color: white;
+    position: relative;
+    overflow: hidden;
+  }
+  .action-btn:hover { transform: translateY(-1px); }
+  .action-btn:active { transform: translateY(0); }
+
+  .action-btn.primary {
+    background: linear-gradient(135deg, var(--green) 0%, #1db954 100%);
+    box-shadow: 0 10px 26px rgba(48,209,88,0.35), inset 0 1px 0 rgba(255,255,255,0.2);
+  }
+  .action-btn.primary:hover { box-shadow: 0 14px 32px rgba(48,209,88,0.5), inset 0 1px 0 rgba(255,255,255,0.3); }
+
+  .action-btn.secondary {
+    background: rgba(255,159,10,0.15);
+    color: var(--orange);
+    border: 1px solid rgba(255,159,10,0.35);
+  }
+  .action-btn.secondary:hover { background: rgba(255,159,10,0.22); }
+
+  .action-btn.tertiary {
+    background: rgba(191,90,242,0.14);
+    color: var(--purple);
+    border: 1px solid rgba(191,90,242,0.32);
+  }
+  .action-btn.tertiary:hover { background: rgba(191,90,242,0.22); }
+
+  .action-btn .sub {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.75;
+    display: block;
+    margin-top: 2px;
+  }
+
+  .leave-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 10px;
+  }
+
+  /* ═══════════════════════════════════════════
+     Tracker window
+  ═══════════════════════════════════════════ */
+  .tracker {
+    padding: 0;
+  }
+
+  .tracker-head {
+    padding: 22px 26px;
+    background: linear-gradient(180deg, rgba(10,132,255,0.08), transparent);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .tracker-head .lhs .who {
+    display: flex; align-items: center; gap: 12px;
+  }
+  .tracker-head .avatar {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--indigo), var(--purple));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    font-weight: 700;
+    box-shadow: 0 4px 12px rgba(94,92,230,0.4);
+  }
+  .tracker-head .name { font-size: 15px; font-weight: 700; }
+  .tracker-head .team-lbl { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .tracker-head .status-chip {
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .status-chip .blink {
+    width: 7px; height: 7px; border-radius: 50%;
+    animation: blink 1.6s ease-in-out infinite;
+  }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .status-chip.production { background: rgba(48,209,88,0.18); color: var(--green); border: 1px solid rgba(48,209,88,0.38); }
+  .status-chip.production .blink { background: var(--green); box-shadow: 0 0 10px var(--green); }
+  .status-chip.break { background: rgba(255,214,10,0.16); color: var(--yellow); border: 1px solid rgba(255,214,10,0.35); }
+  .status-chip.break .blink { background: var(--yellow); }
+  .status-chip.meeting { background: rgba(10,132,255,0.16); color: var(--blue); border: 1px solid rgba(10,132,255,0.38); }
+  .status-chip.meeting .blink { background: var(--blue); }
+  .status-chip.training { background: rgba(191,90,242,0.16); color: var(--purple); border: 1px solid rgba(191,90,242,0.38); }
+  .status-chip.training .blink { background: var(--purple); }
+  .status-chip.lunch { background: rgba(255,159,10,0.16); color: var(--orange); border: 1px solid rgba(255,159,10,0.38); }
+  .status-chip.lunch .blink { background: var(--orange); }
+  .status-chip.dinner { background: rgba(255,55,95,0.16); color: var(--pink); border: 1px solid rgba(255,55,95,0.38); }
+  .status-chip.dinner .blink { background: var(--pink); }
+
+  /* Timer hero */
+  .timer-hero {
+    padding: 26px 26px 10px;
+    text-align: center;
+  }
+  .timer-hero .timer-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.6px;
+    color: var(--muted);
+    margin-bottom: 10px;
+    font-weight: 700;
+  }
+  .timer-hero .timer-display {
+    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    font-size: 56px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    background: linear-gradient(180deg, #ffffff 0%, rgba(255,255,255,0.72) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+  .timer-hero .timer-task {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .timer-hero .timer-task b { color: rgba(255,255,255,0.94); font-weight: 600; }
+
+  /* Idle banner */
+  .idle-banner {
+    display: none;
+    margin: 10px 22px 0;
+    padding: 11px 14px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(64,200,224,0.15), rgba(10,132,255,0.08));
+    border: 1px solid rgba(64,200,224,0.4);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+  }
+  .idle-banner .idot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--teal);
+    box-shadow: 0 0 8px var(--teal);
+    animation: blink 1.2s ease-in-out infinite;
+  }
+  .idle-banner .imain { flex: 1; }
+  .idle-banner .imain b { color: var(--teal); }
+
+  /* Task picker */
+  .task-row {
+    padding: 16px 22px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .task-row .lbl {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+    font-weight: 700;
+    width: 52px;
+  }
+  .task-pick {
+    flex: 1;
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: white;
+    border-radius: 9px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='rgba(255,255,255,0.6)' d='M3 4.5l3 3 3-3z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+  }
+  .task-complete-btn {
+    padding: 10px 16px;
+    background: linear-gradient(135deg, var(--green), #1db954);
+    border: none;
+    border-radius: 9px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    color: white;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    box-shadow: 0 3px 10px rgba(48,209,88,0.32);
+  }
+  .task-complete-btn:hover { transform: translateY(-1px); }
+
+  /* Dynamic per-team task form */
+  .form-wrap {
+    padding: 18px 22px 20px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+  .form-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 12px;
+  }
+  .form-head .lbl {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    font-weight: 700;
+  }
+  .form-head .form-sub {
+    font-size: 11px;
+    color: var(--dim);
+    font-style: italic;
+  }
+  .form-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 12px;
+  }
+  .form-field { display: flex; flex-direction: column; gap: 5px; }
+  .form-field.full { grid-column: 1 / -1; }
+  .form-field label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: rgba(255,255,255,0.58);
+  }
+  .form-field label .req { color: var(--red); margin-left: 2px; }
+  .form-field input,
+  .form-field select,
+  .form-field textarea {
+    width: 100%;
+    padding: 9px 12px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: white;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .form-field input::placeholder,
+  .form-field textarea::placeholder { color: rgba(255,255,255,0.3); }
+  .form-field select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='rgba(255,255,255,0.55)' d='M3 4.5l3 3 3-3z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+  }
+  .form-field textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+  .form-field input:focus,
+  .form-field select:focus,
+  .form-field textarea:focus {
+    outline: none;
+    border-color: var(--blue);
+    background: rgba(10,132,255,0.08);
+  }
+  .form-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 14px;
+  }
+  .form-btn {
+    padding: 10px 18px;
+    border-radius: 9px;
+    border: none;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.2s;
+  }
+  .form-btn.primary {
+    background: linear-gradient(135deg, var(--green), #1db954);
+    color: white;
+    box-shadow: 0 6px 16px rgba(48,209,88,0.32);
+  }
+  .form-btn.primary:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(48,209,88,0.42); }
+  .form-btn.secondary {
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.8);
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .form-btn.secondary:hover { background: rgba(255,255,255,0.1); }
+
+  /* Recent tasks list */
+  .recent-tasks {
+    padding: 14px 22px 18px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+  .recent-tasks .lbl {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    font-weight: 700;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .recent-tasks .count {
+    color: var(--green);
+    background: rgba(48,209,88,0.12);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+  }
+  .recent-list {
+    max-height: 160px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .recent-list::-webkit-scrollbar { width: 4px; }
+  .recent-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+  .recent-item {
+    padding: 8px 12px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    animation: slideIn 0.35s ease;
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .recent-item.new {
+    border-color: rgba(48,209,88,0.35);
+    background: rgba(48,209,88,0.08);
+  }
+  .recent-item .r-type { font-weight: 600; color: rgba(255,255,255,0.92); }
+  .recent-item .r-addr { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .recent-item .r-dur {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--green);
+    background: rgba(48,209,88,0.1);
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+  }
+  .recent-empty {
+    text-align: center;
+    color: var(--dim);
+    font-size: 11px;
+    font-style: italic;
+    padding: 12px;
+  }
+
+  /* Activity switcher */
+  .activity-bar {
+    padding: 16px 22px 22px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+  .activity-bar .lbl {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+  .activity-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 8px;
+  }
+  .act-btn {
+    padding: 11px 6px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.035);
+    color: rgba(255,255,255,0.82);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex; flex-direction: column; align-items: center;
+    gap: 4px;
+    transition: all 0.2s ease;
+  }
+  .act-btn .emo { font-size: 18px; }
+  .act-btn:hover {
+    background: rgba(255,255,255,0.08);
+    transform: translateY(-2px);
+    border-color: rgba(255,255,255,0.18);
+  }
+  .act-btn.active {
+    background: rgba(10,132,255,0.18);
+    border-color: var(--blue);
+    color: var(--blue);
+    box-shadow: 0 4px 12px rgba(10,132,255,0.25);
+  }
+
+  /* Working-as team switcher */
+  .team-switch {
+    margin: 0 22px 10px;
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .team-switch .ts-left {
+    display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
+    flex-wrap: wrap;
+  }
+  .team-switch .ts-label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .team-switch .ts-chips {
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  .ts-chip {
+    background: rgba(255,255,255,0.04);
+    color: #d0d0d6;
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .ts-chip:hover {
+    background: rgba(255,255,255,0.08);
+    border-color: rgba(255,255,255,0.16);
+  }
+  .ts-chip.active {
+    background: rgba(10,132,255,0.18);
+    border-color: var(--blue);
+    color: var(--blue);
+    box-shadow: 0 2px 8px rgba(10,132,255,0.25);
+  }
+  .ts-chip.home-badge {
+    background: rgba(48,209,88,0.12);
+    border-color: rgba(48,209,88,0.35);
+    color: var(--green);
+  }
+  .ts-chip.active.home-badge {
+    background: rgba(10,132,255,0.18);
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+  .ts-chip .home-tag {
+    font-size: 9.5px;
+    background: rgba(48,209,88,0.18);
+    color: var(--green);
+    padding: 1px 6px;
+    border-radius: 999px;
+    letter-spacing: 0.4px;
+  }
+  .ts-chip.active .home-tag {
+    background: rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.85);
+  }
+  .ts-right {
+    font-size: 11.5px;
+    color: var(--muted);
+    font-style: italic;
+  }
+  .ts-right.helping {
+    color: var(--yellow);
+    font-style: normal;
+    font-weight: 500;
+  }
+
+  /* Stats row */
+  .stats-foot {
+    padding: 14px 22px 22px;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    background: rgba(0,0,0,0.18);
+  }
+  .stat {
+    text-align: center;
+    padding: 10px 6px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.03);
+  }
+  .stat .v {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .stat .v.green { color: var(--green); }
+  .stat .v.yellow { color: var(--yellow); }
+  .stat .v.blue { color: var(--blue); }
+  .stat .v.purple { color: var(--purple); }
+  .stat .v.teal { color: var(--teal); }
+  .stat .l { font-size: 10px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* ═══════════════════════════════════════════
+     Modal overlays (auto-break warning, welcome back, etc)
+  ═══════════════════════════════════════════ */
+  .overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(16px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 500;
+    animation: overlayIn 0.35s ease;
+  }
+  .overlay.show { display: flex; }
+  @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+
+  /* Fullscreen Mac-lock overlay (simulates macOS lock screen) */
+  .lock-overlay {
+    position: fixed; inset: 0;
+    background: radial-gradient(1200px 600px at 50% 40%, rgba(30,30,40,0.85), rgba(0,0,0,0.96) 75%);
+    backdrop-filter: blur(22px) saturate(160%);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 900;
+    animation: overlayIn 0.3s ease;
+  }
+  .lock-overlay.show { display: flex; }
+  .lock-inner {
+    text-align: center;
+    color: #f5f5f7;
+    padding: 40px 56px;
+    max-width: 520px;
+  }
+  .lock-icon {
+    font-size: 72px;
+    margin-bottom: 14px;
+    filter: drop-shadow(0 8px 24px rgba(0,0,0,0.55));
+    animation: lockPulse 2.4s ease-in-out infinite;
+  }
+  @keyframes lockPulse {
+    0%,100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.85; }
+  }
+  .lock-title {
+    font-size: 26px; font-weight: 600; letter-spacing: -0.01em;
+    margin-bottom: 6px;
+  }
+  .lock-sub {
+    font-size: 14px; color: rgba(255,255,255,0.7);
+    margin-bottom: 22px;
+  }
+  .lock-countdown {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 18px;
+    color: var(--yellow);
+    padding: 10px 18px;
+    display: inline-block;
+    border: 1px solid rgba(255,214,10,0.3);
+    border-radius: 999px;
+    background: rgba(255,214,10,0.08);
+    margin-bottom: 14px;
+  }
+  .lock-countdown.fired {
+    color: var(--orange);
+    border-color: rgba(255,159,10,0.45);
+    background: rgba(255,159,10,0.12);
+  }
+  .lock-status {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 18px;
+    min-height: 18px;
+  }
+  .lock-status.fired {
+    color: var(--orange);
+    font-weight: 500;
+  }
+  .lock-unlock-btn {
+    background: linear-gradient(135deg, #0a84ff, #5e5ce6);
+    color: #fff;
+    border: none;
+    padding: 12px 28px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+    cursor: pointer;
+    margin-bottom: 22px;
+    box-shadow: 0 10px 28px rgba(10,132,255,0.35), inset 0 1px 0 rgba(255,255,255,0.18);
+    transition: transform 0.15s ease, box-shadow 0.2s ease;
+  }
+  .lock-unlock-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 14px 34px rgba(10,132,255,0.45), inset 0 1px 0 rgba(255,255,255,0.22);
+  }
+  .lock-unlock-btn:active { transform: translateY(0); }
+  .lock-note {
+    font-size: 11px; color: rgba(255,255,255,0.45);
+    line-height: 1.5;
+    font-style: italic;
+  }
+  .lock-note code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--teal);
+    background: rgba(64,200,224,0.08);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  /* Welcome-back kind chip */
+  .welcome-kind {
+    display: inline-block;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--teal);
+    background: rgba(64,200,224,0.1);
+    border: 1px solid rgba(64,200,224,0.28);
+    padding: 4px 10px;
+    border-radius: 999px;
+    margin-bottom: 10px;
+  }
+
+  .modal {
+    width: 440px; max-width: 92vw;
+    background: rgba(22,22,28,0.92);
+    backdrop-filter: blur(40px) saturate(180%);
+    border-radius: 22px;
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 32px;
+    text-align: center;
+    box-shadow: 0 40px 100px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06);
+    animation: modalIn 0.4s cubic-bezier(0.2,0.9,0.25,1);
+  }
+  @keyframes modalIn {
+    0% { opacity: 0; transform: scale(0.9) translateY(20px); }
+    100% { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .modal .icon-circle {
+    width: 76px; height: 76px;
+    margin: 0 auto 18px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px;
+    animation: iconPulse 2s ease-in-out infinite;
+  }
+  @keyframes iconPulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255,214,10,0.4); }
+    50% { transform: scale(1.04); box-shadow: 0 0 0 18px rgba(255,214,10,0); }
+  }
+  .icon-circle.warn { background: rgba(255,214,10,0.15); border: 1px solid rgba(255,214,10,0.5); }
+  .icon-circle.ok { background: rgba(48,209,88,0.15); border: 1px solid rgba(48,209,88,0.5); }
+  .icon-circle.leave { background: rgba(255,159,10,0.15); border: 1px solid rgba(255,159,10,0.5); }
+  .icon-circle.weekoff { background: rgba(191,90,242,0.15); border: 1px solid rgba(191,90,242,0.5); }
+
+  .modal h3 {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+  .modal p {
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin-bottom: 20px;
+  }
+  .modal p b { color: rgba(255,255,255,0.95); }
+
+  .modal .countdown {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--yellow);
+    margin: 12px 0 18px;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .modal-actions button {
+    padding: 12px 22px;
+    border-radius: 11px;
+    border: none;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.15s ease;
+  }
+  .modal-actions button:hover { transform: translateY(-1px); }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--blue), var(--indigo));
+    color: white;
+    box-shadow: 0 8px 22px rgba(10,132,255,0.35);
+  }
+  .btn-ghost {
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.82);
+    border: 1px solid rgba(255,255,255,0.1) !important;
+  }
+  .btn-danger {
+    background: linear-gradient(135deg, var(--red), #c9302c);
+    color: white;
+    box-shadow: 0 8px 22px rgba(255,69,58,0.3);
+  }
+
+  /* Welcome back modal special */
+  .welcome-back .icon-circle {
+    background: rgba(48,209,88,0.15);
+    border: 1px solid rgba(48,209,88,0.4);
+    animation: welcomeSpin 0.8s ease-out;
+  }
+  @keyframes welcomeSpin {
+    0% { transform: rotate(-180deg) scale(0.5); opacity: 0; }
+    100% { transform: rotate(0deg) scale(1); opacity: 1; }
+  }
+
+  /* Feature strip — below the app */
+  .feature-strip {
+    width: 100%;
+    max-width: 1100px;
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 14px;
+  }
+  .feat-card {
+    background: rgba(255,255,255,0.035);
+    backdrop-filter: blur(18px);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 16px;
+    padding: 18px;
+    transition: transform 0.25s ease, border-color 0.25s ease;
+  }
+  .feat-card:hover { transform: translateY(-3px); border-color: rgba(255,255,255,0.14); }
+  .feat-card .fico {
+    width: 38px; height: 38px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    margin-bottom: 10px;
+  }
+  .feat-card h4 {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+  }
+  .feat-card p {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  /* Demo controls — clearly labeled as not visible to users */
+  .demo-panel {
+    position: fixed;
+    bottom: 14px;
+    right: 14px;
+    width: 300px;
+    background: rgba(20,14,6,0.95);
+    backdrop-filter: blur(30px);
+    border: 1px solid rgba(255,159,10,0.3);
+    border-radius: 16px;
+    padding: 14px 16px;
+    z-index: 200;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+  }
+  .demo-panel .dp-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .demo-panel .dp-tag {
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--orange);
+    background: rgba(255,159,10,0.15);
+    padding: 3px 8px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,159,10,0.4);
+  }
+  .demo-panel .dp-close {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: white;
+    padding: 3px 9px;
+    border-radius: 8px;
+    font-size: 10px;
+    cursor: pointer;
+  }
+  .demo-panel h5 {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .demo-panel .dp-sub {
+    font-size: 10px;
+    color: rgba(255,255,255,0.52);
+    margin-bottom: 10px;
+    line-height: 1.5;
+  }
+  .demo-panel .dp-row {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: 1fr;
+    margin-bottom: 8px;
+  }
+  .demo-panel .dp-btn {
+    padding: 8px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 8px;
+    cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.04);
+    color: white;
+    font-family: inherit;
+    text-align: left;
+    transition: background 0.15s;
+  }
+  .demo-panel .dp-btn:hover { background: rgba(255,255,255,0.1); }
+  .demo-panel .dp-btn.go {
+    background: linear-gradient(135deg, var(--green), #1db954);
+    border-color: transparent;
+  }
+  .demo-panel .dp-btn.warn {
+    background: linear-gradient(135deg, rgba(255,159,10,0.25), rgba(255,69,58,0.2));
+    border-color: rgba(255,159,10,0.35);
+  }
+  .demo-panel .dp-btn.reset {
+    background: rgba(255,69,58,0.15);
+    border-color: rgba(255,69,58,0.3);
+    color: var(--red);
+  }
+  .show-demo-btn {
+    position: fixed;
+    bottom: 14px; right: 14px;
+    padding: 10px 14px;
+    background: rgba(20,14,6,0.9);
+    border: 1px solid rgba(255,159,10,0.4);
+    color: var(--orange);
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 20px;
+    cursor: pointer;
+    z-index: 200;
+    display: none;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%) translateY(30px);
+    background: rgba(20,20,26,0.95);
+    backdrop-filter: blur(30px);
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 12px 20px;
+    border-radius: 14px;
+    font-size: 13px;
+    font-weight: 600;
+    z-index: 600;
+    opacity: 0;
+    transition: all 0.3s cubic-bezier(0.2,0.9,0.25,1);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* Section divider */
+  .divider-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-weight: 700;
+    color: var(--muted);
+    padding: 24px 0 0;
+    text-align: center;
+    position: relative;
+    width: 100%;
+    max-width: 680px;
+  }
+  .divider-label::before,
+  .divider-label::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 34%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12));
+  }
+  .divider-label::before { left: 0; }
+  .divider-label::after { right: 0; background: linear-gradient(90deg, rgba(255,255,255,0.12), transparent); }
+</style>
 </head>
 <body>
 
-  <!-- Login Screen -->
-  <div class="login-screen" id="loginScreen">
-    <h1>⏱ Team Time Tracker</h1>
-    <p>Shift: 8:00 PM – 5:00 AM IST</p>
-    <input type="text" id="nameInput" placeholder="Enter your name" autocomplete="off">
-    <button class="btn-start" id="btnStart" disabled>Start Shift</button>
-    <span class="settings-link" id="settingsLink">⚙ Google Sheets Settings</span>
+<!-- ═══ macOS menu bar ═══ -->
+<div class="menubar">
+  <span class="apple"></span>
+  <span class="app-name">TeamTimeTracker</span>
+  <span class="menu-item">File</span>
+  <span class="menu-item">Edit</span>
+  <span class="menu-item">View</span>
+  <span class="menu-item">Help</span>
+  <span class="spacer"></span>
+  <span class="right-item">🔋 92%</span>
+  <span class="right-item">📶</span>
+  <span class="right-item"><span class="tracker-icon">T</span> Tracker</span>
+  <span class="right-item" id="menuClock">Tue 22 Apr · 9:42 AM</span>
+</div>
+
+<div class="desktop">
+  <div class="stage">
+
+    <!-- ═══ Hero ═══ -->
+    <div class="hero">
+      <span class="badge">⚡ v2.7.0 · Premium Build</span>
+      <h1>Your day, tracked beautifully.</h1>
+      <p>
+        Idle-aware time tracking for the Chennai team. Motivational quotes, smart auto-break,
+        and one-tap leave marking — designed like a real Mac app.
+      </p>
+    </div>
+
+    <!-- ═══ macOS window — Start Your Day ═══ -->
+    <div class="window" id="appWindow">
+      <div class="titlebar">
+        <div class="traffic">
+          <div class="dot red"></div>
+          <div class="dot yellow"></div>
+          <div class="dot green"></div>
+        </div>
+        <div class="tb-title" id="windowTitle">Team Time Tracker</div>
+      </div>
+
+      <!-- Start Your Day screen -->
+      <div class="screen show" id="startScreen">
+        <div class="start-day">
+          <div class="logo-orb">☀️</div>
+          <h2 id="greetHead">Good morning, Aswini</h2>
+          <div class="greeting-sub">
+            <b id="greetDate">Tuesday, April 22, 2026</b> · <span id="greetTime">9:42 AM IST</span>
+          </div>
+
+          <div class="quote-card">
+            <div class="quote-label">✨ Quote of the day</div>
+            <div class="quote-text" id="quoteText">Loading…</div>
+            <div class="quote-author" id="quoteAuthor">— Anonymous</div>
+          </div>
+
+          <div class="team-select-wrap">
+            <label class="lbl">Which team today?</label>
+            <select class="team-select" id="teamSelect">
+              <option value="Listings">Listings</option>
+              <option value="SD">SD</option>
+              <option value="BRN">BRN</option>
+              <option value="HQI">HQI</option>
+              <option value="HOA">HOA</option>
+              <option value="HOC_WO">HOC WO</option>
+              <option value="LWO">LWO</option>
+              <option value="TP_Sourcing">TP Sourcing</option>
+              <option value="Utilities_TurnOn">Utilities — Turn On</option>
+              <option value="Utilities_NST">Utilities — NST</option>
+              <option value="Utilities_Blocked">Utilities — Blocked Cases</option>
+              <option value="TC">TC</option>
+              <option value="TS">TS</option>
+              <option value="VA">VA</option>
+              <option value="HOC_Permits">HOC Permits</option>
+              <option value="Maintenance">Maintenance & Scheduling</option>
+              <option value="Trust_Safety">Trust / Safety</option>
+            </select>
+          </div>
+
+          <div class="action-grid">
+            <button class="action-btn primary" onclick="startWorking()">
+              <span>▶</span> Start Working
+            </button>
+            <div class="leave-row">
+              <button class="action-btn secondary" onclick="markLeave()">
+                🌴 On Leave
+                <span class="sub"></span>
+              </button>
+              <button class="action-btn tertiary" onclick="markWeekOff()">
+                🏖️ Week Off
+                <span class="sub"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tracker screen -->
+      <div class="screen" id="trackerScreen">
+        <div class="tracker">
+          <div class="tracker-head">
+            <div class="lhs">
+              <div class="who">
+                <div class="avatar">AR</div>
+                <div>
+                  <div class="name" id="headName">Aswini Ramesh</div>
+                  <div class="team-lbl" id="headTeam">Listings · Tuesday, April 22</div>
+                </div>
+              </div>
+            </div>
+            <div class="status-chip production" id="statusChip">
+              <span class="blink"></span>
+              <span id="statusLabel">Production</span>
+            </div>
+          </div>
+
+          <div class="timer-hero">
+            <div class="timer-label" id="timerLabel">Current Task</div>
+            <div class="timer-display" id="timerDisplay">00:00:00</div>
+            <div class="timer-task">
+              <span id="currentTaskLine"><b>Photo Review</b> · property #34821</span>
+            </div>
+          </div>
+
+          <!-- ═══ Working-as (cross-team) switcher ═══ -->
+          <div class="team-switch">
+            <div class="ts-left">
+              <span class="ts-label">💼 Working as</span>
+              <div class="ts-chips" id="teamSwitchChips">
+                <!-- injected by renderTeamSwitch() -->
+              </div>
+            </div>
+            <div class="ts-right" id="teamSwitchHint">This is your home team</div>
+          </div>
+
+          <div class="idle-banner" id="idleBanner">
+            <div class="idot"></div>
+            <div class="imain">
+              <b>Idle detection active</b> — <span id="idleSubtext">watching mouse & keyboard</span>
+            </div>
+            <div id="idleTimer" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--teal); font-weight: 700;">0s</div>
+          </div>
+
+          <div class="form-wrap">
+            <div class="form-head">
+              <span class="lbl">Log this task</span>
+              <span class="form-sub" id="formSub">Timer starts when you fill the first field</span>
+            </div>
+            <div class="form-body" id="formBody">
+              <!-- populated by renderForm() -->
+            </div>
+            <div class="form-actions">
+              <button class="form-btn secondary" onclick="clearForm()">Clear</button>
+              <button class="form-btn primary" onclick="logTask()">✓ Log Task</button>
+            </div>
+          </div>
+
+          <div class="activity-bar">
+            <div class="lbl">Activity status</div>
+            <div class="activity-grid">
+              <button class="act-btn active" data-act="production" onclick="switchActivity('production')">
+                <span class="emo">🎯</span> Production
+              </button>
+              <button class="act-btn" data-act="break" onclick="switchActivity('break')">
+                <span class="emo">☕</span> Break
+              </button>
+              <button class="act-btn" data-act="meeting" onclick="switchActivity('meeting')">
+                <span class="emo">👥</span> Meeting
+              </button>
+              <button class="act-btn" data-act="training" onclick="switchActivity('training')">
+                <span class="emo">📚</span> Training
+              </button>
+              <button class="act-btn" data-act="lunch" onclick="switchActivity('lunch')">
+                <span class="emo">🍱</span> Lunch
+              </button>
+              <button class="act-btn" data-act="dinner" onclick="switchActivity('dinner')">
+                <span class="emo">🍽️</span> Dinner
+              </button>
+            </div>
+          </div>
+
+          <div class="recent-tasks">
+            <div class="lbl">
+              <span>Recent logged tasks</span>
+              <span class="count" id="recentCount">0</span>
+            </div>
+            <div class="recent-list" id="recentList">
+              <div class="recent-empty">Nothing logged yet — fill the form above and click Log Task.</div>
+            </div>
+          </div>
+
+          <div class="stats-foot">
+            <div class="stat">
+              <div class="v green" id="sProd">0h 00m</div>
+              <div class="l">Production</div>
+            </div>
+            <div class="stat">
+              <div class="v yellow" id="sBreak">0h 00m</div>
+              <div class="l">Break</div>
+            </div>
+            <div class="stat">
+              <div class="v blue" id="sMeet">0h 00m</div>
+              <div class="l">Meeting</div>
+            </div>
+            <div class="stat">
+              <div class="v teal" id="sIdle">0h 00m</div>
+              <div class="l">Idle (after 5m)</div>
+            </div>
+            <div class="stat">
+              <div class="v purple" id="sCount">0</div>
+              <div class="l">Tasks done</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Leave confirmed -->
+      <div class="screen" id="leaveScreen">
+        <div class="start-day">
+          <div class="logo-orb" style="background: linear-gradient(135deg, var(--orange), var(--red));">🌴</div>
+          <h2>Enjoy your day off!</h2>
+          <div class="greeting-sub">Marked <b>On Leave</b> for Tuesday, April 22, 2026.</div>
+          <div class="quote-card" style="border-color: rgba(255,159,10,0.18); background: linear-gradient(135deg, rgba(255,159,10,0.08), rgba(255,69,58,0.05));">
+            <div class="quote-label" style="color: var(--orange);">✅ What happens next</div>
+            <div class="quote-text" style="font-style: normal; font-size: 13px;">
+              Your TL has been notified on Slack. Your name is logged as <b>Leave</b> in the attendance sheet.
+              The tracker won't show "Start Your Day" popup again until tomorrow morning.
+            </div>
+          </div>
+          <button class="action-btn primary" onclick="resetToStart()" style="background: linear-gradient(135deg, var(--orange), var(--red)); box-shadow: 0 10px 26px rgba(255,159,10,0.35);">
+            Got it — See you tomorrow
+          </button>
+        </div>
+      </div>
+
+      <!-- Week off confirmed -->
+      <div class="screen" id="weekoffScreen">
+        <div class="start-day">
+          <div class="logo-orb" style="background: linear-gradient(135deg, var(--purple), var(--indigo));">🏖️</div>
+          <h2>Have a great week off!</h2>
+          <div class="greeting-sub">Marked <b>Week Off</b> for Tuesday, April 22, 2026.</div>
+          <div class="quote-card" style="border-color: rgba(191,90,242,0.18); background: linear-gradient(135deg, rgba(191,90,242,0.08), rgba(94,92,230,0.05));">
+            <div class="quote-label" style="color: var(--purple);">✅ What happens next</div>
+            <div class="quote-text" style="font-style: normal; font-size: 13px;">
+              Logged as <b>Week Off</b> in the attendance sheet. Leaderboard will exclude today from averages.
+              Your TL gets a Slack ping automatically.
+            </div>
+          </div>
+          <button class="action-btn primary" onclick="resetToStart()" style="background: linear-gradient(135deg, var(--purple), var(--indigo)); box-shadow: 0 10px 26px rgba(191,90,242,0.35);">
+            Got it — Relax!
+          </button>
+        </div>
+      </div>
+    </div>
+
   </div>
+</div>
 
-  <!-- Settings Modal -->
-  <div class="modal-overlay" id="settingsModal">
-    <div class="modal">
-      <h2>Google Sheets Settings</h2>
-      <label>Google Apps Script Web App URL</label>
-      <input type="text" id="sheetUrlInput" placeholder="https://script.google.com/macros/s/...">
-      <div class="modal-buttons">
-        <button class="btn-cancel" id="btnSettingsCancel">Cancel</button>
-        <button class="btn-save" id="btnSettingsSave">Save</button>
-      </div>
+<!-- ═══ Mac-locked fullscreen overlay (Auto-break trigger) ═══ -->
+<div class="lock-overlay" id="lockOverlay">
+  <div class="lock-inner">
+    <div class="lock-icon">🔒</div>
+    <div class="lock-title">Mac is locked</div>
+    <div class="lock-sub">Tracker is paused. Auto-break triggers after <b id="lockThresh">15s</b>.</div>
+    <div class="lock-countdown"><span id="lockCountdown">0s</span> locked</div>
+    <div class="lock-status" id="lockStatus">Waiting for threshold…</div>
+    <button class="lock-unlock-btn" onclick="unlockMac()">🔓 Unlock Mac</button>
+    <div class="lock-note">(In production, this is driven by <code>NSWorkspace.didLockNotification</code> — no browser equivalent exists, so this button simulates the unlock event.)</div>
+  </div>
+</div>
+
+<!-- ═══ Welcome back modal (manual break ≥ 5 min OR after auto-break unlock) ═══ -->
+<div class="overlay welcome-back" id="welcomeModal">
+  <div class="modal">
+    <div class="icon-circle ok">👋</div>
+    <div id="welcomeKind" class="welcome-kind">☕ Break ended</div>
+    <h3 id="welcomeTitle">Welcome back, Aswini!</h3>
+    <p id="welcomeSub">Your break lasted <b id="breakDuration">—</b>. Ready to pick up where you left off?</p>
+    <div class="modal-actions">
+      <button class="btn-primary" onclick="closeWelcome()">▶ Resume Production</button>
     </div>
   </div>
+</div>
 
-  <!-- MANDATORY PRODUCTION OVERLAY -->
-  <div class="mandatory-overlay" id="mandatoryOverlay">
-    <div class="mandatory-content">
-      <div class="mandatory-icon">🚀</div>
-      <h2>Start Your Shift</h2>
-      <p>You must click <strong>Production</strong> to begin working.</p>
-      <p class="mandatory-sub">No other tools or activities are available until you start Production.</p>
-      <button class="btn-force-production" id="btnForceProduction">
-        ⚙ Start Production
-      </button>
+<!-- ═══ Leave confirm modal ═══ -->
+<div class="overlay" id="leaveConfirmModal">
+  <div class="modal">
+    <div class="icon-circle leave">🌴</div>
+    <h3>Mark today as On Leave?</h3>
+    <p>
+      This will log <b>Tuesday, April 22, 2026</b> as <b>On Leave</b> for you and notify your TL on Slack.
+      The app won't ask you to start again today.
+    </p>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModal('leaveConfirmModal')">Cancel</button>
+      <button class="btn-primary" onclick="confirmLeave()" style="background: linear-gradient(135deg, var(--orange), var(--red)); box-shadow: 0 8px 22px rgba(255,159,10,0.35);">Yes, I'm on leave</button>
     </div>
   </div>
+</div>
 
-  <!-- INACTIVITY ALERT BANNER -->
-  <div class="inactivity-banner" id="inactivityBanner">
-    <span class="inactivity-icon">⚠️</span>
-    <span>Auto-Break started — No activity detected for 15 minutes</span>
-    <button class="btn-resume" id="btnResume">Resume Production</button>
-  </div>
-
-  <!-- Dashboard -->
-  <div class="dashboard" id="dashboard">
-    <!-- Header -->
-    <div class="header">
-      <div class="header-left">
-        <h2 id="welcomeUser">Welcome, User</h2>
-        <span>Shift: 8:00 PM – 5:00 AM IST</span>
-      </div>
-      <div class="header-right">
-        <div class="shift-badge">
-          Shift Elapsed: <span id="shiftElapsed">00:00:00</span>
-        </div>
-        <div class="idle-badge" id="idleBadge">
-          Idle: <span id="idleTimer">00:00</span> / 15:00
-        </div>
-        <button class="btn-end-shift" id="btnEndShift">End Shift</button>
-      </div>
-    </div>
-
-    <!-- Current Activity -->
-    <div class="current-activity">
-      <div class="label">CURRENT ACTIVITY</div>
-      <div class="activity-name" id="currentActivityName">Not Started</div>
-      <div class="timer" id="currentTimer">00:00:00</div>
-    </div>
-
-    <!-- Activity Buttons -->
-    <div class="activity-buttons">
-      <button class="activity-btn btn-production" data-activity="Production" id="btnProduction">
-        <span class="icon">⚙</span>
-        <span>Production</span>
-        <span class="btn-timer" id="timerProduction">00:00:00</span>
-      </button>
-      <button class="activity-btn btn-break" data-activity="Break" id="btnBreak">
-        <span class="icon">☕</span>
-        <span>Break</span>
-        <span class="btn-timer" id="timerBreak">00:00:00</span>
-      </button>
-      <button class="activity-btn btn-lunch" data-activity="Lunch/Dinner" id="btnLunch">
-        <span class="icon">🍽</span>
-        <span>Lunch/Dinner</span>
-        <span class="btn-timer" id="timerLunch">00:00:00</span>
-      </button>
-      <button class="activity-btn btn-meeting" data-activity="Meeting" id="btnMeeting">
-        <span class="icon">👥</span>
-        <span>Meeting</span>
-        <span class="btn-timer" id="timerMeeting">00:00:00</span>
-      </button>
-      <button class="activity-btn btn-training" data-activity="Training" id="btnTraining">
-        <span class="icon">📚</span>
-        <span>Training</span>
-        <span class="btn-timer" id="timerTraining">00:00:00</span>
-      </button>
-    </div>
-
-    <!-- Break Tracker -->
-    <div class="break-tracker">
-      <div class="break-header">
-        <span>Break Time (1 hr allowed)</span>
-        <span class="break-time" id="breakTimeDisplay">00:00 / 60:00</span>
-      </div>
-      <div class="break-bar">
-        <div class="break-bar-fill" id="breakBarFill"></div>
-      </div>
-      <div class="break-exceeded-badge" id="breakExceeded">Break Exceeded!</div>
-    </div>
-
-    <!-- Daily Summary -->
-    <div class="daily-summary">
-      <h3>Today's Summary</h3>
-      <div class="summary-grid">
-        <div class="summary-card production">
-          <div class="card-label">Production</div>
-          <div class="card-value" id="summaryProduction">00:00</div>
-        </div>
-        <div class="summary-card break-card">
-          <div class="card-label">Break</div>
-          <div class="card-value" id="summaryBreak">00:00</div>
-        </div>
-        <div class="summary-card lunch">
-          <div class="card-label">Lunch/Dinner</div>
-          <div class="card-value" id="summaryLunch">00:00</div>
-        </div>
-        <div class="summary-card meeting">
-          <div class="card-label">Meeting</div>
-          <div class="card-value" id="summaryMeeting">00:00</div>
-        </div>
-        <div class="summary-card training">
-          <div class="card-label">Training</div>
-          <div class="card-value" id="summaryTraining">00:00</div>
-        </div>
-      </div>
-
-      <div class="activity-log">
-        <h4>Activity Log</h4>
-        <table class="log-table">
-          <thead>
-            <tr>
-              <th>Activity</th>
-              <th>Start</th>
-              <th>End</th>
-              <th>Duration</th>
-              <th>Type</th>
-            </tr>
-          </thead>
-          <tbody id="logBody"></tbody>
-        </table>
-      </div>
+<!-- ═══ Week off confirm modal ═══ -->
+<div class="overlay" id="weekoffConfirmModal">
+  <div class="modal">
+    <div class="icon-circle weekoff">🏖️</div>
+    <h3>Mark today as Week Off?</h3>
+    <p>
+      This will log <b>Tuesday, April 22, 2026</b> as <b>Week Off</b> for you. Your TL is notified
+      and the leaderboard excludes today from averages.
+    </p>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModal('weekoffConfirmModal')">Cancel</button>
+      <button class="btn-primary" onclick="confirmWeekOff()" style="background: linear-gradient(135deg, var(--purple), var(--indigo)); box-shadow: 0 8px 22px rgba(191,90,242,0.35);">Yes, week off</button>
     </div>
   </div>
+</div>
 
-  <script src="app.js"></script>
+<!-- ═══ Toast ═══ -->
+<div class="toast" id="toast">
+  <span id="toastIcon">✓</span>
+  <span id="toastMsg"></span>
+</div>
+
+<!-- ═══ Demo controls ═══ -->
+<div class="demo-panel" id="demoPanel">
+  <div class="dp-head">
+    <span class="dp-tag">DEMO · Not visible to users</span>
+    <button class="dp-close" onclick="hideDemoPanel()">Hide</button>
+  </div>
+  <h5>Demo timeline</h5>
+  <div class="dp-sub">
+    Compressed timings (for demo only):<br/>
+    • Idle metric starts after <b>10s</b> of no activity <i>(prod: 5 min)</i><br/>
+    • Auto-break after Mac locked for <b>15s</b> <i>(prod: 15 min)</i><br/>
+    • Welcome-back only after <b>manual</b> break ≥ <b>5s</b> <i>(prod: 5 min)</i>
+  </div>
+  <div class="dp-row">
+    <button class="dp-btn go" onclick="resetToStart()">⏮ Reset — Start Your Day</button>
+    <button class="dp-btn" onclick="startWorking(true)">▶ Skip to Tracker</button>
+    <button class="dp-btn warn" id="lockMacBtn" onclick="lockMac()">🔒 Lock Mac</button>
+    <button class="dp-btn warn" id="unlockMacBtn" onclick="unlockMac()" style="display:none;">🔓 Unlock Mac</button>
+    <button class="dp-btn" onclick="fastForwardIdle()">⏩ Fast-forward idle past threshold</button>
+    <button class="dp-btn" onclick="manualBreakThenBack()">👋 Demo manual break → welcome-back</button>
+    <button class="dp-btn reset" onclick="simulate845()">🌙 Simulate 8:45 PM trigger</button>
+  </div>
+</div>
+
+<button class="show-demo-btn" id="showDemoBtn" onclick="showDemoPanel()">⚙ Show demo controls</button>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// Motivational quotes — rotated by date so users see a new one each day
+// ═══════════════════════════════════════════════════════════════════
+const QUOTES = [
+  { t: "The secret of getting ahead is getting started.", a: "Mark Twain" },
+  { t: "Small steps, taken daily, lead to big changes.", a: "Anonymous" },
+  { t: "Discipline is choosing between what you want now and what you want most.", a: "Abraham Lincoln" },
+  { t: "Don't watch the clock; do what it does. Keep going.", a: "Sam Levenson" },
+  { t: "Quality is not an act, it is a habit.", a: "Aristotle" },
+  { t: "Your only limit is your mind.", a: "Anonymous" },
+  { t: "Success is the sum of small efforts repeated day in and day out.", a: "Robert Collier" },
+  { t: "Focus on being productive instead of busy.", a: "Tim Ferriss" },
+  { t: "Great things are done by a series of small things brought together.", a: "Vincent Van Gogh" },
+  { t: "You don't have to be great to start, but you have to start to be great.", a: "Zig Ziglar" },
+  { t: "The future depends on what you do today.", a: "Mahatma Gandhi" },
+  { t: "Amateurs sit and wait for inspiration. The rest of us just get up and go to work.", a: "Stephen King" },
+  { t: "Do the hard jobs first. The easy jobs will take care of themselves.", a: "Dale Carnegie" },
+  { t: "Either you run the day, or the day runs you.", a: "Jim Rohn" },
+  { t: "The expert in anything was once a beginner.", a: "Helen Hayes" },
+];
+
+// ═══════════════════════════════════════════════════════════════════
+// Rules (compressed values for the demo, real values in comments)
+// ═══════════════════════════════════════════════════════════════════
+const RULES = {
+  // Idle metric: after 5 min of no activity, START counting idle time.
+  // This is a SEPARATE tracked metric, independent of activity state.
+  IDLE_THRESHOLD_SEC:  300,   // 5 min — production value
+
+  // Auto-break: only when Mac is LOCKED / CLOSED for 15 min.
+  // Does NOT trigger from mouse inactivity alone.
+  MAC_LOCK_BREAK_SEC:  900,   // 15 min — production value
+
+  // Welcome-back modal: only show for MANUAL breaks longer than this
+  MANUAL_BREAK_WELCOME_SEC: 300, // 5 min — production value
+};
+
+// ═══════════════════════════════════════════════════════════════════
+// Native bridge (Swift WKWebView)
+// In the Mac app, window.webkit.messageHandlers.native is injected.
+// In the browser demo, this is a no-op shim.
+// ═══════════════════════════════════════════════════════════════════
+const IS_NATIVE = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native);
+const _pendingReplies = {};
+let _reqCounter = 0;
+function nativeCall(op, payload) {
+  return new Promise((resolve) => {
+    if (!IS_NATIVE) { resolve({ ok: true, demo: true }); return; }
+    const requestId = 'r' + (++_reqCounter) + '_' + Date.now();
+    _pendingReplies[requestId] = resolve;
+    window.webkit.messageHandlers.native.postMessage({ op, payload: payload || {}, requestId });
+    setTimeout(() => {
+      if (_pendingReplies[requestId]) { delete _pendingReplies[requestId]; resolve({ ok: false, error: 'timeout' }); }
+    }, 30000);
+  });
+}
+function nativeFire(op, payload) {
+  if (!IS_NATIVE) return;
+  window.webkit.messageHandlers.native.postMessage({ op, payload: payload || {} });
+}
+window.onNativeReply = (requestId, data) => {
+  const cb = _pendingReplies[requestId];
+  if (cb) { delete _pendingReplies[requestId]; cb(data); }
+};
+// Events from Swift → JS
+window.onNative = (event, data) => {
+  if (event === 'onLock')       { if (typeof handleNativeLock === 'function')   handleNativeLock(); }
+  else if (event === 'onUnlock'){ if (typeof handleNativeUnlock === 'function') handleNativeUnlock(data && data.duration); }
+  else if (event === 'onIdleTick'){ if (typeof handleNativeIdleTick === 'function') handleNativeIdleTick(data && data.seconds); }
+  else if (event === 'onForceReset'){ if (typeof handleForceReset === 'function') handleForceReset(); }
+  else if (event === 'onConfig'){ if (typeof handleConfig === 'function') handleConfig(data); }
+};
+
+// ═══════════════════════════════════════════════════════════════════
+// App state
+// ═══════════════════════════════════════════════════════════════════
+let state = {
+  screen: 'start',
+  homeTeam: 'Listings',    // user's PRIMARY/home team — never changes mid-session
+  team: 'Listings',        // team currently being worked in (can switch mid-day)
+  user: 'Aswini Ramesh',
+  activity: 'production',   // production | break | meeting | training | lunch | dinner
+  autoBreak: false,         // true if current break was auto-triggered by Mac lock
+  breakWasManual: false,    // tracks whether break was started manually
+  task: 'Photo Review',
+  startedAt: null,
+  taskStartedAt: null,
+  breakStartedAt: null,
+  totals: { production: 0, break: 0, auto_break: 0, meeting: 0, training: 0, lunch: 0, dinner: 0 },
+  tasksDone: 0,
+  // Idle tracking — separate metric
+  idleStreakSec: 0,         // current streak of inactivity
+  idleTotalMs: 0,           // accumulated idle time today (only streaks ≥ threshold count)
+  // Mac lock tracking
+  macLocked: false,
+  macLockedAt: null,
+};
+
+let clockInterval = null;
+let idleInterval = null;
+let lockInterval = null;
+
+// ═══════════════════════════════════════════════════════════════════
+// Per-team task form schemas — sourced EXACTLY from the team process doc
+// (https://docs.google.com/document/d/18srSRYmr-7ejEfjL3pCGsErkFMLonvyhUFUm2VYnatQ)
+// Field names, dropdown labels, and order match the doc 1:1.
+// ═══════════════════════════════════════════════════════════════════
+const MARKETS = [
+  'Arizona (AZ)','California (CA)','Colorado (CO)','Connecticut (CT)','District of Columbia (DC)',
+  'Florida (FL)','Georgia (GA)','Idaho (ID)','Iowa (IA)','Kansas (KS)','Kentucky (KY)',
+  'Maine (ME)','Maryland (MD)','Missouri (MO) – St. Louis','Missouri (MO) – Kansas City',
+  'North Carolina (NC)','New York (NY)','Ohio (OH)','South Carolina (SC)','Tennessee (TN)',
+  'Texas (TX)','West Virginia (WV)',
+  'Alabama Other (AL)','Arizona Other (AZ)','Arkansas Other (AR)','Baltimore Md (MD)',
+  'California Other (CA)','Central California Ca (CA)','Chicago Il (IL)','Colorado Other (CO)',
+  'Connecticut Other (CT)','Delaware Other (DE)','East Texas (TX)','El Paso (TX)',
+  'Florida Panhandle (FL)','Georgia Other (GA)','Idaho Other (ID)','Illinois Other (IL)',
+  'Indiana Other (IN)','Iowa Other (IA)','Kansas Other (KS)','Kentucky Other (KY)',
+  'Little Rock Ar (AR)','Louisiana Other (LA)','Louisville In Ky (IN/KY)','Maine Other (ME)',
+  'Maryland Other (MD)','Massachusetts Other (MA)','Memphis Tn (TN)','Michigan Other (MI)',
+  'Milwaukee Waukesha Wi (WI)','Minnesota Other (MN)','Mississippi Other (MS)','Missouri Other (MO)',
+  'Montana Other (MT)','Nebraska Other (NE)','Nevada Other (NV)','New Hampshire Other (NH)',
+  'New Mexico Other (NM)','New Orleans La (LA)','New York Other (NY)','North Carolina Other (NC)',
+  'North Dakota Other (ND)','Ohio Other (OH)','Oklahoma Other (OK)','Omaha Ne (NE)',
+  'Oregon Other (OR)','Pennsylvania Other (PA)','Philadelphia Pa (PA)','Pittsburgh Pa (PA)',
+  'Seattle Wa (WA)','South Carolina Other (SC)','South Dakota Other (SD)','South Texas (TX)',
+  'Tennessee Other (TN)','Tulsa Ok (OK)','Utah Other (UT)','Vermont Other (VT)',
+  'Virginia Beach Va (VA)','Virginia Other (VA)','Washington Other (WA)','West Texas (TX)',
+  'West Virginia Other (WV)','Western Ny (NY)','Wisconsin Other (WI)','Wyoming Other (WY)',
+  'Albuquerque (NM / ABQ)','Other'
+];
+
+const TEAMS = {
+  Listings: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true, placeholder: 'https://... or 123 Main St' },
+    { type: 'select', label: 'Task', required: true, options: [
+      'Photo Review','DEF','Create Listing','Additional Thread','JIRA','BOM Ticket',
+      'Home TOM/BOM Date Passed','Violation Ticket','5 days ago Ticket','QC','RAMP',
+      'QC - Extra Audits','Lock Box','Zillow 3D','Reno VA','Showami','Late Photo Task'
+    ]},
+    { type: 'select', label: 'Markets', required: true, options: MARKETS },
+    { type: 'select', label: 'Productivity Type', required: true, options: ['Closed','Pending','Follow Up','No action needed'] },
+  ]},
+  SD: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true, placeholder: 'https://... or 123 Main St' },
+    { type: 'select', label: 'Task', required: true, options: [
+      'New Create','FT Closed','FT Pending','WO Update','WO No - Changes','JIRA Closed',
+      'JIRA Pending','QC','DEF - Listings','QC - Extra Audits','Reno Process',
+      'Photo Review - Listings','TX QC Check','Additional Thread'
+    ]},
+    { type: 'select', label: 'Markets', required: true, options: MARKETS },
+    { type: 'text', label: 'Notes', required: false, placeholder: 'What did you do?', full: true },
+    { type: 'text', label: 'Drive Link', required: false, placeholder: 'https://drive.google.com/...', full: true },
+  ]},
+  BRN: { fields: [
+    { type: 'text', label: 'Property Address', required: true, placeholder: '123 Main St, Phoenix AZ' },
+    { type: 'select', label: 'Productivity Type', required: true, options: [
+      'Finalisation Report','Follow-Up','New Work Order','People Engagement Activity',
+      'QC / Approval','SP Follow-up Call','SP Initial Call','WO Closure'
+    ]},
+    { type: 'select', label: 'Sub Task', required: true, options: [
+      'Maestro (updates and responses)','Maestro (creating Lineitem)','Admin (adding Reports)',
+      'Email','Admin (notes)','No Action Required','Appliance ordering','CO Request',
+      'ELA message','Preliminary invoice','BR/ACM/Triage Support','Maestro (QC approvals)',
+      'People engagement activities','Slack (updates and responses)','Spokephone (Calling / Texting)',
+      'Utility ticket (Creation/Update)','Vendor (Message and response)','Vendor Calling',
+      'Vendor Selection','Work order tracker updates','Workorder QC','Zendesk (Responses and Updates)'
+    ], full: true },
+  ]},
+  HQI: { fields: [
+    { type: 'text', label: 'Ticket Link / Property Address', required: true, placeholder: 'https://zendesk... or property address' },
+    { type: 'text', label: 'Ticket Link', required: true, placeholder: 'https://zendesk...' },
+    { type: 'select', label: 'Productivity Type', required: true, options: ['New','Follow-Up','Duplicate','PA','Audit','Overdue'] },
+    { type: 'select', label: 'Sub Task / Action Taken', required: true, options: [
+      'Create HPM Visit','Create Incident Report','Create Side Conversation','Create Utility Ticket',
+      'Due Diligence Check','First Actions Notes','Follow-up and Escalations','Maintenance Vendor Notes',
+      'Create WO/LWO','HOA Ticket','QC'
+    ]},
+    { type: 'select', label: 'Status', required: true, options: [
+      'New → Solved','New → On-Hold','On-Hold → Solved','On-Hold → Follow-up',
+      '(Others) On-Hold → Solved','(Others) On-Hold → Follow-up',
+      '(Others) New → Solved','(Others) New → On-Hold','QC Completed','Duplicate → Solved'
+    ]},
+    { type: 'select', label: 'Priority', required: true, options: ['Urgent','High','Normal','QC','Audit'] },
+  ]},
+  HOA: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'text', label: 'Property Address', required: true },
+    { type: 'select', label: 'Productivity Type', required: true, options: ['Follow-Up','Overdue','Duplicate','New'] },
+    { type: 'select', label: 'Project/Task', required: true, options: [
+      'Non-Violation HOA','ARC','Gate Access (JIRA)','Maintenance ZD','HQI (ZD)','Violation (ZD)'
+    ]},
+    { type: 'select', label: 'Sub Task/Action Taken', required: true, options: [
+      'Contact HOA','Follow up and Escalation Notes','Acquire HOA contact info','ARC form fill',
+      'Contact Vendor','Create Child ticket','Create HPM Visit','Create Side Conversation','Create WO',
+      'First Action Notes','Inbound Call','Online Registration','Setting up Access',
+      'In Renovation','Duplicate','Due diligence Check'
+    ]},
+    { type: 'select', label: 'Status', required: true, options: [
+      'New->On-Hold','On-Hold->Solved','On-Hold->Follow-up','(Others) On-Hold->Solved',
+      '(Others) On-Hold->Follow-up','(Others) New->Solved','(Others) New->On-Hold',
+      'Duplicate->Solved','New->Solved'
+    ]},
+    { type: 'text', label: 'HOA Name', required: false },
+    { type: 'text', label: 'Management Name', required: false },
+    { type: 'text', label: 'HOA Email', required: false },
+    { type: 'text', label: 'HOA Phone Number', required: false },
+  ]},
+  HOC_WO: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'text', label: 'Property Address', required: true },
+    { type: 'select', label: 'Productivity Type', required: true, options: [
+      'New','Follow-up','Overdue','Email Triage','Duplicate','Audit'
+    ]},
+    { type: 'select', label: 'Project/Task', required: true, options: [
+      'Signage','SALA','RaaS','STPP','PAR','Needs Triage','HQI (ZD)','Maintenance ZD',
+      'HQI (JIRA)','OD Select','Email Triage','Audit'
+    ]},
+    { type: 'select', label: 'Sub Task/Action Taken', required: true, options: [
+      'Create WO','Invoice Created','Slack request (Signtracker)','Slack request (UpSignDown)',
+      'Create HPM Visit','Create Incident Report','Create Side Conversation','Create Utility Ticket',
+      'Due Diligence Check','First Actions Notes','Follow-up and Escalations','Maintenance Vendor notes',
+      'Create WO/LWO','HOA Ticket','Email Triage','Duplicate','Audit'
+    ]},
+    { type: 'select', label: 'Status', required: true, options: [
+      'New->Solved','New->On-Hold','On-Hold->Solved','On-Hold->Follow-up',
+      '(Others) On-Hold->Solved','(Others) On-Hold->Follow-up',
+      '(Others) New->Solved','(Others) New->On-Hold','Duplicate->Solved'
+    ]},
+  ]},
+  LWO: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'select', label: 'Productivity Type', required: true, options: [
+      'Follow-Up','New Work Order','QC/ Approval','Spokephone','WO Closure','People Engagement Activity'
+    ]},
+    { type: 'select', label: 'Sub Type', required: true, options: [
+      'Admin (adding notes)','LWO Closed Sheet','Maestro (Vendor Updates)','Spokephone (Calling / Texting)',
+      'BR Child Ticket (GS/CO)','No Action Required','Slack (updates and responses)','Maestro (Workorder Creation)',
+      'Utility ticket (Creation / Update)','Zendesk (Responses and Updates)','Zendesk (Side Conversation)',
+      'Maestro ( QC approvals )','Rework tracker updates','Work order tracker updates','Lien waiver processing',
+      'BR investigations','Verbiage completion','Visit creation','People engagement activities'
+    ], full: true },
+  ]},
+  TP_Sourcing: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'select', label: 'Productivity Type', required: true, options: [
+      'Regular Sourcing','Referrals Sourcing','IBB Sourcing','TPEA Rating','Non-Compliance Report'
+    ]},
+    { type: 'select', label: 'Sub Type', required: true, options: [
+      'Sourcing Leads','Follow-up Calls','Follow-up Email','Follow-up Text',
+      'Sending rating emails','Non-compliance calling','Non-compliance Email'
+    ]},
+  ]},
+  Utilities_TurnOn: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'select', label: 'Productivity Type', required: true, options: ['New','Follow-Up','Resolved'] },
+    { type: 'select', label: 'Task Type', required: true, options: ['Turn On','Verification'] },
+    { type: 'text', label: 'Case /Ticket number', required: false },
+    { type: 'text', label: 'Comment', required: false, full: true },
+  ]},
+  Utilities_NST: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'select', label: 'Productivity Type', required: true, options: ['New','Follow-Up','Resolved'] },
+    { type: 'select', label: 'Task Type', required: true, options: ['NST','Verification'] },
+    { type: 'text', label: 'Case /Ticket number', required: false },
+    { type: 'text', label: 'Comment', required: false, full: true },
+  ]},
+  Utilities_Blocked: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'select', label: 'Productivity Type', required: true, options: ['New','Follow-Up','Resolved'] },
+    { type: 'select', label: 'Task Type', required: true, options: ['Blocked Cases'] },
+    { type: 'text', label: 'Case /Ticket number', required: false },
+    { type: 'text', label: 'Comment', required: false, full: true },
+  ]},
+  TC: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'select', label: 'Task type', required: true, options: [
+      'Demand review and update (TC)','Order HOA docs (TC)','Jira Tickets (TC)',
+      'HOA litigation (TC)','HOA Insurance (TC)','CC&R','Follow up & Escalation','Triage'
+    ]},
+    { type: 'select', label: 'Flip State', required: true, options: ['Acquisition','Resale','NA'] },
+    { type: 'select', label: 'Status', required: true, options: [
+      'New -> Solved','New -> On-Hold','Unassigned New -> Solved','Unassigned New -> On-Hold',
+      'Follow-up -> Solved','Follow-up -> On-Hold','Follow-up (Others) -> Solved',
+      'Follow-up (Others) -> On-Hold','Duplicate Solved','NA'
+    ]},
+    { type: 'text', label: 'Comments', required: false, full: true },
+  ]},
+  TS: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'select', label: 'Task type', required: true, options: [
+      'EMD','Insurance Claim','Solar',
+      'Closing - Review, validate and upload final settlement statement',
+      'Closing - Review, validate and upload deed',
+      'Closing - Verify confirmation of close with title',
+      'Follow up'
+    ]},
+    { type: 'select', label: 'Flip State', required: true, options: ['Acquisition','Resale','NA'] },
+    { type: 'select', label: 'Status', required: true, options: [
+      'New -> Solved','New -> On-Hold','Follow-up -> Solved','Follow-up -> On-Hold',
+      'Follow-up (Others) -> Solved','Follow-up (Others) -> On-Hold','Duplicate Solved','NA'
+    ]},
+    { type: 'text', label: 'Comments', required: false, full: true },
+  ]},
+  VA: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'text', label: 'Maestro Link', required: false },
+    { type: 'text', label: 'Admin RBR Link', required: false },
+    { type: 'select', label: 'Task Type', required: true, options: [
+      'VA','Reno','Break','Meeting','Acq Escalation channel','QC'
+    ]},
+  ]},
+  HOC_Permits: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'select', label: 'Productivity Type', required: true, options: ['New','Follow-Up','QC','Reno'] },
+    { type: 'text', label: 'Comments', required: false, full: true },
+  ]},
+  Maintenance: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'select', label: 'Process', required: true, options: [
+      'Denial','Adhoc Request','TOM/BOM','Photo Auditing','HPM Visit'
+    ]},
+    { type: 'select', label: 'Productivity Type', required: true, options: ['New','Followup'] },
+  ]},
+  Trust_Safety: { fields: [
+    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+    { type: 'select', label: 'Productivity Type', required: true, options: ['New','Followup'] },
+    { type: 'select', label: 'Process', required: true, options: [
+      'Alfred','Rental Scam tickets','Identity Escalation'
+    ]},
+    { type: 'select', label: 'Subtype', required: true, options: [
+      'Agent','Buyer','Vendor','Merge','IDV','RSV','QC'
+    ]},
+    { type: 'text', label: 'Comments', required: false, full: true },
+  ]},
+};
+
+// Task headline on timer hero — which field represents "the task"
+const TASK_FIELD_LABEL = {
+  Listings: 'Task', SD: 'Task', BRN: 'Productivity Type', HQI: 'Sub Task / Action Taken',
+  HOA: 'Project/Task', HOC_WO: 'Project/Task', LWO: 'Sub Type',
+  TP_Sourcing: 'Productivity Type', Utilities_TurnOn: 'Task Type', Utilities_NST: 'Task Type',
+  Utilities_Blocked: 'Task Type', TC: 'Task type', TS: 'Task type', VA: 'Task Type',
+  HOC_Permits: 'Productivity Type', Maintenance: 'Process', Trust_Safety: 'Process',
+};
+
+let loggedTasks = [];
+
+// ═══════════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════════
+function init() {
+  loadDailyQuote();
+  updateClock();
+  setInterval(updateClock, 1000);
+  // Sync lock-overlay threshold label from RULES so demo/prod values stay in sync
+  const lt = document.getElementById('lockThresh');
+  if (lt) lt.textContent = RULES.MAC_LOCK_BREAK_SEC + 's';
+}
+
+function loadDailyQuote() {
+  const d = new Date();
+  const idx = (d.getFullYear() * 365 + d.getMonth() * 31 + d.getDate()) % QUOTES.length;
+  const q = QUOTES[idx];
+  document.getElementById('quoteText').textContent = q.t;
+  document.getElementById('quoteAuthor').textContent = '— ' + q.a;
+}
+
+function updateClock() {
+  const d = new Date();
+  const opts = { weekday: 'short', day: '2-digit', month: 'short' };
+  const date = d.toLocaleDateString('en-US', opts);
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  document.getElementById('menuClock').textContent = date + ' · ' + time;
+  document.getElementById('greetTime').textContent = time + ' IST';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Screen routing
+// ═══════════════════════════════════════════════════════════════════
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
+  document.getElementById(id).classList.add('show');
+  state.screen = id;
+
+  const titles = {
+    startScreen: 'Team Time Tracker · Start Your Day',
+    trackerScreen: 'Team Time Tracker · Running',
+    leaveScreen: 'Team Time Tracker · On Leave',
+    weekoffScreen: 'Team Time Tracker · Week Off',
+  };
+  document.getElementById('windowTitle').textContent = titles[id] || 'Team Time Tracker';
+}
+
+function resetToStart() {
+  // stop everything
+  stopClock();
+  stopIdle();
+  state = {
+    screen: 'start',
+    team: document.getElementById('teamSelect').value,
+    user: 'Aswini Ramesh',
+    activity: 'production',
+    autoBreak: false,
+    breakWasManual: false,
+    task: 'Photo Review',
+    startedAt: null, taskStartedAt: null, breakStartedAt: null,
+    totals: { production: 0, break: 0, auto_break: 0, meeting: 0, training: 0, lunch: 0, dinner: 0 },
+    tasksDone: 0,
+    idleStreakSec: 0,
+    idleTotalMs: 0,
+    macLocked: false,
+    macLockedAt: null,
+  };
+  // Make sure any prior lock overlay is cleared
+  if (lockInterval) { clearInterval(lockInterval); lockInterval = null; }
+  const lockEl = document.getElementById('lockOverlay');
+  if (lockEl) lockEl.classList.remove('show');
+  const lmBtn = document.getElementById('lockMacBtn');
+  const umBtn = document.getElementById('unlockMacBtn');
+  if (lmBtn) lmBtn.style.display = 'inline-block';
+  if (umBtn) umBtn.style.display = 'none';
+  document.getElementById('timerDisplay').textContent = '00:00:00';
+  document.getElementById('sProd').textContent = '0h 00m';
+  document.getElementById('sBreak').textContent = '0h 00m';
+  document.getElementById('sMeet').textContent = '0h 00m';
+  document.getElementById('sIdle').textContent = '0h 00m';
+  document.getElementById('sCount').textContent = '0';
+  setActiveActBtn('production');
+  setStatusChip('production');
+  closeAllModals();
+  showScreen('startScreen');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Start Your Day actions
+// ═══════════════════════════════════════════════════════════════════
+function startWorking(skipIntro) {
+  state.team = document.getElementById('teamSelect').value;
+  state.homeTeam = state.team;   // record home team at start-of-day
+  state.startedAt = Date.now();
+  state.activity = 'production';
+  state.taskStartedAt = null;  // starts when user touches first form field
+  loggedTasks = [];
+  renderRecentList();
+
+  renderForm(state.team);
+  renderTeamSwitch();
+
+  const label = document.querySelector(`#teamSelect option[value="${state.team}"]`).textContent;
+  document.getElementById('headTeam').textContent = `${label} · Tuesday, April 22`;
+  document.getElementById('currentTaskLine').innerHTML = `<span style="color: var(--dim);">Fill the form to start a task</span>`;
+  document.getElementById('timerDisplay').textContent = '00:00:00';
+
+  setActiveActBtn('production');
+  setStatusChip('production');
+  showScreen('trackerScreen');
+
+  startClock();
+  startIdle();
+  // Production: mark attendance + clear any force-reset flag
+  nativeFire('markAttendance', { user: state.user, team: state.homeTeam, status: 'Present' });
+  nativeFire('clearForceReset', { user: state.user });
+
+  if (!skipIntro) {
+    toast(`✨`, `Let's have a great day, ${state.user.split(' ')[0]}!`);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Cross-team "Working as" switcher
+// ═══════════════════════════════════════════════════════════════════
+// Labels for the chips — keep in sync with TEAMS keys
+const TEAM_LABELS = {
+  Listings:    'Listings',
+  SD:          'SD',
+  HQI:         'HQI',
+  BRN:         'BRN',
+  LTR:         'LTR',
+  PhotoReview: 'Photo Review',
+  Dispatch:    'Dispatch',
+  WEM:         'WEM',
+};
+
+function renderTeamSwitch() {
+  const host = document.getElementById('teamSwitchChips');
+  const hint = document.getElementById('teamSwitchHint');
+  if (!host) return;
+  // Use keys that actually exist in TEAMS so the form can render
+  const keys = Object.keys(TEAMS);
+  let html = '';
+  keys.forEach(k => {
+    const isActive = k === state.team;
+    const isHome = k === state.homeTeam;
+    const cls = ['ts-chip'];
+    if (isActive) cls.push('active');
+    if (isHome && isActive) cls.push('home-badge');
+    const label = TEAM_LABELS[k] || k;
+    const homeTag = isHome ? '<span class="home-tag">HOME</span>' : '';
+    html += `<button class="${cls.join(' ')}" onclick="switchTeam('${k}')">${label}${homeTag}</button>`;
+  });
+  host.innerHTML = html;
+
+  if (state.team === state.homeTeam) {
+    hint.className = 'ts-right';
+    hint.textContent = 'Working in your home team';
+  } else {
+    hint.className = 'ts-right helping';
+    hint.textContent = `⚡ Helping ${TEAM_LABELS[state.team]} today — home team is ${TEAM_LABELS[state.homeTeam]}`;
+  }
+}
+
+function switchTeam(newTeamKey) {
+  if (!TEAMS[newTeamKey]) return;
+  if (newTeamKey === state.team) return;
+
+  // If user has a task in progress, require completing it (or clear) before switching team
+  if (state.taskStartedAt) {
+    const ok = confirm(
+      `You have a task in progress on ${TEAM_LABELS[state.team]}.\n\n` +
+      `Switching teams will CLEAR the current form (no data is logged). ` +
+      `Complete or Clear the task first, or click OK to discard and switch.`
+    );
+    if (!ok) return;
+  }
+
+  const from = state.team;
+  state.team = newTeamKey;
+  state.taskStartedAt = null;
+  renderForm(newTeamKey);
+  renderTeamSwitch();
+
+  const label = TEAM_LABELS[newTeamKey];
+  document.getElementById('headTeam').textContent = `${label} · Tuesday, April 22`;
+  document.getElementById('currentTaskLine').innerHTML =
+    `<span style="color: var(--dim);">Switched to ${label} — fill the form to start a task</span>`;
+  document.getElementById('timerDisplay').textContent = '00:00:00';
+
+  if (newTeamKey === state.homeTeam) {
+    toast('🏠', `Back on home team — ${label}`);
+  } else {
+    toast('⚡', `Now helping ${label} (from ${TEAM_LABELS[from]})`);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Dynamic per-team form
+// ═══════════════════════════════════════════════════════════════════
+function renderForm(teamKey) {
+  const schema = TEAMS[teamKey];
+  const body = document.getElementById('formBody');
+  let html = '';
+  schema.fields.forEach((f, i) => {
+    const req = f.required ? '<span class="req">*</span>' : '';
+    const fullCls = f.full || f.type === 'textarea' ? ' full' : '';
+    html += `<div class="form-field${fullCls}">`;
+    html += `<label>${f.label}${req}</label>`;
+    if (f.type === 'text') {
+      html += `<input type="text" data-field="${f.label}" placeholder="${f.placeholder||''}" />`;
+    } else if (f.type === 'textarea') {
+      html += `<textarea data-field="${f.label}" placeholder="${f.placeholder||'Optional notes…'}"></textarea>`;
+    } else if (f.type === 'select') {
+      html += `<select data-field="${f.label}"><option value="">— Select —</option>`;
+      f.options.forEach(o => { html += `<option>${o}</option>`; });
+      html += `</select>`;
+    }
+    html += `</div>`;
+  });
+  body.innerHTML = html;
+
+  // Starts the task timer when user touches ANY field for the first time
+  body.querySelectorAll('input, select, textarea').forEach(el => {
+    const go = () => {
+      if (!state.taskStartedAt) {
+        state.taskStartedAt = Date.now();
+        document.getElementById('formSub').textContent = '⏱ Timer running…';
+        document.getElementById('timerLabel').textContent = 'Current Task';
+      }
+      // Sync the timer task line with chosen task-type
+      const taskLabel = TASK_FIELD_LABEL[state.team];
+      const taskEl = body.querySelector(`[data-field="${taskLabel}"]`);
+      const addrEl = body.querySelector(`[data-field="Property Address"], [data-field="Ticket Link / Property"], [data-field="Ticket Link"]`);
+      const taskVal = taskEl ? taskEl.value : '';
+      const addrVal = addrEl ? addrEl.value : '';
+      document.getElementById('currentTaskLine').innerHTML = taskVal
+        ? `<b>${taskVal}</b>${addrVal ? ' · ' + truncate(addrVal, 40) : ''}`
+        : `<span style="color: var(--dim);">Fill the form to start a task</span>`;
+    };
+    el.addEventListener('input', go);
+    el.addEventListener('change', go);
+  });
+}
+
+function truncate(s, n) { return s.length > n ? s.slice(0, n-1) + '…' : s; }
+
+function getFormData() {
+  const body = document.getElementById('formBody');
+  const schema = TEAMS[state.team];
+  const data = {};
+  let missing = [];
+  schema.fields.forEach(f => {
+    const el = body.querySelector(`[data-field="${f.label}"]`);
+    const val = el ? el.value.trim() : '';
+    data[f.label] = val;
+    if (f.required && !val) missing.push(f.label);
+  });
+  return { data, missing };
+}
+
+function logTask() {
+  if (state.activity !== 'production') {
+    toast('⚠️', 'Switch to Production to log a task');
+    return;
+  }
+  const { data, missing } = getFormData();
+  if (missing.length) {
+    toast('⚠️', `Missing required: ${missing.slice(0,2).join(', ')}${missing.length>2?'…':''}`);
+    return;
+  }
+  const elapsed = state.taskStartedAt ? Date.now() - state.taskStartedAt : 0;
+  const taskLabel = TASK_FIELD_LABEL[state.team];
+  const taskType = data[taskLabel] || 'Task';
+  const addr = data['Property Address'] || data['Ticket Link / Property'] || data['Ticket Link'] || '—';
+
+  // Mark prior "new" items as not new
+  loggedTasks.forEach(t => t._isNew = false);
+  const isCrossTeam = state.team !== state.homeTeam;
+  loggedTasks.unshift({
+    time: nowTimeLabel(),
+    type: taskType,
+    addr: truncate(addr, 50),
+    durationMs: elapsed,
+    data,
+    team: state.team,              // which team's log tab this row writes to
+    homeTeam: state.homeTeam,      // user's primary team (stored in sheet for analytics)
+    crossTeam: isCrossTeam,        // UI flag: show ⚡ badge on this row
+    _isNew: true,
+  });
+  state.tasksDone += 1;
+  // Production: ship to Apps Script
+  nativeFire('logTask', {
+    team: state.team,
+    homeTeam: state.homeTeam,
+    crossTeam: isCrossTeam,
+    taskType,
+    data,
+    durationMs: elapsed,
+    activity: state.activity,
+    system: false,
+  });
+  if (isCrossTeam) {
+    toast('⚡', `Logged to ${TEAM_LABELS[state.team]}_Log · cross-team from ${TEAM_LABELS[state.homeTeam]}`);
+  }
+  renderRecentList();
+  clearForm();
+  state.taskStartedAt = null;
+  document.getElementById('timerDisplay').textContent = '00:00:00';
+  document.getElementById('formSub').textContent = 'Timer starts when you fill the first field';
+  document.getElementById('currentTaskLine').innerHTML = `<span style="color: var(--dim);">Fill the form to start the next task</span>`;
+  document.getElementById('sCount').textContent = state.tasksDone;
+  toast('✓', `Task logged · ${fmtHM(elapsed)}${elapsed < 60000 ? ' ' + Math.floor(elapsed/1000) + 's' : ''}`);
+}
+
+function clearForm() {
+  document.querySelectorAll('#formBody input, #formBody select, #formBody textarea').forEach(el => {
+    if (el.tagName === 'SELECT') el.selectedIndex = 0;
+    else el.value = '';
+  });
+  state.taskStartedAt = null;
+  document.getElementById('formSub').textContent = 'Timer starts when you fill the first field';
+  document.getElementById('timerDisplay').textContent = '00:00:00';
+  document.getElementById('currentTaskLine').innerHTML = `<span style="color: var(--dim);">Fill the form to start a task</span>`;
+}
+
+function nowTimeLabel() {
+  const d = new Date();
+  let h = d.getHours();
+  const m = d.getMinutes().toString().padStart(2,'0');
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${m} ${ampm}`;
+}
+
+function renderRecentList() {
+  const list = document.getElementById('recentList');
+  document.getElementById('recentCount').textContent = loggedTasks.length;
+  if (!loggedTasks.length) {
+    list.innerHTML = `<div class="recent-empty">Nothing logged yet — fill the form above and click Log Task.</div>`;
+    return;
+  }
+  list.innerHTML = loggedTasks.slice(0, 10).map(t => {
+    const crossBadge = t.crossTeam
+      ? `<span style="font-size:10px;color:var(--yellow);background:rgba(255,214,10,0.12);border:1px solid rgba(255,214,10,0.3);padding:1px 6px;border-radius:999px;margin-left:6px;font-weight:500;letter-spacing:0.2px;">⚡ ${TEAM_LABELS[t.team] || t.team}</span>`
+      : '';
+    const systemTag = t._system ? `<span style="font-size:10px;color:#9a9aa3;background:rgba(255,255,255,0.04);border:1px dashed rgba(255,255,255,0.18);padding:1px 6px;border-radius:999px;margin-left:6px;">⚙ system</span>` : '';
+    return `
+    <div class="recent-item${t._isNew ? ' new' : ''}">
+      <div>
+        <div class="r-type">${t.type}${crossBadge}${systemTag}</div>
+        <div class="r-addr">${t.time} · ${t.addr}</div>
+      </div>
+      <div class="r-dur">${fmtDurationShort(t.durationMs)}</div>
+    </div>
+  `}).join('');
+}
+
+function fmtDurationShort(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  if (m < 60) return `${m}m ${pad(sec)}s`;
+  return `${Math.floor(m/60)}h ${pad(m%60)}m`;
+}
+
+function markLeave() {
+  document.getElementById('leaveConfirmModal').classList.add('show');
+}
+function confirmLeave() {
+  closeModal('leaveConfirmModal');
+  showScreen('leaveScreen');
+  nativeFire('markAttendance', { user: state.user, team: state.homeTeam, status: 'Leave' });
+  toast('🌴', 'Marked On Leave · TL notified');
+}
+function markWeekOff() {
+  document.getElementById('weekoffConfirmModal').classList.add('show');
+}
+function confirmWeekOff() {
+  closeModal('weekoffConfirmModal');
+  showScreen('weekoffScreen');
+  nativeFire('markAttendance', { user: state.user, team: state.homeTeam, status: 'WeekOff' });
+  toast('🏖️', 'Marked Week Off · TL notified');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Tracker — clock
+// ═══════════════════════════════════════════════════════════════════
+function startClock() {
+  stopClock();
+  clockInterval = setInterval(() => {
+    // Current task elapsed — only if timer has been started
+    if (state.taskStartedAt) {
+      const taskMs = Date.now() - state.taskStartedAt;
+      document.getElementById('timerDisplay').textContent = fmtHMS(taskMs);
+    }
+
+    // Accumulate into activity total
+    if (!window._lastTick) { window._lastTick = Date.now(); return; }
+    const delta = Date.now() - window._lastTick;
+    window._lastTick = Date.now();
+    state.totals[state.activity] = (state.totals[state.activity] || 0) + delta;
+
+    // Update stats
+    document.getElementById('sProd').textContent = fmtHM(state.totals.production);
+    document.getElementById('sBreak').textContent = fmtHM(state.totals.break);
+    document.getElementById('sMeet').textContent = fmtHM(state.totals.meeting);
+    document.getElementById('sIdle').textContent = fmtHM(state.idleTotalMs || 0);
+    document.getElementById('sCount').textContent = state.tasksDone;
+  }, 200);
+}
+function stopClock() {
+  if (clockInterval) clearInterval(clockInterval);
+  clockInterval = null;
+  window._lastTick = null;
+}
+
+function fmtHMS(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+}
+function fmtHM(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}h ${pad(m)}m`;
+}
+function pad(n) { return n.toString().padStart(2, '0'); }
+
+// ═══════════════════════════════════════════════════════════════════
+// Activity switching (manual — user clicks a status button)
+// ═══════════════════════════════════════════════════════════════════
+function switchActivity(act) {
+  const prev = state.activity;
+  const prevWasManualBreak = state.breakWasManual && prev === 'break';
+  const prevBreakMs = state.breakStartedAt ? Date.now() - state.breakStartedAt : 0;
+
+  if (prev === act) return;
+
+  // Starting a break MANUALLY
+  if (act === 'break') {
+    state.breakStartedAt = Date.now();
+    state.breakWasManual = true;
+    state.autoBreak = false;
+  }
+
+  // Coming back to production from a manual break ≥ 5 min → welcome-back modal
+  if (act === 'production' && prevWasManualBreak &&
+      prevBreakMs >= RULES.MANUAL_BREAK_WELCOME_SEC * 1000) {
+    state.activity = 'production';
+    setActiveActBtn('production');
+    setStatusChip('production');
+    showWelcomeBack(prevBreakMs, 'manual');
+    state.breakStartedAt = null;
+    state.breakWasManual = false;
+    return;
+  }
+
+  state.activity = act;
+  setActiveActBtn(act);
+  setStatusChip(act);
+
+  // Reset break tracking when leaving break
+  if (prev === 'break') {
+    state.breakStartedAt = null;
+    state.breakWasManual = false;
+  }
+
+  toast(ACT_EMO[act], `Status: ${ACT_LABEL[act]}`);
+}
+
+const ACT_EMO = {
+  production: '🎯', break: '☕', meeting: '👥',
+  training: '📚', lunch: '🍱', dinner: '🍽️'
+};
+const ACT_LABEL = {
+  production: 'Production', break: 'Break', meeting: 'Meeting',
+  training: 'Training', lunch: 'Lunch', dinner: 'Dinner'
+};
+
+function setActiveActBtn(act) {
+  document.querySelectorAll('.act-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.act === act));
+}
+function setStatusChip(act) {
+  const chip = document.getElementById('statusChip');
+  chip.className = `status-chip ${act}`;
+  let label = ACT_LABEL[act];
+  if (act === 'break' && state.autoBreak) label = 'Auto Break';
+  document.getElementById('statusLabel').textContent = label;
+  const tl = document.getElementById('timerLabel');
+  tl.textContent = act === 'production' ? 'Current Task' : `On ${label}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Idle tracking — SEPARATE METRIC, runs regardless of activity
+// After 5 min of no activity, begin adding to idleTotalMs.
+// ═══════════════════════════════════════════════════════════════════
+function startIdle() {
+  stopIdle();
+  state.idleStreakSec = 0;
+
+  // Reset banner to active-teal
+  const banner = document.getElementById('idleBanner');
+  banner.style.display = 'flex';
+  banner.style.background = 'linear-gradient(135deg, rgba(64,200,224,0.15), rgba(10,132,255,0.08))';
+  banner.style.borderColor = 'rgba(64,200,224,0.4)';
+  document.querySelector('#idleBanner .idot').style.background = 'var(--teal)';
+  document.querySelector('#idleBanner .idot').style.boxShadow = '0 0 8px var(--teal)';
+
+  idleInterval = setInterval(() => {
+    // Don't tick idle while Mac is locked — that's tracked via auto-break instead
+    if (state.macLocked) return;
+
+    state.idleStreakSec += 1;
+
+    // Past the 5-min threshold, every additional second counts toward idleTotalMs
+    if (state.idleStreakSec > RULES.IDLE_THRESHOLD_SEC) {
+      state.idleTotalMs += 1000;
+    }
+
+    updateIdleBanner();
+  }, 1000);
+
+  // Any activity resets the streak (but not total)
+  if (!window._idleReset) {
+    window._idleReset = () => { if (!state.macLocked) state.idleStreakSec = 0; };
+    ['mousemove','keydown','mousedown','scroll','touchstart'].forEach(evt =>
+      window.addEventListener(evt, window._idleReset, { passive: true })
+    );
+  }
+}
+
+function stopIdle() {
+  if (idleInterval) clearInterval(idleInterval);
+  idleInterval = null;
+}
+
+function updateIdleBanner() {
+  const banner = document.getElementById('idleBanner');
+  const subtext = document.getElementById('idleSubtext');
+  const timer = document.getElementById('idleTimer');
+  const dot = document.querySelector('#idleBanner .idot');
+
+  if (state.macLocked) {
+    banner.style.background = 'linear-gradient(135deg, rgba(255,69,58,0.15), rgba(191,90,242,0.08))';
+    banner.style.borderColor = 'rgba(255,69,58,0.35)';
+    dot.style.background = 'var(--red)';
+    dot.style.boxShadow = '0 0 8px var(--red)';
+    subtext.innerHTML = `🔒 Mac is locked — auto-break at ${RULES.MAC_LOCK_BREAK_SEC}s`;
+    const lockedMs = Date.now() - state.macLockedAt;
+    timer.textContent = Math.floor(lockedMs/1000) + 's';
+    return;
+  }
+
+  if (state.idleStreakSec > RULES.IDLE_THRESHOLD_SEC) {
+    // Past threshold — idle is accumulating
+    banner.style.background = 'linear-gradient(135deg, rgba(255,214,10,0.15), rgba(255,159,10,0.08))';
+    banner.style.borderColor = 'rgba(255,214,10,0.4)';
+    dot.style.background = 'var(--yellow)';
+    dot.style.boxShadow = '0 0 8px var(--yellow)';
+    subtext.innerHTML = `⏸ Idle — counting toward daily idle total`;
+  } else {
+    banner.style.background = 'linear-gradient(135deg, rgba(64,200,224,0.15), rgba(10,132,255,0.08))';
+    banner.style.borderColor = 'rgba(64,200,224,0.4)';
+    dot.style.background = 'var(--teal)';
+    dot.style.boxShadow = '0 0 8px var(--teal)';
+    subtext.innerHTML = `Idle tracker active · threshold ${RULES.IDLE_THRESHOLD_SEC}s`;
+  }
+  timer.textContent = state.idleStreakSec + 's';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Mac lock simulation → triggers Auto Break after 15 min
+// ═══════════════════════════════════════════════════════════════════
+function lockMac() {
+  if (state.macLocked) return;
+  state.macLocked = true;
+  state.macLockedAt = Date.now();
+  document.getElementById('lockOverlay').classList.add('show');
+  document.getElementById('unlockMacBtn').style.display = 'inline-block';
+  document.getElementById('lockMacBtn').style.display = 'none';
+  // Reset the on-lock status text
+  const statusEl = document.getElementById('lockStatus');
+  const cdEl = document.getElementById('lockCountdown').parentElement;
+  if (statusEl) {
+    statusEl.textContent = `Waiting for ${RULES.MAC_LOCK_BREAK_SEC}s threshold…`;
+    statusEl.classList.remove('fired');
+  }
+  if (cdEl) cdEl.classList.remove('fired');
+  updateIdleBanner();
+
+  // Start lock tick — after threshold, trigger Auto Break
+  lockInterval = setInterval(() => {
+    const lockedMs = Date.now() - state.macLockedAt;
+    const lockedSec = Math.floor(lockedMs / 1000);
+    document.getElementById('lockCountdown').textContent = lockedSec + 's';
+    updateIdleBanner();
+
+    if (lockedSec >= RULES.MAC_LOCK_BREAK_SEC && state.activity !== 'break') {
+      triggerAutoBreak();
+      if (statusEl) {
+        statusEl.textContent = `☕ Auto Break logged — unlock to resume Production`;
+        statusEl.classList.add('fired');
+      }
+      if (cdEl) cdEl.classList.add('fired');
+    }
+  }, 1000);
+}
+
+function unlockMac() {
+  if (!state.macLocked) return;
+  const lockedMs = Date.now() - state.macLockedAt;
+  state.macLocked = false;
+  state.macLockedAt = null;
+  if (lockInterval) clearInterval(lockInterval);
+  lockInterval = null;
+  document.getElementById('lockOverlay').classList.remove('show');
+  document.getElementById('unlockMacBtn').style.display = 'none';
+  document.getElementById('lockMacBtn').style.display = 'block';
+
+  // If auto-break was triggered, show the unlock welcome modal asking to resume
+  if (state.activity === 'break' && state.autoBreak) {
+    showUnlockWelcome(lockedMs);
+  } else {
+    updateIdleBanner();
+    toast('🔓', 'Mac unlocked');
+  }
+}
+
+function triggerAutoBreak() {
+  if (state.activity === 'break') return;  // already on break
+  state.activity = 'break';
+  state.autoBreak = true;
+  state.breakWasManual = false;
+  state.breakStartedAt = state.macLockedAt;  // started when Mac was locked
+  setActiveActBtn('break');
+  setStatusChip('break');
+
+  // Log an "auto_break" marker row so the TL sees WHY the break happened
+  loggedTasks.forEach(t => t._isNew = false);
+  loggedTasks.unshift({
+    time: nowTimeLabel(),
+    type: '🔒 Auto Break (Mac locked ≥ ' + RULES.MAC_LOCK_BREAK_SEC + 's)',
+    addr: 'System-generated · user away',
+    durationMs: 0,
+    _system: true,
+    _isNew: true,
+  });
+  renderRecentList();
+  toast('☕', 'Auto-break triggered (Mac locked)');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Welcome-back flows
+// ═══════════════════════════════════════════════════════════════════
+function showUnlockWelcome(lockedMs) {
+  document.getElementById('welcomeTitle').textContent = `Welcome back, ${state.user.split(' ')[0]}!`;
+  document.getElementById('welcomeKind').textContent = '🔒 Auto-break ended';
+  document.getElementById('welcomeSub').innerHTML =
+    `Your Mac was locked for <b>${fmtDurationShort(lockedMs)}</b>, so we moved you to <b>Auto Break</b>. ` +
+    `Ready to resume Production?`;
+  document.getElementById('welcomeModal').classList.add('show');
+}
+
+function showWelcomeBack(breakMs, kind) {
+  document.getElementById('welcomeTitle').textContent = `Welcome back, ${state.user.split(' ')[0]}!`;
+  document.getElementById('welcomeKind').textContent = kind === 'manual' ? '☕ Break ended' : '🔒 Auto-break ended';
+  document.getElementById('welcomeSub').innerHTML =
+    `Your break lasted <b>${fmtDurationShort(breakMs)}</b>. Ready to pick up where you left off?`;
+  document.getElementById('welcomeModal').classList.add('show');
+}
+
+function closeWelcome() {
+  closeModal('welcomeModal');
+  state.activity = 'production';
+  state.autoBreak = false;
+  state.breakStartedAt = null;
+  state.breakWasManual = false;
+  setActiveActBtn('production');
+  setStatusChip('production');
+  state.idleStreakSec = 0;
+  updateIdleBanner();
+  toast('🎯', `Back on Production — let's go!`);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Modals / toast
+// ═══════════════════════════════════════════════════════════════════
+function closeModal(id) {
+  document.getElementById(id).classList.remove('show');
+}
+function closeAllModals() {
+  ['welcomeModal','leaveConfirmModal','weekoffConfirmModal']
+    .forEach(closeModal);
+}
+function toast(icon, msg) {
+  document.getElementById('toastIcon').textContent = icon;
+  document.getElementById('toastMsg').textContent = msg;
+  const t = document.getElementById('toast');
+  t.classList.add('show');
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Demo control buttons
+// ═══════════════════════════════════════════════════════════════════
+function hideDemoPanel() {
+  document.getElementById('demoPanel').style.display = 'none';
+  document.getElementById('showDemoBtn').style.display = 'block';
+}
+function showDemoPanel() {
+  document.getElementById('demoPanel').style.display = 'block';
+  document.getElementById('showDemoBtn').style.display = 'none';
+}
+
+// Fast-forward the idle streak past the threshold so "Idle (after 5m)" starts accumulating
+function fastForwardIdle() {
+  if (state.screen !== 'trackerScreen') startWorking(true);
+  if (state.activity !== 'production') switchActivity('production');
+  state.idleStreakSec = RULES.IDLE_THRESHOLD_SEC + 1;
+  updateIdleBanner();
+  toast('⏩', 'Idle streak past threshold — now counting as Idle');
+}
+// Demo the manual-break → welcome-back flow (≥5 min manual break triggers modal)
+function manualBreakThenBack() {
+  if (state.screen !== 'trackerScreen') startWorking(true);
+  switchActivity('break');
+  // Pretend the break started long enough ago to trigger the welcome-back
+  state.breakStartedAt = Date.now() - (RULES.MANUAL_BREAK_WELCOME_SEC + 2) * 1000;
+  state.breakWasManual = true;
+  state.autoBreak = false;
+  setTimeout(() => switchActivity('production'), 900);
+}
+function simulate845() {
+  resetToStart();
+  toast('🌙', "It's 8:45 PM IST — app auto-triggered Start Your Day popup");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Production bridge — wires real Mac events to the UI
+// (in browser demo these never fire, so demo buttons still work)
+// ═══════════════════════════════════════════════════════════════════
+function handleNativeLock() {
+  // Real Mac lock/sleep arrived from Swift
+  if (typeof lockMac === 'function' && !state.macLocked) lockMac();
+}
+function handleNativeUnlock(_durationSec) {
+  if (typeof unlockMac === 'function' && state.macLocked) unlockMac();
+}
+function handleNativeIdleTick(seconds) {
+  // Drive the 5-min idle metric from real input idle (CGEventSource)
+  if (typeof seconds !== 'number') return;
+  state.idleStreakSec = Math.floor(seconds);
+  if (typeof updateIdleBanner === 'function') updateIdleBanner();
+}
+function handleForceReset() {
+  try { localStorage.clear(); } catch(e){}
+  toast('🔄', 'Reset by Team Lead — please Start Your Day');
+  setTimeout(() => { location.reload(); }, 1200);
+}
+function handleConfig(cfg) {
+  // cfg: { version, sourceUrl, forceReset, maintenance, globalEnabled }
+  if (cfg && cfg.maintenance) {
+    toast('🛠', 'Maintenance mode: ' + cfg.maintenance);
+  }
+}
+
+// On launch, ask Swift for the real Mac full name and override state.user
+(async function bootNative() {
+  if (!IS_NATIVE) return;
+  const u = await nativeCall('getUser', {});
+  if (u && u.fullName) {
+    state.user = u.fullName;
+    const el = document.getElementById('userName');
+    if (el) el.textContent = u.fullName;
+  }
+  // Hide demo panel in production — it's only for local testing
+  const dp = document.getElementById('demoPanel');
+  if (dp) dp.style.display = 'none';
+  const sd = document.getElementById('showDemoBtn');
+  if (sd) sd.style.display = 'none';
+})();
+
+// Mirror attendance + session lifecycle to backend
+window.addEventListener('beforeunload', () => {
+  nativeFire('closeSession', {
+    user: state.user,
+    team: state.homeTeam,
+    tasksDone: state.tasksDone,
+  });
+});
+
+// Go
+init();
+</script>
 </body>
 </html>
