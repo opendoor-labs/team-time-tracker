@@ -45,7 +45,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
 
     // ── Launch ─────────────────────────────────────────────────────────
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)   // menu-bar only (no Dock)
+        NSApp.setActivationPolicy(.regular)     // show in Dock with our custom icon
+        setDockIcon()
         ensureInstallDir()
         buildStatusItem()
         buildWindow()
@@ -54,6 +55,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         startTimers()
         checkForUpdate()
         pollConfig()
+    }
+
+    // ── Dock icon — draw a branded icon at runtime ─────────────────────
+    // Avoids shipping a separate .icns file. Renders a rounded-square
+    // purple→blue gradient with a sun emoji, so the app shows up with
+    // its own identity in the Dock + Cmd-Tab switcher instead of the
+    // generic terminal/Swift icon.
+    func setDockIcon() {
+        let size = NSSize(width: 512, height: 512)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        let rect = NSRect(origin: .zero, size: size)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 110, yRadius: 110)
+        path.addClip()
+        if let g = NSGradient(colors: [
+            NSColor(red: 0.36, green: 0.55, blue: 1.0, alpha: 1.0),
+            NSColor(red: 0.75, green: 0.35, blue: 0.95, alpha: 1.0)
+        ]) {
+            g.draw(in: rect, angle: -45)
+        }
+        let emoji = "☀️" as NSString
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 280)
+        ]
+        let strSize = emoji.size(withAttributes: attrs)
+        let origin = NSPoint(
+            x: (size.width  - strSize.width)  / 2,
+            y: (size.height - strSize.height) / 2 - 10
+        )
+        emoji.draw(at: origin, withAttributes: attrs)
+        img.unlockFocus()
+        NSApp.applicationIconImage = img
     }
 
     func ensureInstallDir() {

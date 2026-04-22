@@ -1502,6 +1502,40 @@
               <div class="l">Tasks done</div>
             </div>
           </div>
+
+          <!-- End Shift button — closes out the day -->
+          <div style="margin-top: 18px; display: flex; justify-content: center;">
+            <button class="action-btn secondary" onclick="confirmEndShift()" style="background: linear-gradient(135deg, rgba(255,69,58,0.15), rgba(191,90,242,0.08)); border: 1px solid rgba(255,69,58,0.35); color: #ff6b5b; padding: 10px 22px; font-size: 13px; border-radius: 10px; cursor: pointer;">
+              🏁 End Shift for Today
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- End Shift confirm modal -->
+      <div class="modal-backdrop" id="endShiftConfirmModal">
+        <div class="modal">
+          <div class="icon-circle" style="background: linear-gradient(135deg, var(--orange), var(--red));">🏁</div>
+          <h3>End shift for today?</h3>
+          <p id="endShiftSummary">Loading summary…</p>
+          <div class="modal-actions">
+            <button class="btn-ghost" onclick="closeModal('endShiftConfirmModal')">Cancel</button>
+            <button class="btn-primary" onclick="confirmEndShiftFinal()" style="background: linear-gradient(135deg, var(--orange), var(--red)); box-shadow: 0 8px 22px rgba(255,159,10,0.35);">Yes, end shift</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- End-of-day summary screen -->
+      <div class="screen" id="endOfDayScreen">
+        <div class="start-day">
+          <div class="logo-orb" style="background: linear-gradient(135deg, var(--purple), var(--indigo));">🌙</div>
+          <h2 id="endOfDayGreet">Nice work today!</h2>
+          <div class="greeting-sub">Shift closed for <b id="endOfDayDate">today</b>.</div>
+          <div class="quote-card" style="border-color: rgba(191,90,242,0.18); background: linear-gradient(135deg, rgba(191,90,242,0.08), rgba(10,132,255,0.05));">
+            <div class="quote-label" style="color: var(--purple);">📊 Your day at a glance</div>
+            <div class="quote-text" id="endOfDaySummary" style="font-style: normal; font-size: 13px; line-height: 1.8;">—</div>
+          </div>
+          <p style="color: var(--muted); font-size: 12px; margin-top: 18px;">See you tomorrow. You can close this window — the app will start fresh in the morning.</p>
         </div>
       </div>
 
@@ -2504,6 +2538,16 @@ function startIdle() {
     // Don't tick idle while Mac is locked — that's tracked via auto-break instead
     if (state.macLocked) return;
 
+    // ── Only count idle during PRODUCTION ──
+    // Meetings, breaks, lunch, dinner, training are legitimate time-off —
+    // idleness during those modes should NOT accumulate as "idle"
+    if (state.activity !== 'production') {
+      // Keep streak at 0 so the banner reads "on <mode>" instead of counting up
+      state.idleStreakSec = 0;
+      updateIdleBanner();
+      return;
+    }
+
     state.idleStreakSec += 1;
 
     // Past the 5-min threshold, every additional second counts toward idleTotalMs
@@ -2757,6 +2801,74 @@ function handleConfig(cfg) {
   if (cfg && cfg.maintenance) {
     toast('🛠', 'Maintenance mode: ' + cfg.maintenance);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// End Shift — close out the day
+// ═══════════════════════════════════════════════════════════════════
+function fmtHM(ms) {
+  const mins = Math.round((ms || 0) / 60000);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${h}h ${String(m).padStart(2,'0')}m`;
+}
+
+function confirmEndShift() {
+  // Build summary from state.totals
+  const t = state.totals || {};
+  const summary = `
+    <b>Production:</b> ${fmtHM(t.production)}<br>
+    <b>Break:</b> ${fmtHM(t.break)} · <b>Meeting:</b> ${fmtHM(t.meeting)}<br>
+    <b>Lunch/Dinner:</b> ${fmtHM((t.lunch || 0) + (t.dinner || 0))} · <b>Training:</b> ${fmtHM(t.training)}<br>
+    <b>Idle (after 5m):</b> ${fmtHM(state.idleTotalMs)}<br>
+    <b>Tasks logged:</b> ${state.tasksDone || 0}
+  `;
+  document.getElementById('endShiftSummary').innerHTML = summary;
+  document.getElementById('endShiftConfirmModal').classList.add('show');
+}
+
+async function confirmEndShiftFinal() {
+  closeModal('endShiftConfirmModal');
+  // Stop all timers
+  stopIdle();
+  if (typeof stopTaskTimer === 'function') stopTaskTimer();
+  state.shiftActive = false;
+  state.shiftEnded = true;
+  state.shiftEndTime = Date.now();
+
+  // Tell backend the session is done (fire-and-forget)
+  nativeFire('closeSession', {
+    user: state.user,
+    team: state.homeTeam,
+    tasksDone: state.tasksDone || 0,
+    totals: state.totals || {},
+    idleMs: state.idleTotalMs || 0,
+    endedAt: new Date().toISOString()
+  });
+
+  // Build the end-of-day summary text
+  const t = state.totals || {};
+  const firstName = (state.user || '').split(/\s+/)[0] || 'you';
+  document.getElementById('endOfDayGreet').textContent = `Nice work today, ${firstName}!`;
+  document.getElementById('endOfDayDate').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  document.getElementById('endOfDaySummary').innerHTML = `
+    ✅ <b>${state.tasksDone || 0}</b> tasks logged<br>
+    🎯 <b>${fmtHM(t.production)}</b> of production<br>
+    ☕ <b>${fmtHM(t.break)}</b> on breaks · 👥 <b>${fmtHM(t.meeting)}</b> in meetings<br>
+    🍱 <b>${fmtHM((t.lunch || 0) + (t.dinner || 0))}</b> lunch/dinner · 📚 <b>${fmtHM(t.training)}</b> training<br>
+    💤 <b>${fmtHM(state.idleTotalMs)}</b> idle time detected
+  `;
+
+  // Swap to end-of-day screen
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
+  document.getElementById('endOfDayScreen').classList.add('show');
+
+  // Persist so app won't re-prompt Start Your Day until tomorrow
+  try {
+    localStorage.setItem('ttk_shiftEnded', new Date().toISOString().slice(0, 10));
+  } catch(e){}
+
+  toast('🏁', 'Shift ended — rest up!');
 }
 
 // On launch, ask Swift for the real Mac full name and override state.user
