@@ -456,8 +456,6 @@
   .status-chip.meeting .blink { background: var(--blue); }
   .status-chip.training { background: rgba(191,90,242,0.16); color: var(--purple); border: 1px solid rgba(191,90,242,0.38); }
   .status-chip.training .blink { background: var(--purple); }
-  .status-chip.lunch { background: rgba(255,159,10,0.16); color: var(--orange); border: 1px solid rgba(255,159,10,0.38); }
-  .status-chip.lunch .blink { background: var(--orange); }
   .status-chip.dinner { background: rgba(255,55,95,0.16); color: var(--pink); border: 1px solid rgba(255,55,95,0.38); }
   .status-chip.dinner .blink { background: var(--pink); }
 
@@ -562,7 +560,41 @@
   .form-wrap {
     padding: 18px 22px 20px;
     border-top: 1px solid rgba(255,255,255,0.05);
+    position: relative; /* anchor the frozen overlay */
   }
+
+  /* Frozen overlay — shown when the user is NOT in Production mode.
+     Covers the form, blocks clicks, shows a clear "paused" message. */
+  .form-frozen-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: rgba(13, 17, 23, 0.72);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    border-radius: inherit;
+    z-index: 10;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    cursor: not-allowed;
+  }
+  .form-wrap.frozen .form-frozen-overlay { display: flex; }
+  .form-wrap.frozen .form-body,
+  .form-wrap.frozen .form-actions,
+  .form-wrap.frozen .form-head { opacity: 0.35; pointer-events: none; user-select: none; }
+  .ffo-inner {
+    padding: 22px 28px;
+    background: linear-gradient(135deg, rgba(255,159,10,0.18), rgba(255,69,58,0.10));
+    border: 1px solid rgba(255,159,10,0.45);
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    max-width: 320px;
+  }
+  .ffo-icon { font-size: 32px; margin-bottom: 6px; }
+  .ffo-title { font-size: 15px; font-weight: 700; color: #ffd60a; margin-bottom: 4px; }
+  .ffo-sub { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .ffo-sub b { color: var(--green); }
   .form-head {
     display: flex;
     justify-content: space-between;
@@ -1468,7 +1500,7 @@
             <div id="idleTimer" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--teal); font-weight: 700;">0s</div>
           </div>
 
-          <div class="form-wrap">
+          <div class="form-wrap" id="taskFormCard">
             <div class="form-head">
               <span class="lbl">Log this task</span>
               <span class="form-sub" id="formSub">Timer starts when you fill the first field</span>
@@ -1478,7 +1510,15 @@
             </div>
             <div class="form-actions">
               <button class="form-btn secondary" onclick="clearForm()">Clear</button>
-              <button class="form-btn primary" onclick="logTask()">✓ Log Task</button>
+              <button class="form-btn primary" id="logTaskBtn" onclick="logTask()">✓ Log Task</button>
+            </div>
+            <!-- Freeze overlay — shown when activity !== 'production' -->
+            <div class="form-frozen-overlay" id="formFrozenOverlay">
+              <div class="ffo-inner">
+                <div class="ffo-icon">⏸</div>
+                <div class="ffo-title">Task logging paused</div>
+                <div class="ffo-sub">Switch to <b>Production</b> to continue logging tasks.</div>
+              </div>
             </div>
           </div>
 
@@ -1496,9 +1536,6 @@
               </button>
               <button class="act-btn" data-act="training" onclick="switchActivity('training')">
                 <span class="emo">📚</span> Training
-              </button>
-              <button class="act-btn" data-act="lunch" onclick="switchActivity('lunch')">
-                <span class="emo">🍱</span> Lunch
               </button>
               <button class="act-btn" data-act="dinner" onclick="switchActivity('dinner')">
                 <span class="emo">🍽️</span> Dinner
@@ -1708,7 +1745,7 @@
 </div>
 
 <!-- ═══ Demo controls ═══ -->
-<div class="demo-panel" id="demoPanel">
+<div class="demo-panel" id="demoPanel" style="display: none;">
   <div class="dp-head">
     <span class="dp-tag">DEMO · Not visible to users</span>
     <button class="dp-close" onclick="hideDemoPanel()">Hide</button>
@@ -1731,7 +1768,7 @@
   </div>
 </div>
 
-<button class="show-demo-btn" id="showDemoBtn" onclick="showDemoPanel()">⚙ Show demo controls</button>
+<button class="show-demo-btn" id="showDemoBtn" onclick="showDemoPanel()" style="display: none;">⚙ Show demo controls</button>
 
 <script>
 // ═══════════════════════════════════════════════════════════════════
@@ -1815,14 +1852,14 @@ let state = {
   homeTeam: 'Listings',    // user's PRIMARY/home team — never changes mid-session
   team: 'Listings',        // team currently being worked in (can switch mid-day)
   user: 'Aswini Ramesh',
-  activity: 'production',   // production | break | meeting | training | lunch | dinner
+  activity: 'production',   // production | break | meeting | training | dinner
   autoBreak: false,         // true if current break was auto-triggered by Mac lock
   breakWasManual: false,    // tracks whether break was started manually
   task: 'Photo Review',
   startedAt: null,
   taskStartedAt: null,
   breakStartedAt: null,
-  totals: { production: 0, break: 0, auto_break: 0, meeting: 0, training: 0, lunch: 0, dinner: 0 },
+  totals: { production: 0, break: 0, auto_break: 0, meeting: 0, training: 0, dinner: 0 },
   tasksDone: 0,
   // Idle tracking — separate metric
   idleStreakSec: 0,         // current streak of inactivity
@@ -2141,7 +2178,7 @@ function resetToStart() {
     breakWasManual: false,
     task: 'Photo Review',
     startedAt: null, taskStartedAt: null, breakStartedAt: null,
-    totals: { production: 0, break: 0, auto_break: 0, meeting: 0, training: 0, lunch: 0, dinner: 0 },
+    totals: { production: 0, break: 0, auto_break: 0, meeting: 0, training: 0, dinner: 0 },
     tasksDone: 0,
     idleStreakSec: 0,
     idleTotalMs: 0,
@@ -2191,6 +2228,7 @@ function startWorking(skipIntro) {
   setActiveActBtn('production');
   setStatusChip('production');
   showScreen('trackerScreen');
+  applyFormFreezeState();
 
   startClock();
   startIdle();
@@ -2265,6 +2303,7 @@ function switchTeam(newTeamKey) {
   state.taskStartedAt = null;
   renderForm(newTeamKey);
   renderTeamSwitch();
+  applyFormFreezeState();
 
   const label = TEAM_LABELS[newTeamKey];
   document.getElementById('headTeam').textContent = `${label} · Tuesday, April 22`;
@@ -2505,11 +2544,10 @@ function updatePerfCard() {
   const breakMs  = (t.break || 0) + (t.auto_break || 0);
   const meetMs   = t.meeting || 0;
   const trainMs  = t.training || 0;
-  const lunchMs  = t.lunch || 0;
   const dinnerMs = t.dinner || 0;
   const idleMs   = state.idleTotalMs || 0;
 
-  const loggedInMs = prodMs + breakMs + meetMs + trainMs + lunchMs + dinnerMs + idleMs;
+  const loggedInMs = prodMs + breakMs + meetMs + trainMs + dinnerMs + idleMs;
   const tasks      = state.tasksDone || 0;
   const prodHrs    = prodMs / 3600000;
 
@@ -2597,6 +2635,7 @@ function switchActivity(act) {
   state.activity = act;
   setActiveActBtn(act);
   setStatusChip(act);
+  applyFormFreezeState();
 
   // Reset break tracking when leaving break
   if (prev === 'break') {
@@ -2607,13 +2646,26 @@ function switchActivity(act) {
   toast(ACT_EMO[act], `Status: ${ACT_LABEL[act]}`);
 }
 
+// Freeze the task form (inputs + Log button) when user is NOT in Production.
+// Called from switchActivity, closeWelcome (resume prod), triggerAutoBreak, and on tracker entry.
+function applyFormFreezeState() {
+  const card = document.getElementById('taskFormCard');
+  if (!card) return;
+  const isProd = state.activity === 'production';
+  card.classList.toggle('frozen', !isProd);
+
+  // Hard-disable form controls so keyboard can't bypass CSS pointer-events
+  const controls = card.querySelectorAll('input, select, textarea, button.form-btn');
+  controls.forEach(el => { el.disabled = !isProd; });
+}
+
 const ACT_EMO = {
   production: '🎯', break: '☕', meeting: '👥',
-  training: '📚', lunch: '🍱', dinner: '🍽️'
+  training: '📚', dinner: '🍽️'
 };
 const ACT_LABEL = {
   production: 'Production', break: 'Break', meeting: 'Meeting',
-  training: 'Training', lunch: 'Lunch', dinner: 'Dinner'
+  training: 'Training', dinner: 'Dinner'
 };
 
 function setActiveActBtn(act) {
@@ -2651,7 +2703,7 @@ function startIdle() {
     if (state.macLocked) return;
 
     // ── Only count idle during PRODUCTION ──
-    // Meetings, breaks, lunch, dinner, training are legitimate time-off —
+    // Meetings, breaks, dinner, training are legitimate time-off —
     // idleness during those modes should NOT accumulate as "idle"
     if (state.activity !== 'production') {
       // Keep streak at 0 so the banner reads "on <mode>" instead of counting up
@@ -2695,7 +2747,7 @@ function updateIdleBanner() {
     banner.style.borderColor = 'rgba(255,69,58,0.35)';
     dot.style.background = 'var(--red)';
     dot.style.boxShadow = '0 0 8px var(--red)';
-    subtext.innerHTML = `🔒 Mac is locked — auto-break at ${RULES.MAC_LOCK_BREAK_SEC}s`;
+    subtext.innerHTML = `🔒 Mac is locked — tracker paused`;
     const lockedMs = Date.now() - state.macLockedAt;
     timer.textContent = Math.floor(lockedMs/1000) + 's';
     return;
@@ -2713,7 +2765,7 @@ function updateIdleBanner() {
     banner.style.borderColor = 'rgba(64,200,224,0.4)';
     dot.style.background = 'var(--teal)';
     dot.style.boxShadow = '0 0 8px var(--teal)';
-    subtext.innerHTML = `Idle tracker active · threshold ${RULES.IDLE_THRESHOLD_SEC}s`;
+    subtext.innerHTML = `Idle detection active`;
   }
   timer.textContent = state.idleStreakSec + 's';
 }
@@ -2795,12 +2847,13 @@ function triggerAutoBreak() {
   state.breakStartedAt = state.macLockedAt;  // started when Mac was locked
   setActiveActBtn('break');
   setStatusChip('break');
+  applyFormFreezeState();
 
   // Log an "auto_break" marker row so the TL sees WHY the break happened
   loggedTasks.forEach(t => t._isNew = false);
   loggedTasks.unshift({
     time: nowTimeLabel(),
-    type: '🔒 Auto Break (Mac locked ≥ ' + RULES.MAC_LOCK_BREAK_SEC + 's)',
+    type: '🔒 Auto Break (Mac locked)',
     addr: 'System-generated · user away',
     durationMs: 0,
     _system: true,
@@ -2838,6 +2891,7 @@ function closeWelcome() {
   state.breakWasManual = false;
   setActiveActBtn('production');
   setStatusChip('production');
+  applyFormFreezeState();
   state.idleStreakSec = 0;
   updateIdleBanner();
   toast('🎯', `Back on Production — let's go!`);
@@ -2942,7 +2996,7 @@ function confirmEndShift() {
   const summary = `
     <b>Production:</b> ${fmtHM(t.production)}<br>
     <b>Break:</b> ${fmtHM(t.break)} · <b>Meeting:</b> ${fmtHM(t.meeting)}<br>
-    <b>Lunch/Dinner:</b> ${fmtHM((t.lunch || 0) + (t.dinner || 0))} · <b>Training:</b> ${fmtHM(t.training)}<br>
+    <b>Dinner:</b> ${fmtHM(t.dinner || 0)} · <b>Training:</b> ${fmtHM(t.training)}<br>
     <b>Idle (after 5m):</b> ${fmtHM(state.idleTotalMs)}<br>
     <b>Tasks logged:</b> ${state.tasksDone || 0}
   `;
@@ -2978,7 +3032,7 @@ async function confirmEndShiftFinal() {
     ✅ <b>${state.tasksDone || 0}</b> tasks logged<br>
     🎯 <b>${fmtHM(t.production)}</b> of production<br>
     ☕ <b>${fmtHM(t.break)}</b> on breaks · 👥 <b>${fmtHM(t.meeting)}</b> in meetings<br>
-    🍱 <b>${fmtHM((t.lunch || 0) + (t.dinner || 0))}</b> lunch/dinner · 📚 <b>${fmtHM(t.training)}</b> training<br>
+    🍽️ <b>${fmtHM(t.dinner || 0)}</b> dinner · 📚 <b>${fmtHM(t.training)}</b> training<br>
     💤 <b>${fmtHM(state.idleTotalMs)}</b> idle time detected
   `;
 
