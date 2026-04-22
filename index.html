@@ -2651,8 +2651,10 @@ function startClock() {
       updatePerfCard();
     }
 
-    // Heartbeat to backend every 30s — feeds the TL "Live Activity" view
-    if (!window._lastHeartbeat || (Date.now() - window._lastHeartbeat) >= 30000) {
+    // Heartbeat to backend every 90s — feeds the TL "Live Activity" view.
+    // 90s (not 30s) keeps us well under Apps Script's 6h/day runtime quota
+    // at 115 users while still refreshing the dashboard within 2min.
+    if (!window._lastHeartbeat || (Date.now() - window._lastHeartbeat) >= 90000) {
       window._lastHeartbeat = Date.now();
       sendHeartbeat();
     }
