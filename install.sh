@@ -4,14 +4,14 @@
 #  Opendoor · Photo Review QC Team
 #
 #  Usage (from Terminal):
-#    curl -fsSL https://team-tracker.onrender.com/install.sh | bash
+#    curl -fsSL https://team-time-tracker-osoe.onrender.com/install.sh | bash
 # ═══════════════════════════════════════════════════════════════════════
 
 set -e   # fail on any error
 trap 'echo ""; echo "❌ Install failed. Message @arun with the last line above."; exit 1' ERR
 
 # ── Config ──
-BASE_URL="https://team-tracker.onrender.com"
+BASE_URL="https://team-time-tracker-osoe.onrender.com"
 SWIFT_URL="$BASE_URL/TeamTimeTracker.swift"
 HTML_URL="$BASE_URL/index.html"
 HOME_DIR="$HOME"

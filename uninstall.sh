@@ -3,7 +3,7 @@
 #  Team Time Tracker — Uninstaller
 #
 #  Usage:
-#    curl -fsSL https://team-tracker.onrender.com/uninstall.sh | bash
+#    curl -fsSL https://team-time-tracker-osoe.onrender.com/uninstall.sh | bash
 # ═══════════════════════════════════════════════════════════════════════
 
 set -e
@@ -36,5 +36,5 @@ echo "      ✅ Removed"
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  ✅ Uninstalled cleanly."
-echo "  To reinstall: curl -fsSL https://team-tracker.onrender.com/install.sh | bash"
+echo "  To reinstall: curl -fsSL https://team-time-tracker-osoe.onrender.com/install.sh | bash"
 echo "═══════════════════════════════════════════════════════════"
