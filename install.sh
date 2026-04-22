@@ -68,6 +68,13 @@ echo "      ✅ Compiled ($(($BIN_SIZE / 1024)) KB)"
 
 # ── Step 4: Build .app bundle ──
 echo "[4/6] Installing to ~/Applications..."
+# Kill any running instance before replacing the bundle (prevents double-icon in Dock)
+launchctl unload "$LAUNCH_AGENTS/$PLIST_NAME.plist" 2>/dev/null || true
+pkill -f TeamTimeTracker 2>/dev/null || true
+# Remove any stray copies in /Applications + old bundle names that show up as a second icon
+sudo rm -rf "/Applications/TeamTimeTracker.app" 2>/dev/null || true
+rm -rf "$HOME_DIR/Applications/TeamTimeTracker 2.app" \
+       "$HOME_DIR/Applications/Team Time Tracker.app" 2>/dev/null || true
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$INSTALL_DIR/TeamTimeTracker"     "$APP_DIR/Contents/MacOS/TeamTimeTracker"
@@ -122,6 +129,12 @@ echo "      ✅ Will auto-start on every login"
 
 # ── Step 6: Launch ──
 echo "[6/6] Launching app..."
+# Rebuild the LaunchServices database so Finder/Dock drop any stale entries that
+# would otherwise show as a ghost second icon after a reinstall.
+/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister \
+  -f "$APP_DIR" 2>/dev/null || true
+# Refresh Dock so it re-reads the bundle (kills any duplicate lingering icon)
+killall Dock 2>/dev/null || true
 open "$APP_DIR"
 sleep 1
 echo "      ✅ Running!"

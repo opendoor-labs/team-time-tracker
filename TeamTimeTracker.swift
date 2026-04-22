@@ -218,6 +218,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
             postToApi(action: "closeSession", payload: payload) { result in
                 self.reply(requestId, data: result)
             }
+        case "heartbeat":
+            postToApi(action: "heartbeat", payload: payload) { _ in }
         case "idleAlert":
             postToApi(action: "idleAlert", payload: payload) { _ in }
         case "clearForceReset":

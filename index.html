@@ -682,6 +682,17 @@
     padding-right: 28px;
   }
   .form-field textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+  /* Highlight missing required fields after a failed Log Task submit */
+  .form-field .field-invalid {
+    border-color: rgba(255,69,58,0.75) !important;
+    box-shadow: 0 0 0 3px rgba(255,69,58,0.18);
+    animation: shake 0.35s ease;
+  }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-3px); }
+    75% { transform: translateX(3px); }
+  }
   .form-field input:focus,
   .form-field select:focus,
   .form-field textarea:focus {
@@ -2422,7 +2433,14 @@ function logTask() {
     return;
   }
   const { data, missing } = getFormData();
+  // Clear any prior highlights
+  document.querySelectorAll('#formBody [data-field]').forEach(el => el.classList.remove('field-invalid'));
   if (missing.length) {
+    // Highlight each missing required field in red
+    missing.forEach(label => {
+      const el = document.querySelector(`#formBody [data-field="${label}"]`);
+      if (el) el.classList.add('field-invalid');
+    });
     toast('⚠️', `Missing required: ${missing.slice(0,2).join(', ')}${missing.length>2?'…':''}`);
     return;
   }
@@ -2572,9 +2590,30 @@ function startClock() {
       updatePerfCard();
     }
 
+    // Heartbeat to backend every 30s — feeds the TL "Live Activity" view
+    if (!window._lastHeartbeat || (Date.now() - window._lastHeartbeat) >= 30000) {
+      window._lastHeartbeat = Date.now();
+      sendHeartbeat();
+    }
+
     // Break-exceeded banner check — flips on when break total crosses 60 min
     updateBreakLimitBanner();
   }, 200);
+}
+
+// Ship current activity to backend so TL dashboard can show live view
+function sendHeartbeat() {
+  nativeFire('heartbeat', {
+    user: state.user,
+    team: state.team,
+    homeTeam: state.homeTeam,
+    activity: state.activity,
+    tasksDone: state.tasksDone || 0,
+    productionMin: Math.round((state.totals.production || 0) / 60000),
+    breakMin:      Math.round(((state.totals.break || 0) + (state.totals.auto_break || 0)) / 60000),
+    idleMin:       Math.round((state.idleTotalMs || 0) / 60000),
+    taskStartedAt: state.taskStartedAt || 0,
+  });
 }
 
 // Show/hide the break-exceeded banner. Toasts once when the user first crosses the line.
@@ -2610,13 +2649,16 @@ function updatePerfCard() {
   const dinnerMs = t.dinner || 0;
   const idleMs   = state.idleTotalMs || 0;
 
-  const loggedInMs = prodMs + breakMs + meetMs + trainMs + dinnerMs + idleMs;
+  // Logged-in time = all activity states (idle already counted inside Production, so don't double-add)
+  const loggedInMs = prodMs + breakMs + meetMs + trainMs + dinnerMs;
+  // Active working time = Production minus idle-within-production
+  const activeMs   = Math.max(0, prodMs - idleMs);
   const tasks      = state.tasksDone || 0;
   const prodHrs    = prodMs / 3600000;
 
-  // Utilization % — Production ÷ total logged-in time
+  // Utilization % — Active working ÷ total logged-in time
   let utilPct = 0;
-  if (loggedInMs > 0) utilPct = Math.round((prodMs / loggedInMs) * 100);
+  if (loggedInMs > 0) utilPct = Math.round((activeMs / loggedInMs) * 100);
   const pUtil = document.getElementById('pUtil');
   if (pUtil) {
     pUtil.textContent = loggedInMs > 30000 ? (utilPct + '%') : '—';

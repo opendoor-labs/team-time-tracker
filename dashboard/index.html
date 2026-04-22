@@ -524,6 +524,67 @@
   }
 
   .hidden { display: none !important; }
+
+  /* ── Live Activity tab ──────────────────────────────────────── */
+  .live-team-card {
+    padding: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 16px;
+  }
+  .live-team-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .live-team-name {
+    font-weight: 600;
+    font-size: 15px;
+  }
+  .live-users {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .live-user {
+    background: var(--card-hover);
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .live-user-name {
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .live-user-meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .live-user-stale {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 2px;
+    font-style: italic;
+  }
+  .live-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-left: 6px;
+    letter-spacing: 0.03em;
+  }
+  .live-badge.production { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+  .live-badge.break      { background: rgba(251, 191, 36, 0.15); color: var(--yellow); }
+  .live-badge.meeting    { background: rgba(168, 116, 255, 0.15); color: var(--purple); }
+  .live-badge.training   { background: rgba(91, 140, 255, 0.15); color: var(--blue); }
+  .live-badge.dinner     { background: rgba(255, 159, 10, 0.15); color: #ff9f0a; }
+  .live-badge.idle       { background: rgba(138, 148, 163, 0.15); color: var(--muted); }
 </style>
 </head>
 <body>
@@ -602,6 +663,10 @@
     selectedTab: null,
     lastFetchAt: null,
     loading: false,
+    liveData: null,
+    livePollTimer: null,
+    liveLoading: false,
+    liveError: null,
   };
 
   // ---- DOM ----
@@ -665,9 +730,18 @@
       state.lastFetchAt = new Date();
 
       // Preserve selected tab if still valid, else pick first team tab
+      // (skipping __live so users land on their team data by default).
       const validTabs = getAllTabKeys(json);
       if (!state.selectedTab || !validTabs.includes(state.selectedTab)) {
-        state.selectedTab = validTabs[0] || null;
+        const firstNonLive = validTabs.find(k => k !== '__live');
+        state.selectedTab = firstNonLive || validTabs[0] || null;
+      }
+
+      // Ensure polling reflects the selected tab after a data refresh.
+      if (state.selectedTab === '__live' && !state.livePollTimer) {
+        startLivePolling();
+      } else if (state.selectedTab !== '__live' && state.livePollTimer) {
+        stopLivePolling();
       }
 
       renderDashboard();
@@ -692,7 +766,7 @@
 
   // ---- Rendering ----
   function getAllTabKeys(data) {
-    const keys = [];
+    const keys = ['__live'];
     if (data.teams && Array.isArray(data.teams)) {
       data.teams.forEach(t => keys.push(t));
     }
@@ -726,6 +800,20 @@
     tabsEl.innerHTML = '';
     tabsEl.classList.remove('hidden');
 
+    // Live Activity tab — visible to every authenticated user, always first.
+    {
+      const liveCount = state.liveData && Array.isArray(state.liveData.users)
+        ? state.liveData.users.length
+        : 0;
+      const liveTab = document.createElement('button');
+      liveTab.className = 'tab' + (state.selectedTab === '__live' ? ' active' : '');
+      liveTab.innerHTML = `🔴 Live Activity <span class="count-badge">${liveCount}</span>`;
+      liveTab.addEventListener('click', () => {
+        selectTab('__live');
+      });
+      tabsEl.appendChild(liveTab);
+    }
+
     teams.forEach(team => {
       const logs = (data.logs && data.logs[team]) || { rows: [] };
       const count = (logs.rows || []).length;
@@ -733,9 +821,7 @@
       tab.className = 'tab' + (state.selectedTab === team ? ' active' : '');
       tab.innerHTML = `${escapeHtml(team)} <span class="count-badge">${count}</span>`;
       tab.addEventListener('click', () => {
-        state.selectedTab = team;
-        renderTabs();
-        renderContent();
+        selectTab(team);
       });
       tabsEl.appendChild(tab);
     });
@@ -754,13 +840,24 @@
         tab.className = 'tab admin' + (state.selectedTab === key ? ' active' : '');
         tab.innerHTML = `${escapeHtml(label)} <span class="count-badge">${count}</span>`;
         tab.addEventListener('click', () => {
-          state.selectedTab = key;
-          renderTabs();
-          renderContent();
+          selectTab(key);
         });
         tabsEl.appendChild(tab);
       });
     }
+  }
+
+  // Centralised tab switcher — handles live-polling start/stop side effects.
+  function selectTab(key) {
+    const prev = state.selectedTab;
+    state.selectedTab = key;
+    if (prev !== '__live' && key === '__live') {
+      startLivePolling();
+    } else if (prev === '__live' && key !== '__live') {
+      stopLivePolling();
+    }
+    renderTabs();
+    renderContent();
   }
 
   function getAdminRowCount(source) {
@@ -783,6 +880,11 @@
             <p>Your account has no teams assigned. Contact arun.mohan@opendoor.com.</p>
           </div>
         </div>`;
+      return;
+    }
+
+    if (sel === '__live') {
+      renderLiveView();
       return;
     }
 
@@ -1078,6 +1180,149 @@
       try { return JSON.stringify(val); } catch (e) { return String(val); }
     }
     return String(val);
+  }
+
+  // ── Live Activity ──────────────────────────────────────────────────
+  // Polls ${API_URL}?action=liveActivity every 15s while the Live tab is
+  // active. Rendering is split from fetching so the initial click shows
+  // whatever we already have (possibly "loading") without blocking.
+  const LIVE_POLL_MS = 15000;
+  const KNOWN_ACTIVITIES = ['production', 'break', 'meeting', 'training', 'dinner', 'idle'];
+
+  async function fetchLiveActivity() {
+    if (state.liveLoading) return;
+    state.liveLoading = true;
+    try {
+      const res = await fetch(`${API_URL}?action=liveActivity`, { method: 'GET' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || 'unknown_error');
+      state.liveData = json;
+      state.liveError = null;
+    } catch (err) {
+      state.liveError = err.message || String(err);
+    } finally {
+      state.liveLoading = false;
+      if (state.selectedTab === '__live') {
+        renderLiveView();
+        // Keep the count-badge in the Live tab header in sync.
+        renderTabs();
+      }
+    }
+  }
+
+  function startLivePolling() {
+    stopLivePolling();
+    // Fire an immediate fetch; the view below will render a loading state
+    // until the promise resolves.
+    fetchLiveActivity();
+    state.livePollTimer = setInterval(fetchLiveActivity, LIVE_POLL_MS);
+  }
+
+  function stopLivePolling() {
+    if (state.livePollTimer) {
+      clearInterval(state.livePollTimer);
+      state.livePollTimer = null;
+    }
+  }
+
+  function activityClass(activity) {
+    const a = String(activity || '').toLowerCase();
+    return KNOWN_ACTIVITIES.indexOf(a) >= 0 ? a : 'idle';
+  }
+
+  function renderLiveView() {
+    const live = state.liveData;
+    const err = state.liveError;
+
+    // Initial loading state — no data yet, no error yet.
+    if (!live && !err) {
+      contentEl.innerHTML = `
+        <div class="data-card">
+          <div class="data-header">
+            <div class="data-title">🔴 Live Activity</div>
+            <div class="data-meta">Polling every 15s</div>
+          </div>
+          <div class="state">
+            <div class="spinner" style="border-color: rgba(138,148,163,0.3); border-top-color: var(--accent); width: 20px; height: 20px;"></div>
+            <p style="margin-top: 12px;">Loading live activity…</p>
+          </div>
+        </div>`;
+      return;
+    }
+
+    if (err && !live) {
+      contentEl.innerHTML = `
+        <div class="data-card error-card">
+          <div class="data-header">
+            <div class="data-title">🔴 Live Activity</div>
+          </div>
+          <div class="state">
+            <p style="color: var(--red);">Couldn't load live activity: ${escapeHtml(err)}</p>
+          </div>
+        </div>`;
+      return;
+    }
+
+    const users = Array.isArray(live.users) ? live.users : [];
+    const byTeam = live.byTeam && typeof live.byTeam === 'object' ? live.byTeam : {};
+
+    if (users.length === 0) {
+      contentEl.innerHTML = `
+        <div class="data-card">
+          <div class="data-header">
+            <div class="data-title">🔴 Live Activity</div>
+            <div class="data-meta">Polling every 15s${err ? ' · last fetch failed' : ''}</div>
+          </div>
+          <div class="state">
+            <p>No one is active right now.</p>
+          </div>
+        </div>`;
+      return;
+    }
+
+    const teamNames = Object.keys(byTeam).sort();
+    const teamCardsHtml = teamNames.map(teamName => {
+      const members = Array.isArray(byTeam[teamName]) ? byTeam[teamName] : [];
+      const chipsHtml = members.map(u => {
+        const act = activityClass(u.activity);
+        const tasks = Number(u.tasksDone || 0);
+        const prod = Math.round(Number(u.prodMin || 0));
+        const brk = Math.round(Number(u.breakMin || 0));
+        const age = Number(u.ageMin || 0);
+        const staleHtml = age > 2
+          ? `<div class="live-user-stale">⚠️ stale ${Math.round(age)}m ago</div>`
+          : '';
+        return `
+          <div class="live-user">
+            <div class="live-user-name">
+              ${escapeHtml(u.user || '—')}
+              <span class="live-badge ${act}">${escapeHtml(String(u.activity || 'idle'))}</span>
+            </div>
+            <div class="live-user-meta">${tasks} tasks · ${prod}m prod · ${brk}m break</div>
+            ${staleHtml}
+          </div>`;
+      }).join('');
+
+      return `
+        <div class="live-team-card">
+          <div class="live-team-head">
+            <div class="live-team-name">${escapeHtml(teamName)}</div>
+            <span class="count-badge">${members.length}</span>
+          </div>
+          <div class="live-users">${chipsHtml}</div>
+        </div>`;
+    }).join('');
+
+    const headerMeta = `${users.length} active · polling every 15s${err ? ' · last fetch failed' : ''}`;
+    contentEl.innerHTML = `
+      <div class="data-card">
+        <div class="data-header">
+          <div class="data-title">🔴 Live Activity</div>
+          <div class="data-meta">${escapeHtml(headerMeta)}</div>
+        </div>
+        ${teamCardsHtml}
+      </div>`;
   }
 
   function escapeHtml(s) {
