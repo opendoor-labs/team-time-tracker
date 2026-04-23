@@ -19,7 +19,7 @@ import IOKit
 import CoreGraphics
 
 // ── Constants ──────────────────────────────────────────────────────────
-let APP_VERSION = "2.7.1"
+let APP_VERSION = "2.7.2"
 let SHEET_URL = "https://script.google.com/macros/s/AKfycbxkBAtowwxWuKkaga-aR93ssyxuygFZC-zYXsdm22aVKhXWB45E4YKMKVmc0Ty_ByFk/exec"
 let INSTALL_DIR = NSHomeDirectory() + "/Library/TeamTracker"
 let HTML_PATH = INSTALL_DIR + "/index.html"
@@ -507,31 +507,78 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     }
 
     // ── Perform update (download + compile + relaunch) ─────────────────
+    //
+    // IMPORTANT: swiftc detects input type by file extension. If we pass
+    // `TeamTimeTracker.swift.new` it tries to link it as an object and
+    // fails with "ld: unknown file type". So we stage the new source into
+    // a .swift file BEFORE invoking swiftc. The script below:
+    //   1. Back up current .swift as .swift.bak (rollback point)
+    //   2. Install downloaded source to .swift.incoming
+    //   3. Rename .swift.incoming → TeamTimeTracker_v<ver>.swift
+    //   4. Compile that file (real .swift extension)
+    //   5. On compile success: swap binary + relaunch
+    //   6. On compile failure: restore .swift from .bak so we don't loop
+    //
     func performUpdate(version: String, sourceUrl: String) {
         guard let url = URL(string: sourceUrl) else { return }
         URLSession.shared.dataTask(with: url) { data, _, _ in
             guard let d = data, d.count > 10_000 else { return }
-            let newSwift = INSTALL_DIR + "/TeamTimeTracker.swift.new"
-            try? d.write(to: URL(fileURLWithPath: newSwift))
-            // Compile in place, replace, relaunch
+            let incoming = INSTALL_DIR + "/TeamTimeTracker.swift.incoming"
+            try? d.write(to: URL(fileURLWithPath: incoming))
+            // Sanitize version for filename (no dots issues): keep simple
+            let safeVer = version.replacingOccurrences(of: ".", with: "_")
             let script = """
-            cd \(INSTALL_DIR) && \
-            swiftc -O -o TeamTimeTracker.new TeamTimeTracker.swift.new \
-              -framework Cocoa -framework CoreGraphics -framework IOKit -framework WebKit && \
-            mv TeamTimeTracker.swift.new TeamTimeTracker.swift && \
-            mv TeamTimeTracker.new TeamTimeTracker && \
-            chmod +x TeamTimeTracker && \
-            cp TeamTimeTracker ~/Applications/TeamTimeTracker.app/Contents/MacOS/TeamTimeTracker && \
-            open ~/Applications/TeamTimeTracker.app
+            set -e
+            cd \(INSTALL_DIR)
+            # Preserve rollback point
+            cp -f TeamTimeTracker.swift TeamTimeTracker.swift.bak 2>/dev/null || true
+            # Stage the new source with a proper .swift extension
+            mv -f TeamTimeTracker.swift.incoming TeamTimeTracker_\(safeVer).swift
+            # Compile (real .swift extension so swiftc recognizes it)
+            if swiftc -O -o TeamTimeTracker.new TeamTimeTracker_\(safeVer).swift \
+                 -framework Cocoa -framework CoreGraphics -framework IOKit -framework WebKit 2>/tmp/teamtracker-build.log; then
+                # Compile OK — install the new source as the canonical file
+                mv -f TeamTimeTracker_\(safeVer).swift TeamTimeTracker.swift
+                mv -f TeamTimeTracker.new TeamTimeTracker
+                chmod +x TeamTimeTracker
+                cp -f TeamTimeTracker ~/Applications/TeamTimeTracker.app/Contents/MacOS/TeamTimeTracker
+                # Launch the updated bundle; LaunchAgent will also restart us
+                open ~/Applications/TeamTimeTracker.app || true
+                echo "UPDATE_OK version=\(version)" >> /tmp/teamtracker.log
+            else
+                # Compile failed — restore rollback, log, bail out (do NOT loop)
+                mv -f TeamTimeTracker.swift.bak TeamTimeTracker.swift 2>/dev/null || true
+                rm -f TeamTimeTracker_\(safeVer).swift TeamTimeTracker.new
+                echo "UPDATE_FAIL version=\(version) see /tmp/teamtracker-build.log" >> /tmp/teamtracker.log
+                exit 2
+            fi
             """
             let task = Process()
             task.launchPath = "/bin/bash"
             task.arguments = ["-c", script]
-            task.terminationHandler = { _ in
-                DispatchQueue.main.async { NSApp.terminate(nil) }
+            task.terminationHandler = { process in
+                DispatchQueue.main.async {
+                    if process.terminationStatus == 0 {
+                        NSApp.terminate(nil)
+                    } else {
+                        // Compile failed — stay up, let user know
+                        self.showUpdateFailedDialog(version: version)
+                    }
+                }
             }
             try? task.run()
         }.resume()
+    }
+
+    func showUpdateFailedDialog(version: String) {
+        let alert = NSAlert()
+        alert.messageText = "Update failed"
+        alert.informativeText = "Could not install v\(version). The app will keep running on v\(APP_VERSION).\n\nDetails: /tmp/teamtracker-build.log"
+        alert.addButton(withTitle: "OK")
+        alert.alertStyle = .warning
+        alert.icon = NSApp.applicationIconImage
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 }
 
