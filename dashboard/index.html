@@ -543,6 +543,34 @@
   }
   .gate-error.show { display: block; }
 
+  /* OTP UI */
+  .otp-hint {
+    color: #9aa7b8;
+    font-size: 13px;
+    margin: 0 0 10px;
+    text-align: center;
+  }
+  .otp-hint b { color: #e6edf5; }
+  #otpInput {
+    letter-spacing: 10px;
+    font-size: 22px;
+    text-align: center;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 12px 14px;
+  }
+  .otp-actions {
+    margin-top: 10px;
+    text-align: center;
+    font-size: 12.5px;
+    color: #7a8699;
+  }
+  .otp-actions a {
+    color: #4f8cff;
+    text-decoration: none;
+  }
+  .otp-actions a:hover { text-decoration: underline; }
+  .otp-actions .sep { margin: 0 8px; color: #3a4456; }
+
   .error-card {
     background: rgba(248, 113, 113, 0.08);
     border: 1px solid rgba(248, 113, 113, 0.3);
@@ -625,7 +653,7 @@
     <div id="emailPrompt" class="email-prompt hidden">
       <div class="logo-circle">🌅</div>
       <h2 id="gateGreet">Good morning, Team Lead</h2>
-      <p class="sub">Enter your Opendoor email to open your team's dashboard.</p>
+      <p class="sub" id="gateSub">Enter your Opendoor email — we'll send you a one-time sign-in code.</p>
 
       <!-- Daily leadership quote -->
       <div class="quote-card">
@@ -633,9 +661,22 @@
         <div class="quote-author" id="quoteAuthor">—</div>
       </div>
 
+      <!-- Step 1: Request code -->
       <form id="emailForm">
         <input type="email" id="emailInput" placeholder="you@opendoor.com" required autocomplete="email" />
-        <button type="submit" class="start-day-btn" id="startDayBtn">🌅 Start Your Day</button>
+        <button type="submit" class="start-day-btn" id="startDayBtn">✉️ Send Sign-in Code</button>
+      </form>
+
+      <!-- Step 2: Verify code -->
+      <form id="otpForm" class="hidden">
+        <div id="otpHint" class="otp-hint">We emailed a 6-digit code to <b id="otpEmailLabel"></b>. Check your inbox.</div>
+        <input type="text" id="otpInput" placeholder="123456" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" />
+        <button type="submit" class="start-day-btn" id="verifyOtpBtn">🔓 Verify &amp; Open Dashboard</button>
+        <div class="otp-actions">
+          <a href="#" id="resendLink">Resend code</a>
+          <span class="sep">·</span>
+          <a href="#" id="changeEmailLink">Change email</a>
+        </div>
       </form>
 
       <div id="gateError" class="gate-error"></div>
@@ -657,6 +698,7 @@
           <button id="refreshBtn" class="secondary">
             <span id="refreshLabel">Refresh</span>
           </button>
+          <button id="signOutBtn" class="secondary" title="Sign out of the dashboard">Sign out</button>
           <span id="updatedAt" class="updated-at"></span>
         </div>
       </div>
@@ -682,6 +724,7 @@
   // ---- State ----
   const state = {
     email: '',
+    token: '',
     date: '',
     data: null,
     selectedTab: null,
@@ -717,9 +760,9 @@
     };
   }
 
-  function updateUrl(email, date) {
+  function updateUrl(_unused, date) {
+    // Identity is in a session token now, not the URL — keep only date.
     const p = new URLSearchParams();
-    if (email) p.set('email', email);
     if (date) p.set('date', date);
     const newUrl = window.location.pathname + '?' + p.toString();
     window.history.pushState({}, '', newUrl);
@@ -738,7 +781,7 @@
     state.loading = true;
     setRefreshLoading(true);
 
-    const url = `${API_URL}?action=tlDashboard&email=${encodeURIComponent(state.email)}&date=${encodeURIComponent(state.date)}`;
+    const url = `${API_URL}?action=tlDashboard&token=${encodeURIComponent(state.token || '')}&date=${encodeURIComponent(state.date)}`;
 
     try {
       const res = await fetch(url, { method: 'GET' });
@@ -746,6 +789,10 @@
       const json = await res.json();
 
       if (!json.ok) {
+        if (json.error === 'session_expired' || json.error === 'forbidden') {
+          window.__signOut('Your session expired. Please sign in again.');
+          return;
+        }
         renderApiError(json.error || 'unknown_error');
         return;
       }
@@ -1217,11 +1264,17 @@
     if (state.liveLoading) return;
     state.liveLoading = true;
     try {
-      const email = encodeURIComponent(state.email || '');
-      const res = await fetch(`${API_URL}?action=liveActivity&email=${email}`, { method: 'GET' });
+      const token = encodeURIComponent(state.token || '');
+      const res = await fetch(`${API_URL}?action=liveActivity&token=${token}`, { method: 'GET' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      if (!json.ok) throw new Error(json.error || 'unknown_error');
+      if (!json.ok) {
+        if (json.error === 'session_expired' || json.error === 'forbidden') {
+          window.__signOut && window.__signOut('Your session expired. Please sign in again.');
+          return;
+        }
+        throw new Error(json.error || 'unknown_error');
+      }
       state.liveData = json;
       state.liveError = null;
     } catch (err) {
@@ -1432,6 +1485,18 @@
     if (!state.loading) fetchData();
   });
 
+  // Sign out — clears session token + email, returns to OTP gate
+  const signOutBtn = $('signOutBtn');
+  if (signOutBtn) {
+    signOutBtn.addEventListener('click', () => {
+      try {
+        localStorage.removeItem('ttk_dash_token');
+        localStorage.removeItem('ttk_dash_email');
+      } catch (e) {}
+      window.__signOut && window.__signOut('');
+    });
+  }
+
   // ── Leadership quotes — rotate daily by day-of-year ───────────────
   const LEADERSHIP_QUOTES = [
     { q: "A leader is one who knows the way, goes the way, and shows the way.", a: "John C. Maxwell" },
@@ -1505,35 +1570,104 @@
     box.textContent = '';
   }
 
-  async function verifyEmailAndEnter(email) {
+  // ── OTP flow ────────────────────────────────────────────────────────
+  // Two-step gate:
+  //   1) User enters email → POST requestOtp → email delivers 6-digit code
+  //   2) User enters code  → POST verifyOtp  → server returns session token
+  // Token is HMAC-signed + 8h TTL. Persisted in localStorage; included in
+  // every privileged API call. Expired tokens bounce the user back to gate.
+
+  const otpForm = $('otpForm');
+  const otpInput = $('otpInput');
+  const otpEmailLabel = $('otpEmailLabel');
+  const verifyOtpBtn = $('verifyOtpBtn');
+  const resendLink = $('resendLink');
+  const changeEmailLink = $('changeEmailLink');
+
+  let pendingEmail = '';
+
+  function showStep1() {
+    emailForm.classList.remove('hidden');
+    otpForm.classList.add('hidden');
+    hideGateError();
+    setTimeout(() => { try { emailInput.focus(); } catch (e) {} }, 50);
+  }
+  function showStep2(email) {
+    pendingEmail = email;
+    otpEmailLabel.textContent = email;
+    emailForm.classList.add('hidden');
+    otpForm.classList.remove('hidden');
+    hideGateError();
+    otpInput.value = '';
+    setTimeout(() => { try { otpInput.focus(); } catch (e) {} }, 50);
+  }
+
+  async function requestOtp(email) {
     hideGateError();
     const btn = $('startDayBtn');
     btn.disabled = true;
-    btn.textContent = '🔐 Verifying access…';
+    btn.textContent = '✉️ Sending code…';
     try {
-      const res = await fetch(`${API_URL}?action=whoami&email=${encodeURIComponent(email)}`);
+      const res = await fetch(`${API_URL}?action=requestOtp&email=${encodeURIComponent(email)}`);
       const json = await res.json();
       if (!json.ok) {
-        showGateError(`Access denied — ${email} is not on the TL Whitelist. Message @arun on Slack to request access.`);
+        if (json.error === 'not_whitelisted') {
+          showGateError(`Access denied — ${email} is not on the TL Whitelist. Message @arun on Slack to request access.`);
+        } else if (json.error === 'rate_limited') {
+          showGateError(json.message || 'Too many codes requested. Wait 10 minutes before trying again.');
+        } else {
+          showGateError(`Couldn't send code: ${json.error || 'unknown'}. Try again or ping @arun.`);
+        }
         btn.disabled = false;
-        btn.textContent = '🌅 Start Your Day';
+        btn.textContent = '✉️ Send Sign-in Code';
         return;
       }
-      // Whitelisted — persist for next visit, update URL, show dashboard
-      try { localStorage.setItem('ttk_dash_email', email.toLowerCase()); } catch (e) {}
-      const d = state.date || todayIsoLocal();
-      const newUrl = `${location.pathname}?email=${encodeURIComponent(email)}&date=${encodeURIComponent(d)}`;
-      history.replaceState(null, '', newUrl);
-      state.email = email.toLowerCase();
-      state.date = d;
+      showStep2(email);
+    } catch (err) {
+      showGateError(`Couldn't reach the server: ${err.message || err}.`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '✉️ Send Sign-in Code';
+    }
+  }
+
+  async function verifyOtp(email, code) {
+    hideGateError();
+    verifyOtpBtn.disabled = true;
+    verifyOtpBtn.textContent = '🔐 Verifying…';
+    try {
+      const res = await fetch(`${API_URL}?action=verifyOtp&email=${encodeURIComponent(email)}&code=${encodeURIComponent(code)}`);
+      const json = await res.json();
+      if (!json.ok) {
+        const msg = {
+          code_expired_or_invalid: 'Code expired. Click "Resend code" to get a new one.',
+          code_mismatch:           'Wrong code. Double-check the 6 digits and try again.',
+          not_whitelisted:         `Access revoked — ${email} is no longer on the Whitelist.`,
+          missing_fields:          'Enter the 6-digit code.',
+        }[json.error] || (json.error || 'unknown_error');
+        showGateError(msg);
+        verifyOtpBtn.disabled = false;
+        verifyOtpBtn.textContent = '🔓 Verify & Open Dashboard';
+        return;
+      }
+      // Success — persist token + email, enter dashboard
+      try {
+        localStorage.setItem('ttk_dash_token', json.token);
+        localStorage.setItem('ttk_dash_email', json.email);
+      } catch (e) {}
+      state.token = json.token;
+      state.email = json.email;
+      state.date = state.date || todayIsoLocal();
+      // Clean URL — don't leave the code floating in history
+      history.replaceState(null, '', `${location.pathname}?date=${encodeURIComponent(state.date)}`);
       emailPrompt.classList.add('hidden');
       dashboard.classList.remove('hidden');
       datePicker.value = state.date;
       fetchData();
     } catch (err) {
-      showGateError(`Couldn't reach the server: ${err.message || err}. Check your connection and try again.`);
-      btn.disabled = false;
-      btn.textContent = '🌅 Start Your Day';
+      showGateError(`Couldn't reach the server: ${err.message || err}.`);
+      verifyOtpBtn.disabled = false;
+      verifyOtpBtn.textContent = '🔓 Verify & Open Dashboard';
     }
   }
 
@@ -1545,35 +1679,73 @@
       showGateError('Please use your @opendoor.com email address.');
       return;
     }
-    verifyEmailAndEnter(v);
+    requestOtp(v);
   });
+
+  otpForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const code = otpInput.value.trim();
+    if (!/^\d{6}$/.test(code)) {
+      showGateError('Code must be 6 digits.');
+      return;
+    }
+    verifyOtp(pendingEmail, code);
+  });
+
+  resendLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (pendingEmail) requestOtp(pendingEmail);
+  });
+  changeEmailLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    pendingEmail = '';
+    emailInput.value = '';
+    showStep1();
+  });
+
+  // Exposed globally for fetchData() → 401 flow to kick user back to gate
+  window.__signOut = function (reason) {
+    try {
+      localStorage.removeItem('ttk_dash_token');
+    } catch (e) {}
+    state.token = '';
+    dashboard.classList.add('hidden');
+    emailPrompt.classList.remove('hidden');
+    if (reason) showGateError(reason);
+    showStep1();
+  };
 
   // ---- Init ----
   function init() {
     renderGreeting();
     renderDailyQuote();
 
-    const params = getParams();
-    // Prefer URL param; fall back to localStorage so returning TLs skip re-entry
-    let email = params.email;
-    if (!email) {
-      try { email = localStorage.getItem('ttk_dash_email') || ''; } catch (e) { email = ''; }
-    }
+    // Prefer stored token. If present, assume valid and load dashboard;
+    // backend will bounce us via session_expired if the token is stale.
+    let token = '';
+    let email = '';
+    try {
+      token = localStorage.getItem('ttk_dash_token') || '';
+      email = localStorage.getItem('ttk_dash_email') || '';
+    } catch (e) {}
 
-    if (!email) {
-      emailPrompt.classList.remove('hidden');
-      dashboard.classList.add('hidden');
-      setTimeout(() => { try { emailInput.focus(); } catch(e){} }, 50);
+    const params = getParams();
+    state.date = params.date || todayIsoLocal();
+
+    if (token && email) {
+      state.token = token;
+      state.email = email;
+      emailPrompt.classList.add('hidden');
+      dashboard.classList.remove('hidden');
+      datePicker.value = state.date;
+      fetchData();
       return;
     }
 
-    // Pre-fill and show gate while we verify — prevents flash of dashboard
-    // to a stale/forged email before whitelist check returns.
-    emailInput.value = email;
-    state.date = params.date || todayIsoLocal();
+    // No session — show gate
     emailPrompt.classList.remove('hidden');
     dashboard.classList.add('hidden');
-    verifyEmailAndEnter(email);
+    showStep1();
   }
 
   init();
