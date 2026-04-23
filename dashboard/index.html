@@ -5,714 +5,508 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Team Time Tracker — TL Dashboard</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ───── White/blue premium theme ───── */
   :root {
-    --bg: #0b0f14;
-    --card: #141a22;
-    --card-hover: #1a212b;
-    --border: #222b38;
-    --text: #e6edf5;
-    --muted: #8a94a3;
-    --accent: #5b8cff;
-    --accent-hover: #7aa0ff;
-    --purple: #a874ff;
-    --blue: #5b8cff;
-    --green: #4ade80;
-    --red: #f87171;
-    --yellow: #fbbf24;
+    --bg:         #f7f9fc;
+    --surface:    #ffffff;
+    --border:     #e4e9f2;
+    --border-2:   #eef1f7;
+    --text:       #0f172a;
+    --text-2:     #475569;
+    --text-3:     #94a3b8;
+    --brand:      #2563eb;
+    --brand-50:   #eff6ff;
+    --brand-100:  #dbeafe;
+    --brand-600:  #1d4ed8;
+    --green:      #10b981;
+    --green-50:   #ecfdf5;
+    --red:        #ef4444;
+    --red-50:     #fef2f2;
+    --amber:      #f59e0b;
+    --amber-50:   #fffbeb;
+    --purple:     #8b5cf6;
+    --purple-50:  #f5f3ff;
+    --shadow-sm:  0 1px 2px rgba(15,23,42,0.04), 0 1px 1px rgba(15,23,42,0.02);
+    --shadow:     0 4px 6px -1px rgba(15,23,42,0.05), 0 2px 4px -2px rgba(15,23,42,0.03);
+    --shadow-lg:  0 20px 25px -5px rgba(15,23,42,0.08), 0 8px 10px -6px rgba(15,23,42,0.04);
   }
 
-  * { box-sizing: border-box; }
-
   html, body {
-    margin: 0;
-    padding: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    font-size: 14px;
-    line-height: 1.5;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-feature-settings: 'cv11','ss01';
+    -webkit-font-smoothing: antialiased;
     min-height: 100vh;
   }
 
-  .container {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 20px;
-  }
+  .container { max-width: 1400px; margin: 0 auto; padding: 28px 32px; }
+  .hidden { display: none !important; }
 
-  /* Header */
-  .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 20px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    margin-bottom: 20px;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
+  /* ───── Top bar ───── */
+  .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo { width: 40px; height: 40px; border-radius: 10px;
+          background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+          display: flex; align-items: center; justify-content: center; color: #fff;
+          font-weight: 800; font-size: 18px; box-shadow: var(--shadow); }
+  .brand h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+  .brand .sub { color: var(--text-3); font-size: 13px; margin-top: 2px; }
 
-  .header h1 {
-    font-size: 16px;
-    font-weight: 600;
-    margin: 0;
-    color: var(--text);
-    letter-spacing: -0.01em;
-  }
+  .topbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
+  .date-input, input[type="date"] { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+                padding: 7px 12px; border-radius: 8px; font-size: 13px; font-family: inherit; }
+  .date-input:focus, input[type="date"]:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-50); }
 
-  .email-chip {
-    color: var(--muted);
-    font-size: 13px;
-  }
+  .btn { background: var(--brand); color: #fff; border: none; padding: 7px 14px; border-radius: 8px;
+         font-size: 13px; font-weight: 500; cursor: pointer; font-family: inherit;
+         display: inline-flex; align-items: center; gap: 6px; transition: background 0.15s; }
+  .btn:hover { background: var(--brand-600); }
+  .btn.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .btn.secondary:hover { background: var(--brand-50); border-color: var(--brand); color: var(--brand-600); }
+  .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
-  .role-badge {
-    display: inline-block;
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
+  .spinner { display: inline-block; width: 12px; height: 12px;
+             border: 2px solid rgba(37,99,235,0.25); border-top-color: var(--brand);
+             border-radius: 50%; animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
-  .role-badge.super-admin {
-    background: rgba(168, 116, 255, 0.15);
-    color: var(--purple);
-    border: 1px solid rgba(168, 116, 255, 0.3);
-  }
+  .updated-at { color: var(--text-3); font-size: 12px; }
 
-  .role-badge.tl {
-    background: rgba(91, 140, 255, 0.15);
-    color: var(--blue);
-    border: 1px solid rgba(91, 140, 255, 0.3);
-  }
+  /* User pill & menu */
+  .user-pill { position: relative; display: flex; align-items: center; gap: 10px; background: var(--surface);
+               border: 1px solid var(--border); padding: 6px 14px 6px 6px; border-radius: 999px;
+               box-shadow: var(--shadow-sm); font-size: 13px; cursor: pointer; user-select: none;
+               transition: all .15s; }
+  .user-pill:hover { border-color: var(--brand); box-shadow: var(--shadow); }
+  .user-pill .chev-user { color: var(--text-3); font-size: 10px; margin-left: 2px; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg,#2563eb,#7c3aed);
+            color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
+  .user-menu { display: none; position: absolute; top: calc(100% + 6px); right: 0; background: var(--surface);
+               border: 1px solid var(--border); border-radius: 12px; padding: 4px; min-width: 240px; z-index: 30;
+               box-shadow: var(--shadow-lg); }
+  .user-pill.open .user-menu { display: block; }
+  .user-menu .mrow { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 7px;
+                     cursor: pointer; font-size: 13px; color: var(--text); font-weight: 500; }
+  .user-menu .mrow:hover { background: var(--brand-50); }
+  .user-menu .mrow.danger { color: var(--red); }
+  .user-menu .mrow.danger:hover { background: var(--red-50); }
+  .user-menu .mrow .ico { width: 16px; text-align: center; font-size: 13px; opacity: 0.7; }
+  .user-menu .divider { height: 1px; background: var(--border-2); margin: 4px 8px; }
+  .user-menu .mheader { padding: 12px; border-bottom: 1px solid var(--border-2); margin-bottom: 4px; }
+  .user-menu .mheader .name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .user-menu .mheader .email { font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
 
-  input[type="date"], input[type="email"] {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 7px 10px;
-    border-radius: 8px;
-    font-size: 13px;
-    font-family: inherit;
-    color-scheme: dark;
-  }
+  .role-badge { display: inline-block; padding: 3px 10px; border-radius: 999px;
+                font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .role-badge.super-admin { background: var(--purple-50); color: var(--purple); }
+  .role-badge.tl { background: var(--brand-50); color: var(--brand); }
 
-  input[type="date"]:focus, input[type="email"]:focus {
-    outline: none;
-    border-color: var(--accent);
-  }
+  /* ───── Summary cards ───── */
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px;
+          box-shadow: var(--shadow-sm); position: relative; overflow: hidden; }
+  .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+                  background: linear-gradient(90deg, var(--card-accent), var(--card-accent-2)); }
+  .card[data-c="tasks"]   { --card-accent:#2563eb; --card-accent-2:#60a5fa; }
+  .card[data-c="prod"]    { --card-accent:#10b981; --card-accent-2:#34d399; }
+  .card[data-c="break"]   { --card-accent:#f59e0b; --card-accent-2:#fbbf24; }
+  .card[data-c="util"]    { --card-accent:#8b5cf6; --card-accent-2:#a78bfa; }
+  .card .k { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em;
+             font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+  .card .k .icon { width: 16px; height: 16px; border-radius: 4px; background: var(--card-accent);
+                   display: inline-flex; align-items: center; justify-content: center; color: #fff;
+                   font-size: 9px; font-weight: 700; }
+  .card .v { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); }
+  .card .v .unit { font-size: 13px; color: var(--text-3); font-weight: 500; margin-left: 4px; }
+  .card .sub { font-size: 11px; color: var(--text-3); margin-top: 6px; }
 
-  button {
-    background: var(--accent);
-    color: white;
-    border: none;
-    padding: 7px 14px;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    font-family: inherit;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: background 0.15s;
-  }
-
-  button:hover { background: var(--accent-hover); }
-
-  button.secondary {
-    background: transparent;
-    color: var(--text);
-    border: 1px solid var(--border);
-  }
-
-  button.secondary:hover {
-    background: var(--card-hover);
-    border-color: var(--muted);
-  }
-
-  button:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .spinner {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border: 2px solid rgba(255,255,255,0.3);
-    border-top-color: white;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  .updated-at {
-    color: var(--muted);
-    font-size: 12px;
-  }
-
-  /* Tabs */
-  .tabs-wrap {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 8px;
-    margin-bottom: 16px;
-    overflow-x: auto;
-    white-space: nowrap;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-  }
-
+  /* ───── Tabs (restyled) ───── */
+  .tabs-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+               padding: 8px; margin-bottom: 16px; box-shadow: var(--shadow-sm);
+               overflow-x: auto; white-space: nowrap;
+               scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
   .tabs-wrap::-webkit-scrollbar { height: 6px; }
   .tabs-wrap::-webkit-scrollbar-track { background: transparent; }
   .tabs-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-  .tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 14px;
-    border-radius: 8px;
-    background: transparent;
-    color: var(--muted);
-    border: 1px solid transparent;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    margin-right: 4px;
-    transition: all 0.15s;
-  }
+  .tab { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px;
+         background: transparent; color: var(--text-2); border: 1px solid transparent;
+         font-size: 13px; font-weight: 500; cursor: pointer; margin-right: 4px;
+         transition: all 0.15s; font-family: inherit; }
+  .tab:hover { background: var(--brand-50); color: var(--text); }
+  .tab.active { background: var(--brand-50); color: var(--brand); border-color: var(--brand-100); font-weight: 600; }
+  .tab.admin { color: var(--purple); }
+  .tab.admin.active { background: var(--purple-50); color: var(--purple); border-color: rgba(139,92,246,0.25); }
+  .count-badge { display: inline-block; padding: 1px 7px; border-radius: 999px;
+                 background: var(--bg); color: var(--text-3);
+                 font-size: 11px; font-weight: 600; min-width: 20px; text-align: center; }
+  .tab.active .count-badge { background: var(--brand-100); color: var(--brand-600); }
+  .tab.admin.active .count-badge { background: rgba(139,92,246,0.15); color: var(--purple); }
 
-  .tab:hover {
-    background: var(--card-hover);
-    color: var(--text);
-  }
+  /* ───── Data card (contains leaderboard + table) ───── */
+  .data-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+               overflow: hidden; box-shadow: var(--shadow-sm); }
+  .data-header { padding: 14px 20px; border-bottom: 1px solid var(--border-2);
+                 display: flex; align-items: center; justify-content: space-between;
+                 gap: 12px; flex-wrap: wrap; }
+  .data-title { font-size: 15px; font-weight: 600; color: var(--text); }
+  .data-meta { color: var(--text-3); font-size: 12px; display: flex; align-items: center; gap: 14px; }
 
-  .tab.active {
-    background: rgba(91, 140, 255, 0.12);
-    color: var(--accent);
-    border-color: rgba(91, 140, 255, 0.3);
-  }
+  .csv-btn { background: var(--brand-50); color: var(--brand-600);
+             border: 1px solid var(--brand-100);
+             padding: 6px 12px; font-size: 12px; font-weight: 600; border-radius: 8px; cursor: pointer;
+             transition: all 0.15s; font-family: inherit;
+             display: inline-flex; align-items: center; gap: 5px; }
+  .csv-btn:hover { background: var(--brand-100); border-color: var(--brand); }
+  .csv-btn:active { transform: scale(0.97); }
 
-  .tab.admin {
-    color: var(--purple);
-  }
-
-  .tab.admin.active {
-    background: rgba(168, 116, 255, 0.12);
-    color: var(--purple);
-    border-color: rgba(168, 116, 255, 0.3);
-  }
-
-  .count-badge {
-    display: inline-block;
-    padding: 1px 7px;
-    border-radius: 999px;
-    background: rgba(138, 148, 163, 0.15);
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 600;
-    min-width: 20px;
-    text-align: center;
-  }
-
-  .tab.active .count-badge {
-    background: rgba(91, 140, 255, 0.25);
-    color: var(--accent);
-  }
-
-  .tab.admin.active .count-badge {
-    background: rgba(168, 116, 255, 0.25);
-    color: var(--purple);
-  }
-
-  /* Data section */
-  .data-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-  }
-
-  .data-header {
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-
-  .data-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text);
-  }
-
-  .data-meta {
-    color: var(--muted);
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-  }
-
-  /* Export CSV button, lives in the table header */
-  .csv-btn {
-    background: rgba(91,140,255,0.12);
-    color: #5b8cff;
-    border: 1px solid rgba(91,140,255,0.3);
-    padding: 6px 12px;
-    font-size: 12px;
-    font-weight: 600;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background 0.15s, transform 0.1s;
-  }
-  .csv-btn:hover {
-    background: rgba(91,140,255,0.2);
-  }
-  .csv-btn:active {
-    transform: scale(0.97);
-  }
-
-  /* ─── Leaderboard summary (above the log table) ───────────────────── */
-  .lb-wrap {
-    margin: 14px 18px 6px;
-    padding: 14px 16px 12px;
-    background: linear-gradient(135deg, rgba(91,140,255,0.06), rgba(191,90,242,0.04));
-    border: 1px solid rgba(91,140,255,0.2);
-    border-radius: 10px;
-  }
-  .lb-head {
-    display: flex; justify-content: space-between; align-items: center;
-    font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
-    text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
-  }
-  .lb-head .lb-sub { font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 11px; }
+  /* Leaderboard */
+  .lb-wrap { margin: 14px 20px 10px; padding: 14px 16px 12px;
+             background: linear-gradient(135deg, var(--brand-50), var(--purple-50));
+             border: 1px solid var(--brand-100); border-radius: 12px; }
+  .lb-head { display: flex; justify-content: space-between; align-items: center;
+             font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
+             text-transform: uppercase; color: var(--text-3); margin-bottom: 10px; }
+  .lb-head .lb-sub { font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 11px; color: var(--text-2); }
   .lb-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .lb-table th {
-    text-align: left; font-size: 11px; font-weight: 600; color: var(--muted);
-    text-transform: uppercase; letter-spacing: 0.04em;
-    padding: 6px 10px; border-bottom: 1px solid var(--border);
-  }
-  .lb-table td {
-    padding: 8px 10px;
-    border-bottom: 1px solid rgba(34,43,56,0.5);
-    color: var(--text);
-  }
+  .lb-table th { text-align: left; font-size: 10.5px; font-weight: 600; color: var(--text-3);
+                 text-transform: uppercase; letter-spacing: 0.04em;
+                 padding: 6px 10px; border-bottom: 1px solid var(--border-2); }
+  .lb-table td { padding: 8px 10px; border-bottom: 1px solid var(--border-2); color: var(--text); }
   .lb-table tr:last-child td { border-bottom: none; }
-  .lb-rank { font-weight: 700; color: var(--muted); width: 42px; text-align: center; }
-  .lb-rank.gold   { color: #fbbf24; font-size: 14px; }
-  .lb-rank.silver { color: #c0c0c0; font-size: 13px; }
-  .lb-rank.bronze { color: #cd7f32; font-size: 13px; }
-  .lb-name { font-weight: 600; }
-  .lb-num  { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; white-space: nowrap; }
-  .lb-util-good { color: #4ade80; font-weight: 700; }
-  .lb-util-ok   { color: #fbbf24; font-weight: 700; }
-  .lb-util-low  { color: #ff6b5b; font-weight: 700; }
-  .lb-empty { text-align: center; padding: 14px; color: var(--muted); font-size: 12px; }
+  .lb-rank { font-weight: 700; color: var(--text-3); width: 42px; text-align: center; }
+  .lb-rank.gold   { color: #b45309; font-size: 15px; }
+  .lb-rank.silver { color: #64748b; font-size: 14px; }
+  .lb-rank.bronze { color: #92400e; font-size: 14px; }
+  .lb-name { font-weight: 600; color: var(--text); }
+  .lb-num  { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; white-space: nowrap; color: var(--text); }
+  .lb-util-good { color: var(--green); font-weight: 700; }
+  .lb-util-ok   { color: var(--amber); font-weight: 700; }
+  .lb-util-low  { color: var(--red); font-weight: 700; }
 
-  .table-wrap {
-    overflow-x: auto;
-    max-height: calc(100vh - 340px);
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-  }
-
+  /* Main table */
+  .table-wrap { overflow-x: auto; max-height: calc(100vh - 420px);
+                scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
   .table-wrap::-webkit-scrollbar { height: 8px; width: 8px; }
   .table-wrap::-webkit-scrollbar-track { background: transparent; }
   .table-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { position: sticky; top: 0; background: var(--bg); color: var(--text-3);
+             font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+             text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--border-2);
+             white-space: nowrap; z-index: 1; }
+  tbody td { padding: 10px 16px; border-bottom: 1px solid var(--border-2); color: var(--text); vertical-align: top; }
+  tbody tr:hover td { background: var(--brand-50); }
+  tbody tr:last-child td { border-bottom: none; }
 
-  thead th {
-    position: sticky;
-    top: 0;
-    background: #1a212b;
-    color: var(--muted);
-    font-weight: 600;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    text-align: left;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
-    white-space: nowrap;
-    z-index: 1;
-  }
+  tbody td.col-time, tbody td.col-duration { font-family: "SF Mono", Menlo, Consolas, monospace;
+            font-size: 12px; color: var(--text-2); white-space: nowrap; }
 
-  tbody td {
-    padding: 10px 14px;
-    border-bottom: 1px solid rgba(34, 43, 56, 0.5);
-    color: var(--text);
-    vertical-align: top;
-  }
-
-  tbody tr:nth-child(odd) { background: rgba(255,255,255,0.015); }
-  tbody tr:hover { background: rgba(91, 140, 255, 0.06); }
-
-  tbody td.col-time {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px;
-    color: var(--muted);
-    white-space: nowrap;
-  }
-
-  tbody td.col-duration {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .status-pill {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-  }
-
-  .status-pill.completed { background: rgba(74, 222, 128, 0.15); color: var(--green); }
-  .status-pill.in-progress, .status-pill.running { background: rgba(251, 191, 36, 0.15); color: var(--yellow); }
-  .status-pill.cancelled, .status-pill.stopped { background: rgba(248, 113, 113, 0.15); color: var(--red); }
+  .status-pill { display: inline-block; padding: 2px 10px; border-radius: 999px;
+                 font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+  .status-pill.completed { background: var(--green-50); color: #047857; }
+  .status-pill.in-progress, .status-pill.running { background: var(--amber-50); color: #b45309; }
+  .status-pill.cancelled, .status-pill.stopped { background: var(--red-50); color: var(--red); }
 
   /* Empty / error / loading states */
-  .state {
-    padding: 60px 24px;
-    text-align: center;
-    color: var(--muted);
-  }
+  .state { padding: 60px 24px; text-align: center; color: var(--text-3); }
+  .state h2 { color: var(--text); font-size: 16px; margin: 0 0 8px 0; font-weight: 600; }
+  .state p { margin: 4px 0; font-size: 13px; }
+  .state .actions { margin-top: 20px; display: flex; gap: 10px; justify-content: center; }
 
-  .state h2 {
-    color: var(--text);
-    font-size: 16px;
-    margin: 0 0 8px 0;
-    font-weight: 600;
-  }
+  .error-card { background: var(--red-50); border-color: rgba(239,68,68,0.3); }
 
-  .state p {
-    margin: 4px 0;
-    font-size: 13px;
-  }
+  /* ───── Live Activity ───── */
+  .live-team-card { padding: 16px; background: var(--surface); border: 1px solid var(--border);
+                    border-radius: 12px; margin: 14px 20px; }
+  .live-team-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .live-team-name { font-weight: 600; font-size: 15px; color: var(--text); }
+  .live-users { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .live-user { background: var(--bg); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-2); }
+  .live-user-name { font-weight: 600; font-size: 13px; color: var(--text); }
+  .live-user-meta { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+  .live-user-stale { font-size: 11px; color: var(--red); margin-top: 2px; font-style: italic; }
+  .live-user-shift { font-size: 11px; color: var(--green); margin-top: 2px; font-weight: 500; }
+  .live-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px;
+                font-weight: 600; text-transform: uppercase; margin-left: 6px; letter-spacing: 0.03em; }
+  .live-badge.production { background: var(--green-50); color: #047857; }
+  .live-badge.break      { background: var(--amber-50); color: #b45309; }
+  .live-badge.meeting    { background: var(--purple-50); color: var(--purple); }
+  .live-badge.training   { background: rgba(6,182,212,0.12); color: #0e7490; }
+  .live-badge.dinner     { background: rgba(249,115,22,0.12); color: #c2410c; }
+  .live-badge.idle       { background: var(--bg); color: var(--text-3); }
 
-  .state .actions {
-    margin-top: 20px;
-    display: flex;
-    gap: 10px;
-    justify-content: center;
-  }
+  /* ───── Modals (Profile, Help) ───── */
+  .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.4);
+                    backdrop-filter: blur(4px); z-index: 100; align-items: center;
+                    justify-content: center; padding: 20px; }
+  .modal-backdrop.open { display: flex; }
+  .modal { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow-lg);
+           width: 100%; max-width: 460px; overflow: hidden; animation: pop .18s ease-out; }
+  @keyframes pop { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .modal .m-head { padding: 20px 24px; border-bottom: 1px solid var(--border-2);
+                   display: flex; justify-content: space-between; align-items: center; }
+  .modal .m-head .title { font-size: 16px; font-weight: 700; color: var(--text); }
+  .modal .m-close { background: transparent; border: none; cursor: pointer; color: var(--text-3);
+                    font-size: 22px; line-height: 1; padding: 0; width: 28px; height: 28px; border-radius: 6px;
+                    display: flex; align-items: center; justify-content: center; }
+  .modal .m-close:hover { background: var(--bg); color: var(--text); }
+  .modal .m-body { padding: 20px 24px; }
+  .modal .m-row { display: flex; justify-content: space-between; padding: 10px 0;
+                  border-bottom: 1px solid var(--border-2); font-size: 13.5px; }
+  .modal .m-row:last-of-type { border-bottom: none; }
+  .modal .m-row .k { color: var(--text-3); font-weight: 500; }
+  .modal .m-row .v { color: var(--text); font-weight: 600; text-align: right; }
+  .modal .profile-top { display: flex; align-items: center; gap: 14px; padding-bottom: 16px;
+                        border-bottom: 1px solid var(--border-2); margin-bottom: 8px; }
+  .modal .profile-top .avatar-lg { width: 56px; height: 56px; border-radius: 50%;
+                                    background: linear-gradient(135deg,#2563eb,#7c3aed); color: #fff;
+                                    display: flex; align-items: center; justify-content: center;
+                                    font-size: 18px; font-weight: 700; }
+  .modal .profile-top .name-lg { font-size: 17px; font-weight: 700; color: var(--text); }
+  .modal .profile-top .role-badge-m { display: inline-block; background: var(--brand-50); color: var(--brand-600);
+                                     font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+                                     margin-top: 4px; }
+  .modal .team-chip { display: inline-block; background: var(--bg); border: 1px solid var(--border);
+                       padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 500;
+                       color: var(--text-2); margin: 3px 3px 0 0; }
+  .modal h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3);
+              margin-top: 14px; margin-bottom: 8px; font-weight: 600; }
+  .modal .how-list { font-size: 13px; color: var(--text-2); line-height: 1.6; padding-left: 18px; }
+  .modal .how-list li { margin-bottom: 4px; }
+  .modal .contact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+  .modal .contact-btn { display: flex; flex-direction: column; align-items: center; gap: 6px;
+                         padding: 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+                         text-decoration: none; color: var(--text); cursor: pointer; transition: all .15s;
+                         font-family: inherit; font-size: 12.5px; font-weight: 500; }
+  .modal .contact-btn:hover { background: var(--brand-50); border-color: var(--brand); color: var(--brand-600); }
+  .modal .contact-btn .c-ico { font-size: 22px; }
+  .modal .version-note { margin-top: 16px; padding: 10px 14px; background: var(--bg); border-radius: 8px;
+                          font-size: 11.5px; color: var(--text-3); display: flex; justify-content: space-between; }
 
-  /* TL gate — whitelist-only email access */
+  /* ───── ORANGE OTP LOGIN GATE (unchanged look & feel) ───── */
   .email-prompt {
     max-width: 500px;
     margin: 60px auto;
     padding: 40px 36px;
-    background: var(--card);
-    border: 1px solid var(--border);
+    background: #141a22;
+    border: 1px solid #222b38;
     border-radius: 16px;
     text-align: center;
     box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+    color: #e6edf5;
   }
   .email-prompt .logo-circle {
-    width: 72px;
-    height: 72px;
-    border-radius: 18px;
+    width: 72px; height: 72px; border-radius: 18px;
     background: linear-gradient(135deg, #ff9f0a 0%, #ff453a 100%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0 auto 18px;
-    font-size: 36px;
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 18px; font-size: 36px;
     box-shadow: 0 12px 28px rgba(255,159,10,0.35);
   }
-  .email-prompt h2 {
-    margin: 0 0 6px 0;
-    font-size: 22px;
-    font-weight: 700;
-  }
-  .email-prompt .sub {
-    color: var(--muted);
-    margin: 0 0 20px 0;
-    font-size: 13px;
-    line-height: 1.5;
-  }
-  /* Daily quote card */
-  .quote-card {
-    background: linear-gradient(135deg, rgba(91,140,255,0.10), rgba(191,90,242,0.06));
-    border: 1px solid rgba(91,140,255,0.25);
-    padding: 16px 18px;
-    border-radius: 12px;
-    margin: 0 0 22px 0;
-    text-align: left;
-  }
-  .quote-text {
-    font-size: 14px;
-    line-height: 1.55;
-    color: #e8eaed;
-    font-style: italic;
-  }
-  .quote-author {
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 8px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-  /* Form */
-  .email-prompt form {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .email-prompt input {
-    padding: 13px 14px;
-    font-size: 14px;
-    background: rgba(0,0,0,0.25);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    color: var(--text);
-    text-align: center;
-  }
-  .email-prompt input:focus {
-    outline: none;
-    border-color: rgba(255,159,10,0.55);
-    box-shadow: 0 0 0 3px rgba(255,159,10,0.15);
-  }
-  .start-day-btn {
-    padding: 14px 18px;
-    background: linear-gradient(135deg, #ff9f0a, #ff453a);
-    color: white;
-    border: none;
-    border-radius: 12px;
-    font-size: 15px;
-    font-weight: 700;
-    cursor: pointer;
-    box-shadow: 0 10px 28px rgba(255,69,58,0.30), inset 0 1px 0 rgba(255,255,255,0.22);
-    transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
-    letter-spacing: 0.2px;
-  }
-  .start-day-btn:hover {
-    transform: translateY(-1px);
-    filter: brightness(1.04);
-    box-shadow: 0 14px 34px rgba(255,69,58,0.42), inset 0 1px 0 rgba(255,255,255,0.28);
-  }
-  .start-day-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
-  }
-  .gate-hint {
-    margin-top: 16px;
-    font-size: 11px;
-    color: var(--muted);
-    line-height: 1.5;
-  }
-  .gate-error {
-    margin-top: 14px;
-    padding: 11px 14px;
-    background: rgba(255,69,58,0.12);
-    border: 1px solid rgba(255,69,58,0.35);
-    border-radius: 10px;
-    color: #ff8b80;
-    font-size: 13px;
-    text-align: left;
-    display: none;
-  }
+  .email-prompt h2 { margin: 0 0 6px 0; font-size: 22px; font-weight: 700; color: #e6edf5; }
+  .email-prompt .gsub { color: #8a94a3; margin: 0 0 20px 0; font-size: 13px; line-height: 1.5; }
+  .quote-card { background: linear-gradient(135deg, rgba(91,140,255,0.10), rgba(191,90,242,0.06));
+                border: 1px solid rgba(91,140,255,0.25); padding: 16px 18px; border-radius: 12px;
+                margin: 0 0 22px 0; text-align: left; }
+  .quote-text { font-size: 14px; line-height: 1.55; color: #e8eaed; font-style: italic; }
+  .quote-author { font-size: 11px; color: #8a94a3; margin-top: 8px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .email-prompt form { display: flex; flex-direction: column; gap: 10px; }
+  .email-prompt input { padding: 13px 14px; font-size: 14px; background: rgba(0,0,0,0.25);
+                        border: 1px solid #222b38; border-radius: 10px; color: #e6edf5; text-align: center;
+                        font-family: inherit; }
+  .email-prompt input:focus { outline: none; border-color: rgba(255,159,10,0.55);
+                              box-shadow: 0 0 0 3px rgba(255,159,10,0.15); }
+  .start-day-btn { padding: 14px 18px;
+                   background: linear-gradient(135deg, #ff9f0a, #ff453a); color: white;
+                   border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer;
+                   box-shadow: 0 10px 28px rgba(255,69,58,0.30), inset 0 1px 0 rgba(255,255,255,0.22);
+                   transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+                   letter-spacing: 0.2px; font-family: inherit; }
+  .start-day-btn:hover { transform: translateY(-1px); filter: brightness(1.04);
+                         box-shadow: 0 14px 34px rgba(255,69,58,0.42), inset 0 1px 0 rgba(255,255,255,0.28); }
+  .start-day-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .gate-hint { margin-top: 16px; font-size: 11px; color: #8a94a3; line-height: 1.5; }
+  .gate-error { margin-top: 14px; padding: 11px 14px;
+                background: rgba(255,69,58,0.12); border: 1px solid rgba(255,69,58,0.35);
+                border-radius: 10px; color: #ff8b80; font-size: 13px; text-align: left; display: none; }
   .gate-error.show { display: block; }
-
-  /* OTP UI */
-  .otp-hint {
-    color: #9aa7b8;
-    font-size: 13px;
-    margin: 0 0 10px;
-    text-align: center;
-  }
+  .otp-hint { color: #9aa7b8; font-size: 13px; margin: 0 0 10px; text-align: center; }
   .otp-hint b { color: #e6edf5; }
-  #otpInput {
-    letter-spacing: 10px;
-    font-size: 22px;
-    text-align: center;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    padding: 12px 14px;
-  }
-  .otp-actions {
-    margin-top: 10px;
-    text-align: center;
-    font-size: 12.5px;
-    color: #7a8699;
-  }
-  .otp-actions a {
-    color: #4f8cff;
-    text-decoration: none;
-  }
+  #otpInput { letter-spacing: 10px; font-size: 22px; text-align: center;
+              font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding: 12px 14px; }
+  .otp-actions { margin-top: 10px; text-align: center; font-size: 12.5px; color: #7a8699; }
+  .otp-actions a { color: #4f8cff; text-decoration: none; cursor: pointer; }
   .otp-actions a:hover { text-decoration: underline; }
   .otp-actions .sep { margin: 0 8px; color: #3a4456; }
+  /* orange gate lives on a dark page body while it's visible */
+  body.gate-mode { background: #0b0f14 !important; }
 
-  .error-card {
-    background: rgba(248, 113, 113, 0.08);
-    border: 1px solid rgba(248, 113, 113, 0.3);
+  @media (max-width: 768px) {
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    .container { padding: 16px; }
   }
-
-  .hidden { display: none !important; }
-
-  /* ── Live Activity tab ──────────────────────────────────────── */
-  .live-team-card {
-    padding: 16px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    margin-bottom: 16px;
-  }
-  .live-team-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-  }
-  .live-team-name {
-    font-weight: 600;
-    font-size: 15px;
-  }
-  .live-users {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 10px;
-  }
-  .live-user {
-    background: var(--card-hover);
-    padding: 10px 12px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-  }
-  .live-user-name {
-    font-weight: 600;
-    font-size: 13px;
-  }
-  .live-user-meta {
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 4px;
-  }
-  .live-user-stale {
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 2px;
-    font-style: italic;
-  }
-  .live-user-shift {
-    font-size: 11px;
-    color: #30d158;
-    margin-top: 2px;
-    font-weight: 500;
-  }
-  .live-badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    margin-left: 6px;
-    letter-spacing: 0.03em;
-  }
-  .live-badge.production { background: rgba(74, 222, 128, 0.15); color: var(--green); }
-  .live-badge.break      { background: rgba(251, 191, 36, 0.15); color: var(--yellow); }
-  .live-badge.meeting    { background: rgba(168, 116, 255, 0.15); color: var(--purple); }
-  .live-badge.training   { background: rgba(91, 140, 255, 0.15); color: var(--blue); }
-  .live-badge.dinner     { background: rgba(255, 159, 10, 0.15); color: #ff9f0a; }
-  .live-badge.idle       { background: rgba(138, 148, 163, 0.15); color: var(--muted); }
 </style>
 </head>
 <body>
-  <div class="container">
 
-    <!-- TL whitelist gate (shown until email verified against Whitelist tab) -->
-    <div id="emailPrompt" class="email-prompt hidden">
-      <div class="logo-circle">🌅</div>
-      <h2 id="gateGreet">Good morning, Team Lead</h2>
-      <p class="sub" id="gateSub">Enter your Opendoor email — we'll send you a one-time sign-in code.</p>
+  <!-- ─── ORANGE OTP LOGIN (unchanged) ─── -->
+  <div id="emailPrompt" class="email-prompt hidden">
+    <div class="logo-circle">🌅</div>
+    <h2 id="gateGreet">Good morning, Team Lead</h2>
+    <p class="gsub" id="gateSub">Enter your Opendoor email — we'll send you a one-time sign-in code.</p>
 
-      <!-- Daily leadership quote -->
-      <div class="quote-card">
-        <div class="quote-text" id="quoteText">—</div>
-        <div class="quote-author" id="quoteAuthor">—</div>
-      </div>
-
-      <!-- Step 1: Request code -->
-      <form id="emailForm">
-        <input type="email" id="emailInput" placeholder="you@opendoor.com" required autocomplete="email" />
-        <button type="submit" class="start-day-btn" id="startDayBtn">✉️ Send Sign-in Code</button>
-      </form>
-
-      <!-- Step 2: Verify code -->
-      <form id="otpForm" class="hidden">
-        <div id="otpHint" class="otp-hint">We emailed a 6-digit code to <b id="otpEmailLabel"></b>. Check your inbox.</div>
-        <input type="text" id="otpInput" placeholder="123456" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" />
-        <button type="submit" class="start-day-btn" id="verifyOtpBtn">🔓 Verify &amp; Open Dashboard</button>
-        <div class="otp-actions">
-          <a href="#" id="resendLink">Resend code</a>
-          <span class="sep">·</span>
-          <a href="#" id="changeEmailLink">Change email</a>
-        </div>
-      </form>
-
-      <div id="gateError" class="gate-error"></div>
-
-      <p class="gate-hint">
-        Access is restricted to emails on the TL Whitelist.<br>
-        If you need access, message <b>@arun</b> on Slack.
-      </p>
+    <div class="quote-card">
+      <div class="quote-text" id="quoteText">—</div>
+      <div class="quote-author" id="quoteAuthor">—</div>
     </div>
 
-    <!-- Main dashboard -->
-    <div id="dashboard" class="hidden">
-      <div class="header">
-        <h1>Team Time Tracker — TL Dashboard</h1>
-        <div class="header-right">
-          <span id="emailChip" class="email-chip"></span>
-          <span id="roleBadge" class="role-badge tl">TL</span>
-          <input type="date" id="datePicker" />
-          <button id="refreshBtn" class="secondary">
+    <form id="emailForm">
+      <input type="email" id="emailInput" placeholder="you@opendoor.com" required autocomplete="email" />
+      <button type="submit" class="start-day-btn" id="startDayBtn">✉️ Send Sign-in Code</button>
+    </form>
+
+    <form id="otpForm" class="hidden">
+      <div id="otpHint" class="otp-hint">We emailed a 6-digit code to <b id="otpEmailLabel"></b>. Check your inbox.</div>
+      <input type="text" id="otpInput" placeholder="123456" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" />
+      <button type="submit" class="start-day-btn" id="verifyOtpBtn">🔓 Verify &amp; Open Dashboard</button>
+      <div class="otp-actions">
+        <a id="resendLink">Resend code</a>
+        <span class="sep">·</span>
+        <a id="changeEmailLink">Change email</a>
+      </div>
+    </form>
+
+    <div id="gateError" class="gate-error"></div>
+
+    <p class="gate-hint">
+      Access is restricted to emails on the TL Whitelist.<br>
+      If you need access, message <b>@arun</b> on Slack.
+    </p>
+  </div>
+
+  <!-- ─── WHITE/BLUE MAIN DASHBOARD ─── -->
+  <div id="dashboard" class="hidden">
+    <div class="container">
+
+      <!-- Top bar -->
+      <div class="topbar">
+        <div class="brand">
+          <div class="logo">T</div>
+          <div>
+            <h1>Team Time Tracker</h1>
+            <div class="sub">Team Lead Dashboard</div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <input type="date" id="datePicker" class="date-input" />
+          <button id="refreshBtn" class="btn secondary">
             <span id="refreshLabel">Refresh</span>
           </button>
-          <button id="signOutBtn" class="secondary" title="Sign out of the dashboard">Sign out</button>
           <span id="updatedAt" class="updated-at"></span>
+          <span id="roleBadge" class="role-badge tl">TL</span>
+
+          <!-- User pill with dropdown -->
+          <div class="user-pill" id="userPill">
+            <div class="avatar" id="userAvatar">··</div>
+            <span id="emailChip">—</span>
+            <span class="chev-user">▼</span>
+            <div class="user-menu">
+              <div class="mheader">
+                <div class="name" id="menuName">—</div>
+                <div class="email" id="menuEmail">—</div>
+              </div>
+              <div class="mrow" id="profileBtn"><span class="ico">👤</span>My profile</div>
+              <div class="mrow" id="helpBtn"><span class="ico">❓</span>Help</div>
+              <div class="divider"></div>
+              <div class="mrow danger" id="signOutBtn"><span class="ico">↪</span>Sign out</div>
+            </div>
+          </div>
         </div>
       </div>
 
+      <!-- Summary cards -->
+      <div id="cards" class="cards hidden"></div>
+
+      <!-- Tabs -->
       <div id="tabs" class="tabs-wrap hidden"></div>
 
+      <!-- Content -->
       <div id="content">
-        <div class="state">
-          <div class="spinner" style="border-color: rgba(138,148,163,0.3); border-top-color: var(--accent); width: 20px; height: 20px;"></div>
-          <p style="margin-top: 12px;">Loading…</p>
+        <div class="data-card">
+          <div class="state">
+            <div class="spinner" style="width: 20px; height: 20px;"></div>
+            <p style="margin-top: 12px;">Loading…</p>
+          </div>
         </div>
       </div>
     </div>
+  </div>
 
+  <!-- ─── Profile Modal ─── -->
+  <div class="modal-backdrop" id="profileModal">
+    <div class="modal">
+      <div class="m-head">
+        <span class="title">My Profile</span>
+        <button class="m-close" data-close="profileModal">×</button>
+      </div>
+      <div class="m-body">
+        <div class="profile-top">
+          <div class="avatar-lg" id="profileAvatar">··</div>
+          <div>
+            <div class="name-lg" id="profileName">—</div>
+            <div class="role-badge-m" id="profileRole">Team Lead</div>
+          </div>
+        </div>
+        <div class="m-row"><span class="k">Name</span><span class="v" id="profileNameRow">—</span></div>
+        <div class="m-row"><span class="k">Email</span><span class="v" id="profileEmailRow">—</span></div>
+        <div class="m-row"><span class="k">Designation</span><span class="v" id="profileDesignation">Team Lead</span></div>
+        <h4>Teams you manage</h4>
+        <div id="profileTeams"><span class="team-chip">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Help Modal ─── -->
+  <div class="modal-backdrop" id="helpModal">
+    <div class="modal">
+      <div class="m-head">
+        <span class="title">Help &amp; Support</span>
+        <button class="m-close" data-close="helpModal">×</button>
+      </div>
+      <div class="m-body">
+        <h4>How to use this dashboard</h4>
+        <ul class="how-list">
+          <li>Pick a <b>date</b> to see that day's activity</li>
+          <li>Click <b>🔴 Live Activity</b> to see who's working right now (refreshes every 15s)</li>
+          <li>Click a <b>team tab</b> to see that team's log + leaderboard</li>
+          <li>Click <b>⬇ Export CSV</b> to download any table as a spreadsheet</li>
+          <li>Sign out from the avatar menu (top right)</li>
+        </ul>
+
+        <h4>Contact Admin</h4>
+        <div class="contact-grid">
+          <a class="contact-btn" href="mailto:arun.mohan@opendoor.com?subject=Team%20Time%20Tracker%20-%20Help">
+            <span class="c-ico">📧</span>
+            <span>Email Arun</span>
+          </a>
+          <a class="contact-btn" href="https://opendoor.slack.com/team/arun.mohan" target="_blank" rel="noopener">
+            <span class="c-ico">💬</span>
+            <span>Slack @arun.mohan</span>
+          </a>
+        </div>
+
+        <div class="version-note">
+          <span>App Version</span>
+          <span><b>v2.7.4</b> · Dashboard</span>
+        </div>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -741,7 +535,7 @@
   const emailPrompt = $('emailPrompt');
   const emailForm = $('emailForm');
   const emailInput = $('emailInput');
-  const dashboard = $('dashboard');
+  const dashboardEl = $('dashboard');
   const emailChip = $('emailChip');
   const roleBadge = $('roleBadge');
   const datePicker = $('datePicker');
@@ -750,6 +544,7 @@
   const updatedAt = $('updatedAt');
   const tabsEl = $('tabs');
   const contentEl = $('content');
+  const cardsEl = $('cards');
 
   // ---- URL helpers ----
   function getParams() {
@@ -761,7 +556,6 @@
   }
 
   function updateUrl(_unused, date) {
-    // Identity is in a session token now, not the URL — keep only date.
     const p = new URLSearchParams();
     if (date) p.set('date', date);
     const newUrl = window.location.pathname + '?' + p.toString();
@@ -774,6 +568,16 @@
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function emailToInitials(e) {
+    const name = String(e || '').split('@')[0].replace(/[._-]/g, ' ').trim();
+    if (!name) return '··';
+    return name.split(/\s+/).map(p => p[0]).slice(0,2).join('').toUpperCase();
+  }
+  function emailToName(e) {
+    const local = String(e || '').split('@')[0].replace(/[._-]/g, ' ').trim();
+    return local.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || e;
   }
 
   // ---- API ----
@@ -800,15 +604,12 @@
       state.data = json;
       state.lastFetchAt = new Date();
 
-      // Preserve selected tab if still valid, else pick first team tab
-      // (skipping __live so users land on their team data by default).
       const validTabs = getAllTabKeys(json);
       if (!state.selectedTab || !validTabs.includes(state.selectedTab)) {
         const firstNonLive = validTabs.find(k => k !== '__live');
         state.selectedTab = firstNonLive || validTabs[0] || null;
       }
 
-      // Ensure polling reflects the selected tab after a data refresh.
       if (state.selectedTab === '__live' && !state.livePollTimer) {
         startLivePolling();
       } else if (state.selectedTab !== '__live' && state.livePollTimer) {
@@ -828,7 +629,7 @@
   function setRefreshLoading(isLoading) {
     if (isLoading) {
       refreshBtn.disabled = true;
-      refreshLabel.innerHTML = '<span class="spinner" style="border-color: rgba(230,237,245,0.3); border-top-color: var(--text);"></span> Refreshing';
+      refreshLabel.innerHTML = '<span class="spinner"></span> Refreshing';
     } else {
       refreshBtn.disabled = false;
       refreshLabel.textContent = 'Refresh';
@@ -852,7 +653,12 @@
   function renderDashboard() {
     const data = state.data;
 
-    emailChip.textContent = data.email || state.email;
+    const emailVal = data.email || state.email;
+    emailChip.textContent = emailVal;
+    $('userAvatar').textContent = emailToInitials(emailVal);
+    $('menuName').textContent = emailToName(emailVal);
+    $('menuEmail').textContent = emailVal;
+
     if (data.role === 'super_admin' || data.isAdmin) {
       roleBadge.textContent = 'Super Admin';
       roleBadge.className = 'role-badge super-admin';
@@ -861,8 +667,95 @@
       roleBadge.className = 'role-badge tl';
     }
 
+    renderSummaryCards();
     renderTabs();
     renderContent();
+  }
+
+  // ── Summary cards (computed from all-team log data) ──────────────
+  function parseDurSec(s) {
+    const str = String(s || '');
+    const h = /(\d+)\s*h/i.exec(str); const hr = h ? +h[1] : 0;
+    const m = /(\d+)\s*m/i.exec(str); const mn = m ? +m[1] : 0;
+    const sec = /(\d+)\s*s/i.exec(str); const sc = sec ? +sec[1] : 0;
+    return hr * 3600 + mn * 60 + sc;
+  }
+
+  function renderSummaryCards() {
+    const data = state.data;
+    if (!data || !data.logs) {
+      cardsEl.classList.add('hidden');
+      return;
+    }
+
+    let totalTasks = 0;
+    let prodSec = 0;
+    let breakSec = 0;
+
+    Object.keys(data.logs).forEach(team => {
+      const entry = data.logs[team] || { header: [], rows: [] };
+      const header = entry.header || [];
+      const rows = entry.rows || [];
+      const hLower = header.map(h => String(h).toLowerCase());
+      const actIdx = hLower.indexOf('activity');
+      const durIdx = hLower.indexOf('duration');
+      const sysIdx = hLower.indexOf('system');
+      rows.forEach(r => {
+        const act = String(r[actIdx] || 'production').toLowerCase();
+        const isSystem = sysIdx >= 0 && String(r[sysIdx] || '').toUpperCase() === 'TRUE';
+        const dur = durIdx >= 0 ? parseDurSec(r[durIdx]) : 0;
+        if (act === 'production' && !isSystem) {
+          totalTasks += 1;
+          prodSec += dur;
+        } else if (act === 'break' || act === 'dinner') {
+          breakSec += dur;
+        }
+      });
+    });
+
+    // Avg utilization from sessions tab if available
+    let avgUtil = null;
+    if (data.sessions && data.sessions.header && data.sessions.rows && data.sessions.rows.length) {
+      const sh = data.sessions.header.map(h => String(h).toLowerCase());
+      const pIdx = sh.findIndex(x => x.includes('production'));
+      const bIdx = sh.findIndex(x => x.includes('break'));
+      const iIdx = sh.findIndex(x => x.includes('idle'));
+      let sumUtil = 0, n = 0;
+      data.sessions.rows.forEach(r => {
+        const p = Number(r[pIdx]) || 0;
+        const b = Number(r[bIdx]) || 0;
+        const i = Number(r[iIdx]) || 0;
+        if (p + b + i > 0) { sumUtil += (p / (p + b + i)) * 100; n++; }
+      });
+      if (n > 0) avgUtil = Math.round(sumUtil / n);
+    }
+
+    const prodHrs = (prodSec / 3600).toFixed(1);
+    const brkHrs  = (breakSec / 3600).toFixed(1);
+
+    cardsEl.classList.remove('hidden');
+    cardsEl.innerHTML = `
+      <div class="card" data-c="tasks">
+        <div class="k"><span class="icon">✓</span>Total Tasks</div>
+        <div class="v">${totalTasks.toLocaleString()}</div>
+        <div class="sub">Across ${Object.keys(data.logs).length} teams</div>
+      </div>
+      <div class="card" data-c="prod">
+        <div class="k"><span class="icon">⚡</span>Productive Hours</div>
+        <div class="v">${prodHrs}<span class="unit">hrs</span></div>
+        <div class="sub">Completed production time</div>
+      </div>
+      <div class="card" data-c="break">
+        <div class="k"><span class="icon">☕</span>Break Hours</div>
+        <div class="v">${brkHrs}<span class="unit">hrs</span></div>
+        <div class="sub">Break + dinner combined</div>
+      </div>
+      <div class="card" data-c="util">
+        <div class="k"><span class="icon">%</span>Avg Utilization</div>
+        <div class="v">${avgUtil !== null ? avgUtil : '—'}<span class="unit">${avgUtil !== null ? '%' : ''}</span></div>
+        <div class="sub">${avgUtil !== null ? 'From end-of-shift data' : 'End-of-shift data pending'}</div>
+      </div>
+    `;
   }
 
   function renderTabs() {
@@ -871,17 +764,12 @@
     tabsEl.innerHTML = '';
     tabsEl.classList.remove('hidden');
 
-    // Live Activity tab — visible to every authenticated user, always first.
     {
-      const liveCount = state.liveData && Array.isArray(state.liveData.users)
-        ? state.liveData.users.length
-        : 0;
+      const liveCount = state.liveData && Array.isArray(state.liveData.users) ? state.liveData.users.length : 0;
       const liveTab = document.createElement('button');
       liveTab.className = 'tab' + (state.selectedTab === '__live' ? ' active' : '');
       liveTab.innerHTML = `🔴 Live Activity <span class="count-badge">${liveCount}</span>`;
-      liveTab.addEventListener('click', () => {
-        selectTab('__live');
-      });
+      liveTab.addEventListener('click', () => { selectTab('__live'); });
       tabsEl.appendChild(liveTab);
     }
 
@@ -891,9 +779,7 @@
       const tab = document.createElement('button');
       tab.className = 'tab' + (state.selectedTab === team ? ' active' : '');
       tab.innerHTML = `${escapeHtml(team)} <span class="count-badge">${count}</span>`;
-      tab.addEventListener('click', () => {
-        selectTab(team);
-      });
+      tab.addEventListener('click', () => { selectTab(team); });
       tabsEl.appendChild(tab);
     });
 
@@ -910,32 +796,24 @@
         const tab = document.createElement('button');
         tab.className = 'tab admin' + (state.selectedTab === key ? ' active' : '');
         tab.innerHTML = `${escapeHtml(label)} <span class="count-badge">${count}</span>`;
-        tab.addEventListener('click', () => {
-          selectTab(key);
-        });
+        tab.addEventListener('click', () => { selectTab(key); });
         tabsEl.appendChild(tab);
       });
     }
   }
 
-  // Centralised tab switcher — handles live-polling start/stop side effects.
   function selectTab(key) {
     const prev = state.selectedTab;
     state.selectedTab = key;
-    if (prev !== '__live' && key === '__live') {
-      startLivePolling();
-    } else if (prev === '__live' && key !== '__live') {
-      stopLivePolling();
-    }
+    if (prev !== '__live' && key === '__live') startLivePolling();
+    else if (prev === '__live' && key !== '__live') stopLivePolling();
     renderTabs();
     renderContent();
   }
 
   function getAdminRowCount(source) {
     if (!source) return 0;
-    if (Array.isArray(source)) {
-      return Math.max(0, source.length - 1);
-    }
+    if (Array.isArray(source)) return Math.max(0, source.length - 1);
     return (source.rows || []).length;
   }
 
@@ -954,10 +832,7 @@
       return;
     }
 
-    if (sel === '__live') {
-      renderLiveView();
-      return;
-    }
+    if (sel === '__live') { renderLiveView(); return; }
 
     let title, header, rows;
 
@@ -986,16 +861,20 @@
         <div class="data-card">
           <div class="data-header">
             <div class="data-title">${escapeHtml(title)}</div>
-            <div class="data-meta">${escapeHtml(dateStr)}</div>
+            <div class="data-meta">
+              ${escapeHtml(dateStr)}
+              <button class="csv-btn" id="csvExportBtn" title="Download empty CSV (headers only)">⬇ Export CSV</button>
+            </div>
           </div>
           <div class="state">
             <p>No entries logged for ${escapeHtml(title)} on ${escapeHtml(dateStr)}.</p>
           </div>
         </div>`;
+      const csvBtn = document.getElementById('csvExportBtn');
+      if (csvBtn) csvBtn.addEventListener('click', () => downloadCsv(title, header, rows, dateStr));
       return;
     }
 
-    // For team tabs (not admin tabs), compute & render the leaderboard
     const leaderboardHtml = !sel.startsWith('__')
       ? buildLeaderboardHtml(sel, header, rows, data.sessions)
       : '';
@@ -1012,73 +891,42 @@
         ${leaderboardHtml}
         <div class="table-wrap">
           <table>
-            <thead>
-              <tr>${header.map(h => `<th>${escapeHtml(String(h))}</th>`).join('')}</tr>
-            </thead>
-            <tbody>
-              ${rows.map(row => renderRow(row, header)).join('')}
-            </tbody>
+            <thead><tr>${header.map(h => `<th>${escapeHtml(String(h))}</th>`).join('')}</tr></thead>
+            <tbody>${rows.map(row => renderRow(row, header)).join('')}</tbody>
           </table>
         </div>
       </div>`;
 
-    // Wire up CSV export for the currently selected tab
     const csvBtn = document.getElementById('csvExportBtn');
-    if (csvBtn) {
-      csvBtn.addEventListener('click', () => downloadCsv(title, header, rows, dateStr));
-    }
+    if (csvBtn) csvBtn.addEventListener('click', () => downloadCsv(title, header, rows, dateStr));
   }
 
   // ── Leaderboard ────────────────────────────────────────────────────
-  // Aggregates rows by user and computes: Tasks, Prod hrs, Throughput, Utilization %.
-  //   Tasks       = count of non-system rows where activity === 'production'
-  //   Prod hrs    = sum of durations (from Duration column, parsed from "Xh Ym Zs")
-  //   Throughput  = Tasks / Prod hrs
-  //   Util %      = Sessions-tab productionMin / (prodMin + breakMin + idleMin) * 100
-  //                 if Sessions row exists for this user+date (end-of-shift data).
-  //                 Fallback: prod time / (last-first task timestamp span) — shown as "*".
   function buildLeaderboardHtml(team, header, rows, sessionsBlock) {
     if (!rows || !rows.length) return '';
-
-    // Locate columns by header label (resilient to per-team col variations)
     const hLower = header.map(h => String(h).toLowerCase());
     const userIdx  = hLower.indexOf('user');
     const actIdx   = hLower.indexOf('activity');
     const durIdx   = hLower.indexOf('duration');
     const sysIdx   = hLower.indexOf('system');
-    const timeIdx  = 0; // first col is always timestamp
+    const timeIdx  = 0;
+    if (userIdx < 0 || durIdx < 0) return '';
 
-    if (userIdx < 0 || durIdx < 0) return ''; // can't compute without these
-
-    // Parse "Xh Ym Zs" → seconds
-    const parseDur = (s) => {
-      const str = String(s || '');
-      const h = /(\d+)\s*h/i.exec(str); const hr = h ? +h[1] : 0;
-      const m = /(\d+)\s*m/i.exec(str); const mn = m ? +m[1] : 0;
-      const sec = /(\d+)\s*s/i.exec(str); const sc = sec ? +sec[1] : 0;
-      return hr * 3600 + mn * 60 + sc;
-    };
-
-    const users = {}; // user → { tasks, prodSec, firstTs, lastTs }
+    const users = {};
     rows.forEach(r => {
       const user = String(r[userIdx] || '').trim();
       if (!user) return;
       const act = String(r[actIdx] || 'production').toLowerCase();
       const isSystem = sysIdx >= 0 && String(r[sysIdx] || '').toUpperCase() === 'TRUE';
-      const durSec = parseDur(r[durIdx]);
+      const durSec = parseDurSec(r[durIdx]);
       const ts = String(r[timeIdx] || '');
-
       const u = users[user] || (users[user] = { tasks: 0, prodSec: 0, firstTs: ts, lastTs: ts });
       if (ts && ts < u.firstTs) u.firstTs = ts;
-      if (ts && ts > u.lastTs)  u.lastTs  = ts;
-      if (act === 'production' && !isSystem) {
-        u.tasks += 1;
-        u.prodSec += durSec;
-      }
+      if (ts && ts > u.lastTs) u.lastTs = ts;
+      if (act === 'production' && !isSystem) { u.tasks += 1; u.prodSec += durSec; }
     });
 
-    // Pull Sessions data for util % if available
-    const sessMap = {}; // user → { prodMin, breakMin, idleMin }
+    const sessMap = {};
     if (sessionsBlock && sessionsBlock.header && sessionsBlock.rows) {
       const sh = sessionsBlock.header.map(h => String(h).toLowerCase());
       const sUserIdx = sh.indexOf('user');
@@ -1090,41 +938,34 @@
           const u = String(sr[sUserIdx] || '').trim();
           if (!u) return;
           sessMap[u] = {
-            prodMin:  Number(sr[sProdIdx]) || 0,
+            prodMin: Number(sr[sProdIdx]) || 0,
             breakMin: Number(sr[sBreakIdx]) || 0,
-            idleMin:  Number(sr[sIdleIdx]) || 0
+            idleMin: Number(sr[sIdleIdx]) || 0
           };
         });
       }
     }
 
-    // Compute final stats per user
     const list = Object.keys(users).map(u => {
       const { tasks, prodSec, firstTs, lastTs } = users[u];
       const prodHrs = prodSec / 3600;
       const throughput = prodHrs >= 0.05 && tasks > 0 ? (tasks / prodHrs) : null;
-
-      // Utilization: prefer Sessions tab data (end-of-shift)
       let util = null, utilSource = null;
       const sess = sessMap[u];
       if (sess && (sess.prodMin + sess.breakMin + sess.idleMin) > 0) {
         util = Math.round((sess.prodMin / (sess.prodMin + sess.breakMin + sess.idleMin)) * 100);
         utilSource = 'session';
       } else if (firstTs && lastTs && firstTs !== lastTs) {
-        // Fallback: span between first and last task timestamp (approximate)
         const spanSec = (new Date(lastTs).getTime() - new Date(firstTs).getTime()) / 1000;
         if (spanSec > 60) {
           util = Math.min(100, Math.round((prodSec / spanSec) * 100));
           utilSource = 'approx';
         }
       }
-
       return { user: u, tasks, prodHrs, throughput, util, utilSource };
     });
 
-    // Rank by tasks desc, then prodHrs desc
     list.sort((a, b) => (b.tasks - a.tasks) || (b.prodHrs - a.prodHrs));
-
     if (!list.length) return '';
 
     const fmtHrs = (h) => {
@@ -1133,7 +974,6 @@
       const mn = totalMin % 60;
       return `${hr}h ${String(mn).padStart(2,'0')}m`;
     };
-
     const rankSymbol = (i) => {
       if (i === 0) return { label: '🥇', cls: 'gold' };
       if (i === 1) return { label: '🥈', cls: 'silver' };
@@ -1143,10 +983,10 @@
 
     const rowsHtml = list.map((p, i) => {
       const r = rankSymbol(i);
-      let utilCell = '<span style="color:var(--muted);">—</span>';
+      let utilCell = '<span style="color:var(--text-3);">—</span>';
       if (p.util !== null) {
         const cls = p.util >= 75 ? 'lb-util-good' : (p.util >= 50 ? 'lb-util-ok' : 'lb-util-low');
-        const mark = p.utilSource === 'approx' ? '<span title="approximate — end-of-shift data not yet available" style="color:var(--muted); font-size:10px;"> *</span>' : '';
+        const mark = p.utilSource === 'approx' ? '<span title="approximate — end-of-shift data not yet available" style="color:var(--text-3); font-size:10px;"> *</span>' : '';
         utilCell = `<span class="${cls}">${p.util}%</span>${mark}`;
       }
       const tputCell = p.throughput !== null
@@ -1191,13 +1031,10 @@
   }
 
   // ── CSV export ────────────────────────────────────────────────────
-  // Builds a CSV from the currently rendered table and triggers a download.
-  // Filename format: "SD_2026-04-22.csv" (tab name, slashes/spaces sanitized).
   function downloadCsv(title, header, rows, dateStr) {
     const escapeCsv = (v) => {
       if (v == null) return '';
       const s = String(v);
-      // Quote if the value contains quote, comma, newline
       if (/["\n,\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
       return s;
     };
@@ -1207,7 +1044,7 @@
       const padded = header.map((_, i) => (row && row[i] !== undefined) ? row[i] : '');
       lines.push(padded.map(escapeCsv).join(','));
     });
-    const csv = '\uFEFF' + lines.join('\n');  // BOM for Excel UTF-8 compat
+    const csv = '\uFEFF' + lines.join('\n');
     const safeTitle = String(title).replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '');
     const filename = `${safeTitle}_${dateStr}.csv`;
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -1225,13 +1062,8 @@
     const cells = (row || []).map((val, i) => {
       const colName = String(header[i] || '').toLowerCase();
       const display = formatCell(val);
-
-      if (colName === 'time') {
-        return `<td class="col-time">${escapeHtml(display)}</td>`;
-      }
-      if (colName === 'duration') {
-        return `<td class="col-duration">${escapeHtml(display)}</td>`;
-      }
+      if (colName === 'time') return `<td class="col-time">${escapeHtml(display)}</td>`;
+      if (colName === 'duration') return `<td class="col-duration">${escapeHtml(display)}</td>`;
       if (colName === 'status') {
         const cls = display.toLowerCase().replace(/\s+/g, '-');
         return `<td><span class="status-pill ${escapeHtml(cls)}">${escapeHtml(display)}</span></td>`;
@@ -1247,16 +1079,11 @@
     if (typeof val === 'number') return String(val);
     if (typeof val === 'boolean') return val ? 'true' : 'false';
     if (val instanceof Date) return val.toISOString();
-    if (typeof val === 'object') {
-      try { return JSON.stringify(val); } catch (e) { return String(val); }
-    }
+    if (typeof val === 'object') { try { return JSON.stringify(val); } catch (e) { return String(val); } }
     return String(val);
   }
 
   // ── Live Activity ──────────────────────────────────────────────────
-  // Polls ${API_URL}?action=liveActivity every 15s while the Live tab is
-  // active. Rendering is split from fetching so the initial click shows
-  // whatever we already have (possibly "loading") without blocking.
   const LIVE_POLL_MS = 15000;
   const KNOWN_ACTIVITIES = ['production', 'break', 'meeting', 'training', 'dinner', 'idle'];
 
@@ -1283,7 +1110,6 @@
       state.liveLoading = false;
       if (state.selectedTab === '__live') {
         renderLiveView();
-        // Keep the count-badge in the Live tab header in sync.
         renderTabs();
       }
     }
@@ -1291,19 +1117,12 @@
 
   function startLivePolling() {
     stopLivePolling();
-    // Fire an immediate fetch; the view below will render a loading state
-    // until the promise resolves.
     fetchLiveActivity();
     state.livePollTimer = setInterval(fetchLiveActivity, LIVE_POLL_MS);
   }
-
   function stopLivePolling() {
-    if (state.livePollTimer) {
-      clearInterval(state.livePollTimer);
-      state.livePollTimer = null;
-    }
+    if (state.livePollTimer) { clearInterval(state.livePollTimer); state.livePollTimer = null; }
   }
-
   function activityClass(activity) {
     const a = String(activity || '').toLowerCase();
     return KNOWN_ACTIVITIES.indexOf(a) >= 0 ? a : 'idle';
@@ -1313,7 +1132,6 @@
     const live = state.liveData;
     const err = state.liveError;
 
-    // Initial loading state — no data yet, no error yet.
     if (!live && !err) {
       contentEl.innerHTML = `
         <div class="data-card">
@@ -1322,7 +1140,7 @@
             <div class="data-meta">Polling every 15s</div>
           </div>
           <div class="state">
-            <div class="spinner" style="border-color: rgba(138,148,163,0.3); border-top-color: var(--accent); width: 20px; height: 20px;"></div>
+            <div class="spinner" style="width: 20px; height: 20px;"></div>
             <p style="margin-top: 12px;">Loading live activity…</p>
           </div>
         </div>`;
@@ -1368,15 +1186,10 @@
         const prod = Math.round(Number(u.prodMin || 0));
         const brk = Math.round(Number(u.breakMin || 0));
         const age = Number(u.ageMin || 0);
-        const staleHtml = age > 2
-          ? `<div class="live-user-stale">⚠️ stale ${Math.round(age)}m ago</div>`
-          : '';
-        // Shift start — show only the HH:MM of IST wall clock (e.g. "09:12")
+        const staleHtml = age > 2 ? `<div class="live-user-stale">⚠️ stale ${Math.round(age)}m ago</div>` : '';
         const shiftStart = String(u.shiftStartAt || '');
         const shiftStartHm = (shiftStart.match(/\s(\d{2}:\d{2})/) || [])[1] || '';
-        const shiftHtml = shiftStartHm
-          ? `<div class="live-user-shift">🟢 Shift: ${shiftStartHm} IST</div>`
-          : '';
+        const shiftHtml = shiftStartHm ? `<div class="live-user-shift">🟢 Shift: ${shiftStartHm} IST</div>` : '';
         return `
           <div class="live-user">
             <div class="live-user-name">
@@ -1388,7 +1201,6 @@
             ${staleHtml}
           </div>`;
       }).join('');
-
       return `
         <div class="live-team-card">
           <div class="live-team-head">
@@ -1412,31 +1224,25 @@
 
   function escapeHtml(s) {
     return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   // ---- Error states ----
   function renderApiError(errCode) {
     tabsEl.classList.add('hidden');
+    cardsEl.classList.add('hidden');
     let msg = '';
-    if (errCode === 'not_whitelisted') {
-      msg = `You're not on the TL whitelist. Contact arun.mohan@opendoor.com.`;
-    } else if (errCode === 'missing_email') {
-      msg = `Add ?email=you@opendoor.com to the URL.`;
-    } else {
-      msg = `Error: ${errCode}`;
-    }
+    if (errCode === 'not_whitelisted') msg = `You're not on the TL whitelist. Contact arun.mohan@opendoor.com.`;
+    else if (errCode === 'missing_email') msg = `Add ?email=you@opendoor.com to the URL.`;
+    else msg = `Error: ${errCode}`;
     contentEl.innerHTML = `
       <div class="data-card error-card">
         <div class="state">
           <h2 style="color: var(--red);">Unable to load dashboard</h2>
           <p style="color: var(--red);">${escapeHtml(msg)}</p>
           <div class="actions">
-            <button onclick="window.location.reload()">Reload</button>
+            <button class="btn" onclick="window.location.reload()">Reload</button>
           </div>
         </div>
       </div>`;
@@ -1444,13 +1250,14 @@
 
   function renderNetworkError(err) {
     tabsEl.classList.add('hidden');
+    cardsEl.classList.add('hidden');
     contentEl.innerHTML = `
       <div class="data-card error-card">
         <div class="state">
           <h2 style="color: var(--red);">Network error</h2>
           <p style="color: var(--red);">${escapeHtml(err.message || String(err))}</p>
           <div class="actions">
-            <button id="retryBtn">Retry</button>
+            <button class="btn" id="retryBtn">Retry</button>
           </div>
         </div>
       </div>`;
@@ -1460,10 +1267,7 @@
 
   // ---- Updated timestamp ----
   function updateUpdatedAt() {
-    if (!state.lastFetchAt) {
-      updatedAt.textContent = '';
-      return;
-    }
+    if (!state.lastFetchAt) { updatedAt.textContent = ''; return; }
     const secs = Math.floor((Date.now() - state.lastFetchAt.getTime()) / 1000);
     let label;
     if (secs < 5) label = 'Updated just now';
@@ -1481,23 +1285,234 @@
     fetchData();
   });
 
-  refreshBtn.addEventListener('click', () => {
-    if (!state.loading) fetchData();
+  refreshBtn.addEventListener('click', () => { if (!state.loading) fetchData(); });
+
+  // User pill dropdown
+  const userPill = $('userPill');
+  userPill.addEventListener('click', (e) => {
+    e.stopPropagation();
+    userPill.classList.toggle('open');
   });
 
-  // Sign out — clears session token + email, returns to OTP gate
-  const signOutBtn = $('signOutBtn');
-  if (signOutBtn) {
-    signOutBtn.addEventListener('click', () => {
-      try {
-        localStorage.removeItem('ttk_dash_token');
-        localStorage.removeItem('ttk_dash_email');
-      } catch (e) {}
-      window.__signOut && window.__signOut('');
+  // Sign out
+  $('signOutBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    userPill.classList.remove('open');
+    try {
+      localStorage.removeItem('ttk_dash_token');
+      localStorage.removeItem('ttk_dash_email');
+    } catch (err) {}
+    window.__signOut && window.__signOut('');
+  });
+
+  // Profile modal
+  $('profileBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    userPill.classList.remove('open');
+    const data = state.data || {};
+    const emailVal = data.email || state.email;
+    $('profileAvatar').textContent = emailToInitials(emailVal);
+    $('profileName').textContent = emailToName(emailVal);
+    $('profileNameRow').textContent = emailToName(emailVal);
+    $('profileEmailRow').textContent = emailVal;
+    if (data.role === 'super_admin' || data.isAdmin) {
+      $('profileRole').textContent = 'Super Admin';
+      $('profileDesignation').textContent = 'Super Admin / TL';
+    } else {
+      $('profileRole').textContent = 'Team Lead';
+      $('profileDesignation').textContent = 'Team Lead';
+    }
+    const teams = (data.teams || []);
+    $('profileTeams').innerHTML = teams.length
+      ? teams.map(t => `<span class="team-chip">${escapeHtml(t)}</span>`).join('')
+      : '<span class="team-chip">—</span>';
+    $('profileModal').classList.add('open');
+  });
+
+  // Help modal
+  $('helpBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    userPill.classList.remove('open');
+    $('helpModal').classList.add('open');
+  });
+
+  // Modal close
+  document.querySelectorAll('.m-close').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById(btn.dataset.close).classList.remove('open');
     });
+  });
+  document.querySelectorAll('.modal-backdrop').forEach(bd => {
+    bd.addEventListener('click', (e) => {
+      if (e.target === bd) bd.classList.remove('open');
+    });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-backdrop.open').forEach(m => m.classList.remove('open'));
+      userPill.classList.remove('open');
+    }
+  });
+  document.addEventListener('click', () => { userPill.classList.remove('open'); });
+  document.querySelector('.user-menu').addEventListener('click', e => e.stopPropagation());
+
+  // ── Gate / OTP flow (unchanged logic) ───────────────────────────────
+  function showGateError(msg) {
+    const box = $('gateError');
+    box.textContent = msg;
+    box.classList.add('show');
+  }
+  function hideGateError() {
+    const box = $('gateError');
+    box.classList.remove('show');
+    box.textContent = '';
   }
 
-  // ── Leadership quotes — rotate daily by day-of-year ───────────────
+  const otpForm = $('otpForm');
+  const otpInput = $('otpInput');
+  const otpEmailLabel = $('otpEmailLabel');
+  const verifyOtpBtn = $('verifyOtpBtn');
+  const resendLink = $('resendLink');
+  const changeEmailLink = $('changeEmailLink');
+  let pendingEmail = '';
+
+  function showStep1() {
+    emailForm.classList.remove('hidden');
+    otpForm.classList.add('hidden');
+    hideGateError();
+    setTimeout(() => { try { emailInput.focus(); } catch (e) {} }, 50);
+  }
+  function showStep2(email) {
+    pendingEmail = email;
+    otpEmailLabel.textContent = email;
+    emailForm.classList.add('hidden');
+    otpForm.classList.remove('hidden');
+    hideGateError();
+    otpInput.value = '';
+    setTimeout(() => { try { otpInput.focus(); } catch (e) {} }, 50);
+  }
+
+  async function requestOtp(email) {
+    hideGateError();
+    const btn = $('startDayBtn');
+    btn.disabled = true;
+    btn.textContent = '✉️ Sending code…';
+    try {
+      const res = await fetch(`${API_URL}?action=requestOtp&email=${encodeURIComponent(email)}`);
+      const json = await res.json();
+      if (!json.ok) {
+        if (json.error === 'not_whitelisted') {
+          showGateError(`Access denied — ${email} is not on the TL Whitelist. Message @arun on Slack to request access.`);
+        } else if (json.error === 'rate_limited') {
+          showGateError(json.message || 'Too many codes requested. Wait 10 minutes before trying again.');
+        } else {
+          showGateError(`Couldn't send code: ${json.error || 'unknown'}. Try again or ping @arun.`);
+        }
+        btn.disabled = false;
+        btn.textContent = '✉️ Send Sign-in Code';
+        return;
+      }
+      showStep2(email);
+    } catch (err) {
+      showGateError(`Couldn't reach the server: ${err.message || err}.`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '✉️ Send Sign-in Code';
+    }
+  }
+
+  async function verifyOtp(email, code) {
+    hideGateError();
+    verifyOtpBtn.disabled = true;
+    verifyOtpBtn.textContent = '🔐 Verifying…';
+    try {
+      const res = await fetch(`${API_URL}?action=verifyOtp&email=${encodeURIComponent(email)}&code=${encodeURIComponent(code)}`);
+      const json = await res.json();
+      if (!json.ok) {
+        const msg = {
+          code_expired_or_invalid: 'Code expired. Click "Resend code" to get a new one.',
+          code_mismatch: 'Wrong code. Double-check the 6 digits and try again.',
+          not_whitelisted: `Access revoked — ${email} is no longer on the Whitelist.`,
+          missing_fields: 'Enter the 6-digit code.',
+        }[json.error] || (json.error || 'unknown_error');
+        showGateError(msg);
+        verifyOtpBtn.disabled = false;
+        verifyOtpBtn.textContent = '🔓 Verify & Open Dashboard';
+        return;
+      }
+      try {
+        localStorage.setItem('ttk_dash_token', json.token);
+        localStorage.setItem('ttk_dash_email', json.email);
+      } catch (e) {}
+      state.token = json.token;
+      state.email = json.email;
+      state.date = state.date || todayIsoLocal();
+      history.replaceState(null, '', `${location.pathname}?date=${encodeURIComponent(state.date)}`);
+      enterDashboard();
+    } catch (err) {
+      showGateError(`Couldn't reach the server: ${err.message || err}.`);
+      verifyOtpBtn.disabled = false;
+      verifyOtpBtn.textContent = '🔓 Verify & Open Dashboard';
+    }
+  }
+
+  function enterDashboard() {
+    emailPrompt.classList.add('hidden');
+    dashboardEl.classList.remove('hidden');
+    document.body.classList.remove('gate-mode');
+    datePicker.value = state.date;
+    fetchData();
+  }
+
+  function enterGate() {
+    emailPrompt.classList.remove('hidden');
+    dashboardEl.classList.add('hidden');
+    document.body.classList.add('gate-mode');
+    showStep1();
+  }
+
+  emailForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = emailInput.value.trim().toLowerCase();
+    if (!v) return;
+    if (!/@opendoor\.com$/i.test(v)) {
+      showGateError('Please use your @opendoor.com email address.');
+      return;
+    }
+    requestOtp(v);
+  });
+
+  otpForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const code = otpInput.value.trim();
+    if (!/^\d{6}$/.test(code)) {
+      showGateError('Code must be 6 digits.');
+      return;
+    }
+    verifyOtp(pendingEmail, code);
+  });
+
+  resendLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (pendingEmail) requestOtp(pendingEmail);
+  });
+  changeEmailLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    pendingEmail = '';
+    emailInput.value = '';
+    showStep1();
+  });
+
+  // Exposed globally for fetchData() 401 flow
+  window.__signOut = function (reason) {
+    try { localStorage.removeItem('ttk_dash_token'); } catch (e) {}
+    state.token = '';
+    stopLivePolling();
+    enterGate();
+    if (reason) showGateError(reason);
+  };
+
+  // ── Daily leadership quote (unchanged) ────────────────────────────
   const LEADERSHIP_QUOTES = [
     { q: "A leader is one who knows the way, goes the way, and shows the way.", a: "John C. Maxwell" },
     { q: "The strength of the team is each individual member. The strength of each member is the team.", a: "Phil Jackson" },
@@ -1558,172 +1573,12 @@
     if (g) g.textContent = `${greet}, Team Lead`;
   }
 
-  // ── Gate: verify email against Whitelist before granting access ───
-  function showGateError(msg) {
-    const box = $('gateError');
-    box.textContent = msg;
-    box.classList.add('show');
-  }
-  function hideGateError() {
-    const box = $('gateError');
-    box.classList.remove('show');
-    box.textContent = '';
-  }
-
-  // ── OTP flow ────────────────────────────────────────────────────────
-  // Two-step gate:
-  //   1) User enters email → POST requestOtp → email delivers 6-digit code
-  //   2) User enters code  → POST verifyOtp  → server returns session token
-  // Token is HMAC-signed + 8h TTL. Persisted in localStorage; included in
-  // every privileged API call. Expired tokens bounce the user back to gate.
-
-  const otpForm = $('otpForm');
-  const otpInput = $('otpInput');
-  const otpEmailLabel = $('otpEmailLabel');
-  const verifyOtpBtn = $('verifyOtpBtn');
-  const resendLink = $('resendLink');
-  const changeEmailLink = $('changeEmailLink');
-
-  let pendingEmail = '';
-
-  function showStep1() {
-    emailForm.classList.remove('hidden');
-    otpForm.classList.add('hidden');
-    hideGateError();
-    setTimeout(() => { try { emailInput.focus(); } catch (e) {} }, 50);
-  }
-  function showStep2(email) {
-    pendingEmail = email;
-    otpEmailLabel.textContent = email;
-    emailForm.classList.add('hidden');
-    otpForm.classList.remove('hidden');
-    hideGateError();
-    otpInput.value = '';
-    setTimeout(() => { try { otpInput.focus(); } catch (e) {} }, 50);
-  }
-
-  async function requestOtp(email) {
-    hideGateError();
-    const btn = $('startDayBtn');
-    btn.disabled = true;
-    btn.textContent = '✉️ Sending code…';
-    try {
-      const res = await fetch(`${API_URL}?action=requestOtp&email=${encodeURIComponent(email)}`);
-      const json = await res.json();
-      if (!json.ok) {
-        if (json.error === 'not_whitelisted') {
-          showGateError(`Access denied — ${email} is not on the TL Whitelist. Message @arun on Slack to request access.`);
-        } else if (json.error === 'rate_limited') {
-          showGateError(json.message || 'Too many codes requested. Wait 10 minutes before trying again.');
-        } else {
-          showGateError(`Couldn't send code: ${json.error || 'unknown'}. Try again or ping @arun.`);
-        }
-        btn.disabled = false;
-        btn.textContent = '✉️ Send Sign-in Code';
-        return;
-      }
-      showStep2(email);
-    } catch (err) {
-      showGateError(`Couldn't reach the server: ${err.message || err}.`);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = '✉️ Send Sign-in Code';
-    }
-  }
-
-  async function verifyOtp(email, code) {
-    hideGateError();
-    verifyOtpBtn.disabled = true;
-    verifyOtpBtn.textContent = '🔐 Verifying…';
-    try {
-      const res = await fetch(`${API_URL}?action=verifyOtp&email=${encodeURIComponent(email)}&code=${encodeURIComponent(code)}`);
-      const json = await res.json();
-      if (!json.ok) {
-        const msg = {
-          code_expired_or_invalid: 'Code expired. Click "Resend code" to get a new one.',
-          code_mismatch:           'Wrong code. Double-check the 6 digits and try again.',
-          not_whitelisted:         `Access revoked — ${email} is no longer on the Whitelist.`,
-          missing_fields:          'Enter the 6-digit code.',
-        }[json.error] || (json.error || 'unknown_error');
-        showGateError(msg);
-        verifyOtpBtn.disabled = false;
-        verifyOtpBtn.textContent = '🔓 Verify & Open Dashboard';
-        return;
-      }
-      // Success — persist token + email, enter dashboard
-      try {
-        localStorage.setItem('ttk_dash_token', json.token);
-        localStorage.setItem('ttk_dash_email', json.email);
-      } catch (e) {}
-      state.token = json.token;
-      state.email = json.email;
-      state.date = state.date || todayIsoLocal();
-      // Clean URL — don't leave the code floating in history
-      history.replaceState(null, '', `${location.pathname}?date=${encodeURIComponent(state.date)}`);
-      emailPrompt.classList.add('hidden');
-      dashboard.classList.remove('hidden');
-      datePicker.value = state.date;
-      fetchData();
-    } catch (err) {
-      showGateError(`Couldn't reach the server: ${err.message || err}.`);
-      verifyOtpBtn.disabled = false;
-      verifyOtpBtn.textContent = '🔓 Verify & Open Dashboard';
-    }
-  }
-
-  emailForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const v = emailInput.value.trim().toLowerCase();
-    if (!v) return;
-    if (!/@opendoor\.com$/i.test(v)) {
-      showGateError('Please use your @opendoor.com email address.');
-      return;
-    }
-    requestOtp(v);
-  });
-
-  otpForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const code = otpInput.value.trim();
-    if (!/^\d{6}$/.test(code)) {
-      showGateError('Code must be 6 digits.');
-      return;
-    }
-    verifyOtp(pendingEmail, code);
-  });
-
-  resendLink.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (pendingEmail) requestOtp(pendingEmail);
-  });
-  changeEmailLink.addEventListener('click', (e) => {
-    e.preventDefault();
-    pendingEmail = '';
-    emailInput.value = '';
-    showStep1();
-  });
-
-  // Exposed globally for fetchData() → 401 flow to kick user back to gate
-  window.__signOut = function (reason) {
-    try {
-      localStorage.removeItem('ttk_dash_token');
-    } catch (e) {}
-    state.token = '';
-    dashboard.classList.add('hidden');
-    emailPrompt.classList.remove('hidden');
-    if (reason) showGateError(reason);
-    showStep1();
-  };
-
   // ---- Init ----
   function init() {
     renderGreeting();
     renderDailyQuote();
 
-    // Prefer stored token. If present, assume valid and load dashboard;
-    // backend will bounce us via session_expired if the token is stale.
-    let token = '';
-    let email = '';
+    let token = '', email = '';
     try {
       token = localStorage.getItem('ttk_dash_token') || '';
       email = localStorage.getItem('ttk_dash_email') || '';
@@ -1735,17 +1590,10 @@
     if (token && email) {
       state.token = token;
       state.email = email;
-      emailPrompt.classList.add('hidden');
-      dashboard.classList.remove('hidden');
-      datePicker.value = state.date;
-      fetchData();
+      enterDashboard();
       return;
     }
-
-    // No session — show gate
-    emailPrompt.classList.remove('hidden');
-    dashboard.classList.add('hidden');
-    showStep1();
+    enterGate();
   }
 
   init();
