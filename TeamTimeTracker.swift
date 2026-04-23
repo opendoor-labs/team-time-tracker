@@ -19,7 +19,7 @@ import IOKit
 import CoreGraphics
 
 // ── Constants ──────────────────────────────────────────────────────────
-let APP_VERSION = "2.7.2"
+let APP_VERSION = "2.7.3"
 let SHEET_URL = "https://script.google.com/macros/s/AKfycbxkBAtowwxWuKkaga-aR93ssyxuygFZC-zYXsdm22aVKhXWB45E4YKMKVmc0Ty_ByFk/exec"
 let INSTALL_DIR = NSHomeDirectory() + "/Library/TeamTracker"
 let HTML_PATH = INSTALL_DIR + "/index.html"
