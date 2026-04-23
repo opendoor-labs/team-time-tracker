@@ -587,7 +587,7 @@
           </div>
         </div>
 
-        <!-- Row 3: Activity + Task -->
+        <!-- Row 3: Activity -->
         <div class="filter-row">
           <span class="flabel">Activity</span>
           <button class="pill-btn activity active" data-a="all">All</button>
@@ -597,24 +597,57 @@
           <button class="pill-btn activity" data-a="meeting"><span class="dot"></span>Meeting</button>
           <button class="pill-btn activity" data-a="training"><span class="dot"></span>Training</button>
           <button class="pill-btn activity" data-a="dinner"><span class="dot"></span>Dinner</button>
+        </div>
+
+        <!-- Row 4: Task-form filters (Productivity Type, Task, Sub Task) -->
+        <div class="filter-row">
+          <span class="flabel">Productivity Type</span>
+          <div class="multi" id="productivityMulti">
+            <button class="multi-trigger" id="productivityTrigger">
+              <span id="productivityTriggerText">All productivity types</span>
+              <span class="mcount" id="productivityTriggerBadge">0</span>
+              <span class="chev">▼</span>
+            </button>
+            <div class="multi-panel" id="productivityPanel">
+              <div class="mhead">
+                <span>Productivity Type</span>
+                <span><a id="selAll_productivity">Select all</a> · <a id="clrAll_productivity">Clear</a></span>
+              </div>
+            </div>
+          </div>
 
           <span class="flabel" style="margin-left: 12px;">Task</span>
           <div class="multi" id="taskMulti">
             <button class="multi-trigger" id="taskTrigger">
-              <span id="taskTriggerText">All task types</span>
+              <span id="taskTriggerText">All tasks</span>
               <span class="mcount" id="taskTriggerBadge">0</span>
               <span class="chev">▼</span>
             </button>
             <div class="multi-panel" id="taskPanel">
               <div class="mhead">
-                <span>Task types</span>
-                <span><a id="selAllTasks">Select all</a> · <a id="clrAllTasks">Clear</a></span>
+                <span>Task</span>
+                <span><a id="selAll_task">Select all</a> · <a id="clrAll_task">Clear</a></span>
+              </div>
+            </div>
+          </div>
+
+          <span class="flabel" style="margin-left: 12px;">Sub Task</span>
+          <div class="multi" id="subtaskMulti">
+            <button class="multi-trigger" id="subtaskTrigger">
+              <span id="subtaskTriggerText">All sub tasks</span>
+              <span class="mcount" id="subtaskTriggerBadge">0</span>
+              <span class="chev">▼</span>
+            </button>
+            <div class="multi-panel" id="subtaskPanel">
+              <div class="mhead">
+                <span>Sub Task</span>
+                <span><a id="selAll_subtask">Select all</a> · <a id="clrAll_subtask">Clear</a></span>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- Row 4: Active chips -->
+        <!-- Row 5: Active chips -->
         <div class="filter-row" id="chipRow" style="display:none;">
           <span class="flabel">Active</span>
           <div class="chips" id="chips"></div>
@@ -953,11 +986,13 @@
     // Initialise filter state from loaded data (first fetch only fills
     // null placeholders; later fetches preserve any user selections).
     if (filters.teams === null) filters.teams = [...(data.teams || [])];
-    if (filters.tasks === null) filters.tasks = getAllTaskTypes(data);
+    ROLES.forEach(role => {
+      if (filters[role] === null) filters[role] = getAllOptionsForRole(data, role);
+    });
 
     $('filterBar').classList.remove('hidden');
     buildTeamPanel();
-    buildTaskPanel();
+    ROLES.forEach(role => buildRolePanel(role));
     updateFilterUI();
 
     renderSummaryCards();
@@ -1908,7 +1943,10 @@
     teams: null,        // null = all; else array of selected team names
     user: null,         // null = all; else specific user name
     activity: 'all',    // 'all' or one of KNOWN_ACTIVITIES
-    tasks: null,        // null = all; else array of selected task names
+    // Per-role multi-selects; null = all; else array of selected option strings.
+    productivity: null,
+    task: null,
+    subtask: null,
   };
 
   function yesterdayIsoLocal() {
@@ -1971,60 +2009,135 @@
     return { from: toIso(start), to: toIso(end) };
   }
 
-  // ---- Task catalog (hardcoded primary task field per team) ----
-  // For teams with multiple task-ish columns (Productivity Type + Sub Task), we pick
-  // the primary one that's most useful as a filter. Sourced from app's TaskForm options.
-  const TASK_CATALOG = {
-    'Listings': { column: 'Task', options: [
-      'Photo Review','DEF','Create Listing','Additional Thread','JIRA','BOM Ticket',
-      'Home TOM/BOM Date Passed','Violation Ticket','5 days ago Ticket','QC','RAMP',
-      'QC - Extra Audits','Lock Box','Zillow 3D','Reno VA','Showami','Late Photo Task'
-    ]},
-    'SD': { column: 'Task', options: [
-      'New Create','FT Closed','FT Pending','WO Update','WO No - Changes','JIRA Closed',
-      'JIRA Pending','QC','DEF - Listings','QC - Extra Audits','Reno Process',
-      'Photo Review - Listings','TX QC Check','Additional Thread'
-    ]},
-    'BRN': { column: 'Productivity Type', options: [
-      'Finalisation Report','Follow-Up','New Work Order','People Engagement Activity',
-      'QC / Approval','SP Follow-up Call','SP Initial Call','WO Closure'
-    ]},
-    'HQI': { column: 'Productivity Type', options: [
-      'New','Follow-Up','Duplicate','PA','Audit','Overdue'
-    ]},
-    'HOA': { column: 'Productivity Type', options: [
-      'Follow-Up','Overdue','Duplicate','New'
-    ]},
-    'HOC WO': { column: 'Productivity Type', options: [
-      'New','Follow-up','Overdue','Email Triage','Duplicate','Audit'
-    ]},
-    'LWO': { column: 'Productivity Type', options: [
-      'Follow-Up','New Work Order','QC/ Approval','Spokephone','WO Closure','People Engagement Activity'
-    ]},
-    'TP Sourcing': { column: 'Productivity Type', options: [
-      'Regular Sourcing','Referrals Sourcing','IBB Sourcing','TPEA Rating','Non-Compliance Report'
-    ]},
-    'Utilities Turn On':        { column: 'Task Type', options: ['Turn On','Verification'] },
-    'Utilities NST':            { column: 'Task Type', options: ['NST','Verification'] },
-    'Utilities Blocked Cases':  { column: 'Task Type', options: ['Blocked Cases'] },
-    'TC': { column: 'Task type', options: [
-      'Demand review and update (TC)','Order HOA docs (TC)','Jira Tickets (TC)',
-      'HOA litigation (TC)','HOA Insurance (TC)','CC&R','Follow up & Escalation','Triage'
-    ]},
-    'TS': { column: 'Task type', options: [
-      'EMD','Insurance Claim','Solar',
-      'Closing - Review, validate and upload final settlement statement',
-      'Closing - Review, validate and upload deed',
-      'Closing - Verify confirmation of close with title',
-      'Follow up'
-    ]},
-    'VA': { column: 'Task Type', options: [
-      'VA','Reno','Break','Meeting','Acq Escalation channel','QC'
-    ]},
-    'Trust / Safety': { column: 'Process', options: [
-      'Alfred','Rental Scam tickets','Identity Escalation'
-    ]},
+  // ---- Role catalog (per-team columns for 3 filter roles) ----
+  // Source of truth: canonical task-form spec doc (18srSRY…VYnatQ).
+  // Each team declares which column holds which "role" (productivity | task | subtask),
+  // plus the full dropdown options. Filters match by ANY role.
+  const ROLE_CATALOG = {
+    'BRN': {
+      productivity: { col: 'Productivity Type', options: [
+        'Finalisation Report','Follow-Up','New Work Order','People Engagement Activity',
+        'QC / Approval','SP Follow-up Call','SP Initial Call','WO Closure'
+      ]},
+      subtask: { col: 'Sub Task', options: [
+        'Maestro (updates and responses)','Maestro (creating Lineitem)','Admin (adding Reports)',
+        'Email','Admin (notes)','No Action Required','Appliance ordering','CO Request',
+        'ELA message','Preliminary invoice','BR/ACM/Triage Support','Maestro (QC approvals)',
+        'People engagement activities','Slack (updates and responses)',
+        'Spokephone (Calling / Texting)','Utility ticket (Creation/Update)',
+        'Vendor (Message and response)','Vendor Calling','Vendor Selection',
+        'Work order tracker updates','Workorder QC','Zendesk (Responses and Updates)'
+      ]}
+    },
+    'HQI': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-Up','Duplicate','PA','Audit','Overdue']},
+      subtask: { col: 'Sub Task / Action Taken', options: [
+        'Create HPM Visit','Create Incident Report','Create Side Conversation',
+        'Create Utility Ticket','Due Diligence Check','First Actions Notes',
+        'Follow-up and Escalations','Maintenance Vendor Notes','Create WO/LWO','HOA Ticket','QC'
+      ]}
+    },
+    'HOA': {
+      productivity: { col: 'Productivity Type', options: ['Follow-Up','Overdue','Duplicate','New']},
+      task: { col: 'Project/Task', options: [
+        'Non-Violation HOA','ARC','Gate Access (JIRA)','Maintenance ZD','HQI (ZD)','Violation (ZD)'
+      ]},
+      subtask: { col: 'Sub Task/Action Taken', options: [
+        'Contact HOA','Follow up and Escalation Notes','Acquire HOA contact info','ARC form fill',
+        'Contact Vendor','Create Child ticket','Create HPM Visit','Create Side Conversation',
+        'Create WO','First Action Notes','Inbound Call','Online Registration','Setting up Access',
+        'In Renovation','Duplicate','Due diligence Check'
+      ]}
+    },
+    'HOC WO': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-up','Overdue','Email Triage','Duplicate','Audit']},
+      task: { col: 'Project/Task', options: [
+        'Signage','SALA','RaaS','STPP','PAR','Needs Triage','HQI (ZD)','Maintenance ZD',
+        'HQI (JIRA)','OD Select','Email Triage','Audit'
+      ]},
+      subtask: { col: 'Sub Task/Action Taken', options: [
+        'Create WO','Invoice Created','Slack request (Signtracker)','Slack request (UpSignDown)',
+        'Create HPM Visit','Create Incident Report','Create Side Conversation','Create Utility Ticket',
+        'Due Diligence Check','First Actions Notes','Follow-up and Escalations',
+        'Maintenance Vendor notes','Create WO/LWO','HOA Ticket','Email Triage','Duplicate','Audit'
+      ]}
+    },
+    'LWO': {
+      productivity: { col: 'Productivity Type', options: ['Follow-Up','New Work Order','QC/ Approval','Spokephone','WO Closure','People Engagement Activity']},
+      subtask: { col: 'Sub Type', options: [
+        'Admin (adding notes)','LWO Closed Sheet','Maestro (Vendor Updates)','Spokephone (Calling / Texting)',
+        'BR Child Ticket (GS/CO)','No Action Required','Slack (updates and responses)',
+        'Maestro (Workorder Creation)','Utility ticket (Creation / Update)','Zendesk (Responses and Updates)',
+        'Zendesk (Side Conversation)','Maestro ( QC approvals )','Rework tracker updates',
+        'Work order tracker updates','Lien waiver processing','BR investigations','Verbiage completion',
+        'Visit creation','People engagement activities'
+      ]}
+    },
+    'TP Sourcing': {
+      productivity: { col: 'Productivity Type', options: ['Regular Sourcing','Referrals Sourcing','IBB Sourcing','TPEA Rating','Non-Compliance Report']},
+      subtask: { col: 'Sub Type', options: ['Sourcing Leads','Follow-up Calls','Follow-up Email','Follow-up Text','Sending rating emails','Non-compliance calling','Non-compliance Email']}
+    },
+    'Utilities Turn On': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-Up','Resolved']},
+      task: { col: 'Task Type', options: ['Turn On','Verification']}
+    },
+    'Utilities NST': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-Up','Resolved']},
+      task: { col: 'Task Type', options: ['NST','Verification']}
+    },
+    'Utilities Blocked Cases': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-Up','Resolved']},
+      task: { col: 'Task Type', options: ['Blocked Cases']}
+    },
+    'TC': {
+      task: { col: 'Task type', options: [
+        'Demand review and update (TC)','Order HOA docs (TC)','Jira Tickets (TC)',
+        'HOA litigation (TC)','HOA Insurance (TC)','CC&R','Follow up & Escalation','Triage'
+      ]}
+    },
+    'TS': {
+      task: { col: 'Task type', options: [
+        'EMD','Insurance Claim','Solar',
+        'Closing - Review, validate and upload final settlement statement',
+        'Closing - Review, validate and upload deed',
+        'Closing - Verify confirmation of close with title',
+        'Follow up'
+      ]}
+    },
+    'VA': {
+      task: { col: 'Task Type', options: ['VA','Reno','Break','Meeting','Acq Escalation channel','QC']}
+    },
+    'HOC Permits': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-Up','QC','Reno']}
+    },
+    'Maintenance & Scheduling': {
+      productivity: { col: 'Productivity Type', options: ['New','Followup']},
+      task: { col: 'Process', options: ['Denial','Adhoc Request','TOM/BOM','Photo Auditing','HPM Visit']}
+    },
+    'Trust / Safety': {
+      productivity: { col: 'Productivity Type', options: ['New','Followup']},
+      task: { col: 'Process', options: ['Alfred','Rental Scam tickets','Identity Escalation']},
+      subtask: { col: 'Subtype', options: ['Agent','Buyer','Vendor','Merge','IDV','RSV','QC']}
+    },
+    'Listings': {
+      productivity: { col: 'Productivity Type', options: ['Closed','Pending','Follow Up','No action needed']},
+      task: { col: 'Task', options: [
+        'Photo Review','DEF','Create Listing','Additional Thread','JIRA','BOM Ticket',
+        'Home TOM/BOM Date Passed','Violation Ticket','5 days ago Ticket','QC','RAMP',
+        'QC - Extra Audits','Lock Box','Zillow 3D','Reno VA','Showami','Late Photo Task'
+      ]}
+    },
+    'SD': {
+      task: { col: 'Task', options: [
+        'New Create','FT Closed','FT Pending','WO Update','WO No - Changes','JIRA Closed',
+        'JIRA Pending','QC','DEF - Listings','QC - Extra Audits','Reno Process',
+        'Photo Review - Listings','TX QC Check','Additional Thread'
+      ]}
+    }
   };
+
+  const ROLES = ['productivity','task','subtask'];
+  const ROLE_LABELS = { productivity: 'Productivity Type', task: 'Task', subtask: 'Sub Task' };
 
   // Accept Trust & Safety / Trust/Safety variants → canonical 'Trust / Safety'
   function canonicalTeam(team) {
@@ -2033,39 +2146,49 @@
     return t;
   }
 
-  function catalogForTeam(team) {
-    return TASK_CATALOG[canonicalTeam(team)] || null;
+  function roleMetaForTeam(team, role) {
+    const cat = ROLE_CATALOG[canonicalTeam(team)];
+    if (!cat) return null;
+    return cat[role] || null;
   }
 
-  function discoverTaskColumn(header, team) {
-    const h = header.map(x => String(x).toLowerCase());
-    // Prefer the catalog's column for this team
-    const cat = catalogForTeam(team);
-    if (cat) {
-      const idx = h.indexOf(cat.column.toLowerCase());
-      if (idx >= 0) return idx;
-    }
-    // Fallback: generic keyword search
-    const candidates = ['task','task type','tasktype','task_type','productivity type'];
-    for (let i = 0; i < h.length; i++) {
-      if (candidates.includes(h[i])) return i;
+  // Find the column index of a given role in a team's log header (by exact col name)
+  function colIdxForRole(header, team, role) {
+    const meta = roleMetaForTeam(team, role);
+    if (!meta) return -1;
+    const target = meta.col.toLowerCase();
+    for (let i = 0; i < header.length; i++) {
+      if (String(header[i]).toLowerCase() === target) return i;
     }
     return -1;
   }
 
-  function getAllTaskTypes(data) {
+  // Which teams should be in scope for filter options? Uses the current team multi-select,
+  // falling back to everything the TL has access to.
+  function visibleTeams() {
+    if (filters.teams && filters.teams.length) return filters.teams;
+    return (state.data && state.data.teams) || [];
+  }
+
+  // Union of option values for a given role across the currently-visible teams (+ observed rows).
+  // If `teamsOverride` is provided, use that instead of visibleTeams() — useful on first build
+  // before filters.teams has been seeded.
+  function getAllOptionsForRole(data, role, teamsOverride) {
     const set = new Set();
-    // 1. Seed from catalog for every team visible in the current dataset
-    const teams = (data && data.teams) || Object.keys(TASK_CATALOG);
+    const teams = teamsOverride || (
+      (filters.teams && filters.teams.length) ? filters.teams
+      : ((data && data.teams) || Object.keys(ROLE_CATALOG))
+    );
+    const teamSet = new Set(teams.map(canonicalTeam));
     teams.forEach(team => {
-      const cat = catalogForTeam(team);
-      if (cat) cat.options.forEach(opt => set.add(opt));
+      const meta = roleMetaForTeam(team, role);
+      if (meta) meta.options.forEach(opt => set.add(opt));
     });
-    // 2. Union any real values observed in log rows (catches anything the catalog misses)
     if (data && data.logs) {
       Object.keys(data.logs).forEach(team => {
+        if (!teamSet.has(canonicalTeam(team))) return;
         const entry = data.logs[team] || { header: [], rows: [] };
-        const idx = discoverTaskColumn(entry.header || [], team);
+        const idx = colIdxForRole(entry.header || [], team, role);
         if (idx < 0) return;
         (entry.rows || []).forEach(r => {
           const v = String(r[idx] || '').trim();
@@ -2093,10 +2216,16 @@
   }
 
   function filtersActive() {
-    return (filters.teams !== null && state.data && filters.teams.length !== (state.data.teams || []).length) ||
-           filters.user !== null ||
-           filters.activity !== 'all' ||
-           (filters.tasks !== null && state.data && filters.tasks.length !== getAllTaskTypes(state.data).length);
+    if (filters.teams !== null && state.data && filters.teams.length !== (state.data.teams || []).length) return true;
+    if (filters.user !== null) return true;
+    if (filters.activity !== 'all') return true;
+    for (const role of ROLES) {
+      const sel = filters[role];
+      if (sel === null) continue;
+      const all = getAllOptionsForRole(state.data, role);
+      if (sel.length !== all.length) return true;
+    }
+    return false;
   }
 
   function applyRowFilters(header, rows, team) {
@@ -2104,7 +2233,19 @@
     const hLower = header.map(h => String(h).toLowerCase());
     const userIdx = hLower.indexOf('user');
     const actIdx  = hLower.indexOf('activity');
-    const taskIdx = discoverTaskColumn(header, team);
+    // Build per-role column indices once per call
+    const roleIdx = {};
+    ROLES.forEach(role => { roleIdx[role] = colIdxForRole(header, team, role); });
+
+    // For each role filter: determine if it's in "all selected" state (equivalent to no filter).
+    // allOptionsByRole caches the full option universe for that role across the dataset.
+    const allOptionsByRole = {};
+    ROLES.forEach(role => { allOptionsByRole[role] = getAllOptionsForRole(state.data, role); });
+    const roleIsAll = {};
+    ROLES.forEach(role => {
+      const sel = filters[role];
+      roleIsAll[role] = (sel === null) || (sel.length === allOptionsByRole[role].length);
+    });
 
     return rows.filter(r => {
       if (filters.user && userIdx >= 0) {
@@ -2113,9 +2254,12 @@
       if (filters.activity !== 'all' && actIdx >= 0) {
         if (String(r[actIdx] || '').toLowerCase() !== filters.activity) return false;
       }
-      if (filters.tasks !== null && taskIdx >= 0) {
-        const v = String(r[taskIdx] || '').trim();
-        if (!filters.tasks.includes(v)) return false;
+      for (const role of ROLES) {
+        if (roleIsAll[role]) continue;          // filter inactive
+        const idx = roleIdx[role];
+        if (idx < 0) return false;              // team doesn't have this column → strict drop
+        const v = String(r[idx] || '').trim();
+        if (!filters[role].includes(v)) return false;
       }
       return true;
     });
@@ -2123,6 +2267,18 @@
 
   function teamInFilter(team) {
     return filters.teams === null || filters.teams.includes(team);
+  }
+
+  // When the team selection changes, the option universe for each role changes too.
+  // Reset each role filter to the new full option set so the UI stays in "All" state
+  // unless the user explicitly re-narrows.
+  function resyncRoleFiltersToTeams() {
+    if (!state.data) return;
+    ROLES.forEach(role => {
+      const all = getAllOptionsForRole(state.data, role);
+      filters[role] = [...all];
+    });
+    ROLES.forEach(role => buildRolePanel(role));
   }
 
   function buildTeamPanel() {
@@ -2140,6 +2296,7 @@
       r.querySelector('input').addEventListener('change', (e) => {
         if (e.target.checked) filters.teams = [...new Set([...filters.teams, t])];
         else filters.teams = filters.teams.filter(x => x !== t);
+        resyncRoleFiltersToTeams();
         updateFilterUI();
         renderSummaryCards();
         renderTabs();
@@ -2153,39 +2310,42 @@
     $('teamTriggerBadge').textContent = filters.teams.length;
   }
 
-  function buildTaskPanel() {
+  function buildRolePanel(role) {
     if (!state.data) return;
-    const allTasks = getAllTaskTypes(state.data);
-    if (filters.tasks === null) filters.tasks = [...allTasks];
-    const panel = $('taskPanel');
+    const all = getAllOptionsForRole(state.data, role);
+    if (filters[role] === null) filters[role] = [...all];
+    const panel = $(role + 'Panel');
     [...panel.querySelectorAll('.mrow')].forEach(r => r.remove());
-    if (!allTasks.length) {
+    if (!all.length) {
       const empty = document.createElement('div');
       empty.className = 'mrow';
       empty.style.color = 'var(--text-3)';
-      empty.textContent = 'No task types found yet';
+      empty.textContent = 'No ' + ROLE_LABELS[role].toLowerCase() + ' values found';
       panel.appendChild(empty);
     } else {
-      allTasks.forEach(t => {
+      all.forEach(v => {
         const r = document.createElement('label');
         r.className = 'mrow';
-        const checked = filters.tasks.includes(t) ? 'checked' : '';
-        r.innerHTML = `<input type="checkbox" ${checked}><span>${escapeHtml(t)}</span>`;
+        const checked = filters[role].includes(v) ? 'checked' : '';
+        r.innerHTML = `<input type="checkbox" ${checked}><span>${escapeHtml(v)}</span>`;
         panel.appendChild(r);
         r.querySelector('input').addEventListener('change', (e) => {
-          if (e.target.checked) filters.tasks = [...new Set([...filters.tasks, t])];
-          else filters.tasks = filters.tasks.filter(x => x !== t);
+          if (e.target.checked) filters[role] = [...new Set([...filters[role], v])];
+          else filters[role] = filters[role].filter(x => x !== v);
           updateFilterUI();
+          renderSummaryCards();
+          renderTabs();
           renderContent();
         });
       });
     }
-    $('taskTriggerText').textContent =
-      !allTasks.length ? 'No tasks'
-      : filters.tasks.length === allTasks.length ? 'All task types'
-      : filters.tasks.length === 0 ? 'No tasks'
+    const label = ROLE_LABELS[role];
+    $(role + 'TriggerText').textContent =
+      !all.length ? ('No ' + label.toLowerCase())
+      : filters[role].length === all.length ? ('All ' + label.toLowerCase() + 's')
+      : filters[role].length === 0 ? 'None'
       : 'Selected';
-    $('taskTriggerBadge').textContent = filters.tasks.length;
+    $(role + 'TriggerBadge').textContent = filters[role].length;
   }
 
   function buildUserPanel(q) {
@@ -2223,16 +2383,20 @@
     // Chips
     const chips = [];
     const allTeams = (state.data && state.data.teams) || [];
-    const allTasks = state.data ? getAllTaskTypes(state.data) : [];
     if (filters.teams !== null && filters.teams.length !== allTeams.length) {
       filters.teams.forEach(t => chips.push({ type: 'team', v: t }));
       if (filters.teams.length === 0) chips.push({ type: 'team', v: '⚠ 0 teams' });
     }
     if (filters.user) chips.push({ type: 'user', v: filters.user });
     if (filters.activity !== 'all') chips.push({ type: 'activity', v: filters.activity });
-    if (filters.tasks !== null && filters.tasks.length !== allTasks.length) {
-      filters.tasks.forEach(t => chips.push({ type: 'task', v: t }));
-    }
+    ROLES.forEach(role => {
+      const sel = filters[role];
+      const all = state.data ? getAllOptionsForRole(state.data, role) : [];
+      if (sel !== null && sel.length !== all.length) {
+        sel.forEach(v => chips.push({ type: 'role:' + role, v }));
+        if (sel.length === 0) chips.push({ type: 'role:' + role, v: '⚠ 0 ' + ROLE_LABELS[role] });
+      }
+    });
     const chipEl = $('chips');
     $('chipRow').style.display = chips.length ? 'flex' : 'none';
     chipEl.innerHTML = chips.map(c =>
@@ -2245,11 +2409,14 @@
 
   function removeChip(type, v) {
     if (type === 'team')     filters.teams = (filters.teams || []).filter(x => x !== v);
-    if (type === 'task')     filters.tasks = (filters.tasks || []).filter(x => x !== v);
-    if (type === 'user')     { filters.user = null; $('userInput').value = ''; }
-    if (type === 'activity') filters.activity = 'all';
+    else if (type === 'user')     { filters.user = null; $('userInput').value = ''; }
+    else if (type === 'activity') filters.activity = 'all';
+    else if (type && type.startsWith('role:')) {
+      const role = type.slice(5);
+      filters[role] = (filters[role] || []).filter(x => x !== v);
+    }
     buildTeamPanel();
-    buildTaskPanel();
+    ROLES.forEach(r => buildRolePanel(r));
     document.querySelectorAll('.pill-btn.activity').forEach(b => b.classList.toggle('active', b.dataset.a === filters.activity));
     updateFilterUI();
     renderSummaryCards();
@@ -2261,11 +2428,13 @@
     filters.teams = state.data ? [...(state.data.teams || [])] : null;
     filters.user = null;
     filters.activity = 'all';
-    filters.tasks = state.data ? getAllTaskTypes(state.data) : null;
+    ROLES.forEach(role => {
+      filters[role] = state.data ? getAllOptionsForRole(state.data, role) : null;
+    });
     $('userInput').value = '';
     document.querySelectorAll('.pill-btn.activity').forEach(b => b.classList.toggle('active', b.dataset.a === 'all'));
     buildTeamPanel();
-    buildTaskPanel();
+    ROLES.forEach(r => buildRolePanel(r));
     updateFilterUI();
     renderSummaryCards();
     renderTabs();
@@ -2345,35 +2514,45 @@
   });
   $('selAllTeams').addEventListener('click', (e) => {
     e.stopPropagation();
-    if (state.data) { filters.teams = [...(state.data.teams || [])]; buildTeamPanel(); updateFilterUI(); renderSummaryCards(); renderTabs(); renderContent(); }
+    if (state.data) {
+      filters.teams = [...(state.data.teams || [])];
+      resyncRoleFiltersToTeams();
+      buildTeamPanel(); updateFilterUI(); renderSummaryCards(); renderTabs(); renderContent();
+    }
   });
   $('clrAllTeams').addEventListener('click', (e) => {
     e.stopPropagation();
-    filters.teams = []; buildTeamPanel(); updateFilterUI(); renderSummaryCards(); renderTabs(); renderContent();
+    filters.teams = [];
+    resyncRoleFiltersToTeams();
+    buildTeamPanel(); updateFilterUI(); renderSummaryCards(); renderTabs(); renderContent();
   });
 
-  // Task multi
-  $('taskTrigger').addEventListener('click', (e) => {
-    e.stopPropagation();
-    $('taskMulti').classList.toggle('open');
-    $('teamMulti').classList.remove('open');
-    $('userAc').classList.remove('open');
-    userPill.classList.remove('open');
-  });
-  $('selAllTasks').addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (state.data) { filters.tasks = getAllTaskTypes(state.data); buildTaskPanel(); updateFilterUI(); renderContent(); }
-  });
-  $('clrAllTasks').addEventListener('click', (e) => {
-    e.stopPropagation();
-    filters.tasks = []; buildTaskPanel(); updateFilterUI(); renderContent();
+  // Per-role multi-selects (productivity / task / subtask)
+  ROLES.forEach(role => {
+    $(role + 'Trigger').addEventListener('click', (e) => {
+      e.stopPropagation();
+      $(role + 'Multi').classList.toggle('open');
+      // Close siblings
+      ROLES.forEach(other => { if (other !== role) $(other + 'Multi').classList.remove('open'); });
+      $('teamMulti').classList.remove('open');
+      $('userAc').classList.remove('open');
+      userPill.classList.remove('open');
+    });
+    $('selAll_' + role).addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (state.data) { filters[role] = getAllOptionsForRole(state.data, role); buildRolePanel(role); updateFilterUI(); renderSummaryCards(); renderTabs(); renderContent(); }
+    });
+    $('clrAll_' + role).addEventListener('click', (e) => {
+      e.stopPropagation();
+      filters[role] = []; buildRolePanel(role); updateFilterUI(); renderSummaryCards(); renderTabs(); renderContent();
+    });
   });
 
   // User autocomplete
   $('userInput').addEventListener('focus', () => {
     $('userAc').classList.add('open');
     $('teamMulti').classList.remove('open');
-    $('taskMulti').classList.remove('open');
+    ROLES.forEach(r => $(r + 'Multi').classList.remove('open'));
     userPill.classList.remove('open');
     buildUserPanel($('userInput').value);
   });
@@ -2387,10 +2566,9 @@
   $('resetFilters').addEventListener('click', resetAllFilters);
 
   // Close dropdowns on outside click
-  const origDocClick = document.onclick;
   document.addEventListener('click', () => {
     $('teamMulti').classList.remove('open');
-    $('taskMulti').classList.remove('open');
+    ROLES.forEach(r => $(r + 'Multi').classList.remove('open'));
     $('userAc').classList.remove('open');
   });
   document.querySelectorAll('.multi-panel, .ac-panel, .multi-trigger, .ac input').forEach(el => {
