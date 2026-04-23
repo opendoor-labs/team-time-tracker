@@ -989,7 +989,7 @@
       if (!teamInFilter(team)) return;
       const entry = data.logs[team] || { header: [], rows: [] };
       const header = entry.header || [];
-      const rows = applyRowFilters(header, entry.rows || []);
+      const rows = applyRowFilters(header, entry.rows || [], team);
       const hLower = header.map(h => String(h).toLowerCase());
       const actIdx = hLower.indexOf('activity');
       const durIdx = hLower.indexOf('duration');
@@ -1076,7 +1076,7 @@
     teams.forEach(team => {
       if (!teamInFilter(team)) return;
       const logs = (data.logs && data.logs[team]) || { header: [], rows: [] };
-      const filtered = applyRowFilters(logs.header || [], logs.rows || []);
+      const filtered = applyRowFilters(logs.header || [], logs.rows || [], team);
       const count = filtered.length;
       const tab = document.createElement('button');
       tab.className = 'tab' + (state.selectedTab === team ? ' active' : '');
@@ -1153,7 +1153,7 @@
       title = sel;
       const entry = (data.logs && data.logs[sel]) || { header: [], rows: [] };
       header = entry.header || [];
-      rows = applyRowFilters(header, entry.rows || []);
+      rows = applyRowFilters(header, entry.rows || [], sel);
     }
 
     const dateStr = (data.rangeFrom && data.rangeTo && data.rangeFrom !== data.rangeTo)
@@ -1971,9 +1971,82 @@
     return { from: toIso(start), to: toIso(end) };
   }
 
-  function discoverTaskColumn(header) {
+  // ---- Task catalog (hardcoded primary task field per team) ----
+  // For teams with multiple task-ish columns (Productivity Type + Sub Task), we pick
+  // the primary one that's most useful as a filter. Sourced from app's TaskForm options.
+  const TASK_CATALOG = {
+    'Listings': { column: 'Task', options: [
+      'Photo Review','DEF','Create Listing','Additional Thread','JIRA','BOM Ticket',
+      'Home TOM/BOM Date Passed','Violation Ticket','5 days ago Ticket','QC','RAMP',
+      'QC - Extra Audits','Lock Box','Zillow 3D','Reno VA','Showami','Late Photo Task'
+    ]},
+    'SD': { column: 'Task', options: [
+      'New Create','FT Closed','FT Pending','WO Update','WO No - Changes','JIRA Closed',
+      'JIRA Pending','QC','DEF - Listings','QC - Extra Audits','Reno Process',
+      'Photo Review - Listings','TX QC Check','Additional Thread'
+    ]},
+    'BRN': { column: 'Productivity Type', options: [
+      'Finalisation Report','Follow-Up','New Work Order','People Engagement Activity',
+      'QC / Approval','SP Follow-up Call','SP Initial Call','WO Closure'
+    ]},
+    'HQI': { column: 'Productivity Type', options: [
+      'New','Follow-Up','Duplicate','PA','Audit','Overdue'
+    ]},
+    'HOA': { column: 'Productivity Type', options: [
+      'Follow-Up','Overdue','Duplicate','New'
+    ]},
+    'HOC WO': { column: 'Productivity Type', options: [
+      'New','Follow-up','Overdue','Email Triage','Duplicate','Audit'
+    ]},
+    'LWO': { column: 'Productivity Type', options: [
+      'Follow-Up','New Work Order','QC/ Approval','Spokephone','WO Closure','People Engagement Activity'
+    ]},
+    'TP Sourcing': { column: 'Productivity Type', options: [
+      'Regular Sourcing','Referrals Sourcing','IBB Sourcing','TPEA Rating','Non-Compliance Report'
+    ]},
+    'Utilities Turn On':        { column: 'Task Type', options: ['Turn On','Verification'] },
+    'Utilities NST':            { column: 'Task Type', options: ['NST','Verification'] },
+    'Utilities Blocked Cases':  { column: 'Task Type', options: ['Blocked Cases'] },
+    'TC': { column: 'Task type', options: [
+      'Demand review and update (TC)','Order HOA docs (TC)','Jira Tickets (TC)',
+      'HOA litigation (TC)','HOA Insurance (TC)','CC&R','Follow up & Escalation','Triage'
+    ]},
+    'TS': { column: 'Task type', options: [
+      'EMD','Insurance Claim','Solar',
+      'Closing - Review, validate and upload final settlement statement',
+      'Closing - Review, validate and upload deed',
+      'Closing - Verify confirmation of close with title',
+      'Follow up'
+    ]},
+    'VA': { column: 'Task Type', options: [
+      'VA','Reno','Break','Meeting','Acq Escalation channel','QC'
+    ]},
+    'Trust / Safety': { column: 'Process', options: [
+      'Alfred','Rental Scam tickets','Identity Escalation'
+    ]},
+  };
+
+  // Accept Trust & Safety / Trust/Safety variants → canonical 'Trust / Safety'
+  function canonicalTeam(team) {
+    const t = String(team || '').trim();
+    if (/^trust\s*[\/&]\s*safety$/i.test(t)) return 'Trust / Safety';
+    return t;
+  }
+
+  function catalogForTeam(team) {
+    return TASK_CATALOG[canonicalTeam(team)] || null;
+  }
+
+  function discoverTaskColumn(header, team) {
     const h = header.map(x => String(x).toLowerCase());
-    const candidates = ['task', 'task type', 'tasktype', 'task_type'];
+    // Prefer the catalog's column for this team
+    const cat = catalogForTeam(team);
+    if (cat) {
+      const idx = h.indexOf(cat.column.toLowerCase());
+      if (idx >= 0) return idx;
+    }
+    // Fallback: generic keyword search
+    const candidates = ['task','task type','tasktype','task_type','productivity type'];
     for (let i = 0; i < h.length; i++) {
       if (candidates.includes(h[i])) return i;
     }
@@ -1982,16 +2055,24 @@
 
   function getAllTaskTypes(data) {
     const set = new Set();
-    if (!data || !data.logs) return [];
-    Object.keys(data.logs).forEach(team => {
-      const entry = data.logs[team] || { header: [], rows: [] };
-      const idx = discoverTaskColumn(entry.header || []);
-      if (idx < 0) return;
-      (entry.rows || []).forEach(r => {
-        const v = String(r[idx] || '').trim();
-        if (v) set.add(v);
-      });
+    // 1. Seed from catalog for every team visible in the current dataset
+    const teams = (data && data.teams) || Object.keys(TASK_CATALOG);
+    teams.forEach(team => {
+      const cat = catalogForTeam(team);
+      if (cat) cat.options.forEach(opt => set.add(opt));
     });
+    // 2. Union any real values observed in log rows (catches anything the catalog misses)
+    if (data && data.logs) {
+      Object.keys(data.logs).forEach(team => {
+        const entry = data.logs[team] || { header: [], rows: [] };
+        const idx = discoverTaskColumn(entry.header || [], team);
+        if (idx < 0) return;
+        (entry.rows || []).forEach(r => {
+          const v = String(r[idx] || '').trim();
+          if (v) set.add(v);
+        });
+      });
+    }
     return Array.from(set).sort();
   }
 
@@ -2018,12 +2099,12 @@
            (filters.tasks !== null && state.data && filters.tasks.length !== getAllTaskTypes(state.data).length);
   }
 
-  function applyRowFilters(header, rows) {
+  function applyRowFilters(header, rows, team) {
     if (!rows || !rows.length) return rows;
     const hLower = header.map(h => String(h).toLowerCase());
     const userIdx = hLower.indexOf('user');
     const actIdx  = hLower.indexOf('activity');
-    const taskIdx = discoverTaskColumn(header);
+    const taskIdx = discoverTaskColumn(header, team);
 
     return rows.filter(r => {
       if (filters.user && userIdx >= 0) {
