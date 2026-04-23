@@ -599,9 +599,9 @@
           <button class="pill-btn activity" data-a="dinner"><span class="dot"></span>Dinner</button>
         </div>
 
-        <!-- Row 4: Task-form filters (Productivity Type, Task, Sub Task) -->
+        <!-- Row 4: Task-form filters (Productivity Type, Task, Sub Task, Status) -->
         <div class="filter-row">
-          <span class="flabel">Productivity Type</span>
+          <span class="flabel" id="productivityLabel">Productivity Type</span>
           <div class="multi" id="productivityMulti">
             <button class="multi-trigger" id="productivityTrigger">
               <span id="productivityTriggerText">All productivity types</span>
@@ -616,7 +616,7 @@
             </div>
           </div>
 
-          <span class="flabel" style="margin-left: 12px;">Task</span>
+          <span class="flabel" id="taskLabel" style="margin-left: 12px;">Task</span>
           <div class="multi" id="taskMulti">
             <button class="multi-trigger" id="taskTrigger">
               <span id="taskTriggerText">All tasks</span>
@@ -631,7 +631,7 @@
             </div>
           </div>
 
-          <span class="flabel" style="margin-left: 12px;">Sub Task</span>
+          <span class="flabel" id="subtaskLabel" style="margin-left: 12px;">Sub Task</span>
           <div class="multi" id="subtaskMulti">
             <button class="multi-trigger" id="subtaskTrigger">
               <span id="subtaskTriggerText">All sub tasks</span>
@@ -642,6 +642,21 @@
               <div class="mhead">
                 <span>Sub Task</span>
                 <span><a id="selAll_subtask">Select all</a> · <a id="clrAll_subtask">Clear</a></span>
+              </div>
+            </div>
+          </div>
+
+          <span class="flabel" id="statusLabel" style="margin-left: 12px;">Status</span>
+          <div class="multi" id="statusMulti">
+            <button class="multi-trigger" id="statusTrigger">
+              <span id="statusTriggerText">All statuses</span>
+              <span class="mcount" id="statusTriggerBadge">0</span>
+              <span class="chev">▼</span>
+            </button>
+            <div class="multi-panel" id="statusPanel">
+              <div class="mhead">
+                <span>Status</span>
+                <span><a id="selAll_status">Select all</a> · <a id="clrAll_status">Clear</a></span>
               </div>
             </div>
           </div>
@@ -1947,6 +1962,7 @@
     productivity: null,
     task: null,
     subtask: null,
+    status: null,
   };
 
   function yesterdayIsoLocal() {
@@ -2035,6 +2051,12 @@
         'Create HPM Visit','Create Incident Report','Create Side Conversation',
         'Create Utility Ticket','Due Diligence Check','First Actions Notes',
         'Follow-up and Escalations','Maintenance Vendor Notes','Create WO/LWO','HOA Ticket','QC'
+      ]},
+      status: { col: 'Status', options: [
+        'New → Solved','New → On-Hold','On-Hold → Solved','On-Hold → Follow-up',
+        '(Others) On-Hold → Solved','(Others) On-Hold → Follow-up',
+        '(Others) New → Solved','(Others) New → On-Hold',
+        'QC Completed','Duplicate → Solved'
       ]}
     },
     'HOA': {
@@ -2047,6 +2069,12 @@
         'Contact Vendor','Create Child ticket','Create HPM Visit','Create Side Conversation',
         'Create WO','First Action Notes','Inbound Call','Online Registration','Setting up Access',
         'In Renovation','Duplicate','Due diligence Check'
+      ]},
+      status: { col: 'Status', options: [
+        'New->On-Hold','On-Hold->Solved','On-Hold->Follow-up',
+        '(Others) On-Hold->Solved','(Others) On-Hold->Follow-up',
+        '(Others) New->Solved','(Others) New->On-Hold',
+        'Duplicate->Solved','New->Solved'
       ]}
     },
     'HOC WO': {
@@ -2060,6 +2088,12 @@
         'Create HPM Visit','Create Incident Report','Create Side Conversation','Create Utility Ticket',
         'Due Diligence Check','First Actions Notes','Follow-up and Escalations',
         'Maintenance Vendor notes','Create WO/LWO','HOA Ticket','Email Triage','Duplicate','Audit'
+      ]},
+      status: { col: 'Status', options: [
+        'New->Solved','New->On-Hold','On-Hold->Solved','On-Hold->Follow-up',
+        '(Others) On-Hold->Solved','(Others) On-Hold->Follow-up',
+        '(Others) New->Solved','(Others) New->On-Hold',
+        'Duplicate->Solved'
       ]}
     },
     'LWO': {
@@ -2093,6 +2127,12 @@
       task: { col: 'Task type', options: [
         'Demand review and update (TC)','Order HOA docs (TC)','Jira Tickets (TC)',
         'HOA litigation (TC)','HOA Insurance (TC)','CC&R','Follow up & Escalation','Triage'
+      ]},
+      status: { col: 'Status', options: [
+        'New -> Solved','New -> On-Hold','Unassigned New -> Solved','Unassigned New -> On-Hold',
+        'Follow-up -> Solved','Follow-up -> On-Hold',
+        'Follow-up (Others) -> Solved','Follow-up (Others) -> On-Hold',
+        'Duplicate Solved','NA'
       ]}
     },
     'TS': {
@@ -2102,6 +2142,12 @@
         'Closing - Review, validate and upload deed',
         'Closing - Verify confirmation of close with title',
         'Follow up'
+      ]},
+      status: { col: 'Status', options: [
+        'New -> Solved','New -> On-Hold',
+        'Follow-up -> Solved','Follow-up -> On-Hold',
+        'Follow-up (Others) -> Solved','Follow-up (Others) -> On-Hold',
+        'Duplicate Solved','NA'
       ]}
     },
     'VA': {
@@ -2136,8 +2182,8 @@
     }
   };
 
-  const ROLES = ['productivity','task','subtask'];
-  const ROLE_LABELS = { productivity: 'Productivity Type', task: 'Task', subtask: 'Sub Task' };
+  const ROLES = ['productivity','task','subtask','status'];
+  const ROLE_LABELS = { productivity: 'Productivity Type', task: 'Task', subtask: 'Sub Task', status: 'Status' };
 
   // Accept Trust & Safety / Trust/Safety variants → canonical 'Trust / Safety'
   function canonicalTeam(team) {
@@ -2314,6 +2360,19 @@
     if (!state.data) return;
     const all = getAllOptionsForRole(state.data, role);
     if (filters[role] === null) filters[role] = [...all];
+
+    // Auto-hide the whole multi-select (+ its label) when no visible team uses this role
+    const multi = $(role + 'Multi');
+    const labelEl = $(role + 'Label');
+    if (!all.length) {
+      if (multi) multi.style.display = 'none';
+      if (labelEl) labelEl.style.display = 'none';
+      return;
+    } else {
+      if (multi) multi.style.display = '';
+      if (labelEl) labelEl.style.display = '';
+    }
+
     const panel = $(role + 'Panel');
     [...panel.querySelectorAll('.mrow')].forEach(r => r.remove());
     if (!all.length) {
