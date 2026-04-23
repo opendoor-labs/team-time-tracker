@@ -381,6 +381,10 @@
 
   .custom-range { display: none; align-items: center; gap: 8px; margin-left: 6px; }
   .custom-range.show { display: inline-flex; }
+  .custom-range .range-sep { color: var(--muted); font-size: 13px; }
+  .range-banner { display: none; align-items: center; gap: 8px; padding: 8px 12px; margin-top: 8px; background: var(--brand-50); border: 1px solid #dbeafe; border-radius: 8px; color: #1e40af; font-size: 13px; }
+  .range-banner.show { display: flex; }
+  .range-banner .spin { width: 12px; height: 12px; border: 2px solid #93c5fd; border-top-color: #1e40af; border-radius: 50%; animation: spin 0.8s linear infinite; }
   .arrow { color: var(--text-3); }
 
   /* ───── ORANGE OTP LOGIN GATE (unchanged look & feel) ───── */
@@ -535,18 +539,26 @@
           <div class="segmented" id="periodSegmented">
             <button class="seg active" data-p="today">Today</button>
             <button class="seg" data-p="yesterday">Yesterday</button>
-            <button class="seg" data-p="this_week" disabled title="Multi-day view coming soon">This Week</button>
-            <button class="seg" data-p="last_week" disabled title="Multi-day view coming soon">Last Week</button>
-            <button class="seg" data-p="this_month" disabled title="Multi-day view coming soon">This Month</button>
-            <button class="seg" data-p="last_month" disabled title="Multi-day view coming soon">Last Month</button>
+            <button class="seg" data-p="this_week">This Week</button>
+            <button class="seg" data-p="last_week">Last Week</button>
+            <button class="seg" data-p="this_month">This Month</button>
+            <button class="seg" data-p="last_month">Last Month</button>
             <button class="seg" data-p="custom">Custom</button>
           </div>
           <div class="custom-range" id="customRange">
-            <input type="date" class="date-input" id="customDate">
+            <input type="date" class="date-input" id="customFrom" aria-label="From date">
+            <span class="range-sep">to</span>
+            <input type="date" class="date-input" id="customTo" aria-label="To date">
           </div>
           <div class="right-tools">
             <button class="reset-btn" id="resetFilters">Reset filters</button>
           </div>
+        </div>
+
+        <!-- Range loading banner -->
+        <div class="range-banner" id="rangeBanner">
+          <span class="spin"></span>
+          <span id="rangeBannerText">Loading range…</span>
         </div>
 
         <!-- Row 2: Team + User -->
@@ -695,7 +707,9 @@
   const state = {
     email: '',
     token: '',
-    date: '',
+    date: '',        // single-day selection (used by top datePicker + live poll)
+    dateFrom: '',    // range start (inclusive)
+    dateTo: '',      // range end   (inclusive); when == dateFrom → single-day mode
     data: null,
     selectedTab: null,
     lastFetchAt: null,
@@ -705,6 +719,8 @@
     liveLoading: false,
     liveError: null,
   };
+
+  const MAX_RANGE_DAYS = 31;
 
   // ---- DOM ----
   const $ = (id) => document.getElementById(id);
@@ -757,38 +773,128 @@
   }
 
   // ---- API ----
+  async function fetchOneDay(dateIso) {
+    const url = `${API_URL}?action=tlDashboard&token=${encodeURIComponent(state.token || '')}&date=${encodeURIComponent(dateIso)}`;
+    const res = await fetch(url, { method: 'GET' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  function mergeDayIntoData(base, day) {
+    // base.logs[team] = { header, rows }  ← accumulate rows from each day
+    if (!day || !day.logs) return base;
+    if (!base) {
+      // First day becomes the baseline — clone to avoid mutating the source
+      return {
+        ok: true,
+        teams: [...(day.teams || [])],
+        role: day.role,
+        email: day.email,
+        logs: Object.fromEntries(Object.entries(day.logs).map(([t, v]) => [
+          t,
+          { header: [...(v.header || [])], rows: [...(v.rows || [])] }
+        ])),
+      };
+    }
+    // Merge: add any new teams, append rows for existing teams
+    (day.teams || []).forEach(t => { if (!base.teams.includes(t)) base.teams.push(t); });
+    Object.keys(day.logs).forEach(team => {
+      const src = day.logs[team] || { header: [], rows: [] };
+      if (!base.logs[team]) {
+        base.logs[team] = { header: [...(src.header || [])], rows: [...(src.rows || [])] };
+      } else {
+        // Reuse the existing header (assumed stable across days)
+        base.logs[team].rows = base.logs[team].rows.concat(src.rows || []);
+      }
+    });
+    return base;
+  }
+
   async function fetchData() {
     state.loading = true;
     setRefreshLoading(true);
 
-    const url = `${API_URL}?action=tlDashboard&token=${encodeURIComponent(state.token || '')}&date=${encodeURIComponent(state.date)}`;
+    // Normalise range
+    if (!state.dateFrom) state.dateFrom = state.date || todayIsoLocal();
+    if (!state.dateTo)   state.dateTo   = state.dateFrom;
+    let from = state.dateFrom, to = state.dateTo;
+    if (fromIso(from) > fromIso(to)) { const t = from; from = to; to = t; }
+    const span = daysBetween(from, to);
+
+    if (span > MAX_RANGE_DAYS) {
+      state.loading = false;
+      setRefreshLoading(false);
+      contentEl.innerHTML = `<div class="empty">Range too large — please pick ${MAX_RANGE_DAYS} days or fewer. You selected ${span} days.</div>`;
+      return;
+    }
+
+    const banner = $('rangeBanner');
+    const bannerText = $('rangeBannerText');
+    const showBanner = span > 1;
+    if (showBanner) { banner.classList.add('show'); }
 
     try {
-      const res = await fetch(url, { method: 'GET' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-
-      if (!json.ok) {
-        if (json.error === 'session_expired' || json.error === 'forbidden') {
-          window.__signOut('Your session expired. Please sign in again.');
+      if (span === 1) {
+        // Single-day fast path (unchanged behaviour)
+        state.date = from;
+        const json = await fetchOneDay(from);
+        if (!json.ok) {
+          if (json.error === 'session_expired' || json.error === 'forbidden') {
+            window.__signOut('Your session expired. Please sign in again.');
+            return;
+          }
+          renderApiError(json.error || 'unknown_error');
           return;
         }
-        renderApiError(json.error || 'unknown_error');
-        return;
+        state.data = json;
+      } else {
+        // Multi-day range: fetch sequentially so we don't hammer Apps Script
+        const days = enumerateDays(from, to);
+        let merged = null;
+        let failures = 0;
+        for (let i = 0; i < days.length; i++) {
+          bannerText.textContent = `Loading range ${from} → ${to} · day ${i + 1} of ${days.length}…`;
+          try {
+            const json = await fetchOneDay(days[i]);
+            if (!json.ok) {
+              if (json.error === 'session_expired' || json.error === 'forbidden') {
+                window.__signOut('Your session expired. Please sign in again.');
+                return;
+              }
+              failures++;
+              continue;
+            }
+            merged = mergeDayIntoData(merged, json);
+          } catch (e) {
+            failures++;
+          }
+        }
+        if (!merged) {
+          renderApiError('range_fetch_failed');
+          return;
+        }
+        // Stamp the merged payload with range metadata so downstream rendering can show it
+        merged.rangeFrom = from;
+        merged.rangeTo   = to;
+        merged.rangeDays = days.length;
+        merged.rangeFailures = failures;
+        state.date = to;           // top datePicker reflects the end of range
+        state.data = merged;
       }
 
-      state.data = json;
       state.lastFetchAt = new Date();
 
-      const validTabs = getAllTabKeys(json);
+      const validTabs = getAllTabKeys(state.data);
       if (!state.selectedTab || !validTabs.includes(state.selectedTab)) {
         const firstNonLive = validTabs.find(k => k !== '__live');
         state.selectedTab = firstNonLive || validTabs[0] || null;
       }
 
-      if (state.selectedTab === '__live' && !state.livePollTimer) {
+      // Live polling only makes sense for today (single day)
+      const isToday = (span === 1 && from === todayIsoLocal());
+      if (isToday && state.selectedTab === '__live' && !state.livePollTimer) {
         startLivePolling();
-      } else if (state.selectedTab !== '__live' && state.livePollTimer) {
+      } else if ((!isToday || state.selectedTab !== '__live') && state.livePollTimer) {
         stopLivePolling();
       }
 
@@ -799,6 +905,7 @@
       state.loading = false;
       setRefreshLoading(false);
       updateUpdatedAt();
+      banner.classList.remove('show');
     }
   }
 
@@ -951,13 +1058,19 @@
     tabsEl.innerHTML = '';
     tabsEl.classList.remove('hidden');
 
-    {
+    // Live tab only makes sense in single-day mode (it reflects "right now" state).
+    const isSingleDay = !data.rangeFrom || data.rangeFrom === data.rangeTo;
+    if (isSingleDay) {
       const liveCount = state.liveData && Array.isArray(state.liveData.users) ? state.liveData.users.length : 0;
       const liveTab = document.createElement('button');
       liveTab.className = 'tab' + (state.selectedTab === '__live' ? ' active' : '');
       liveTab.innerHTML = `🔴 Live Activity <span class="count-badge">${liveCount}</span>`;
       liveTab.addEventListener('click', () => { selectTab('__live'); });
       tabsEl.appendChild(liveTab);
+    } else if (state.selectedTab === '__live') {
+      // Drop __live from selection when in a multi-day range
+      const firstTeam = teams.find(t => teamInFilter(t));
+      state.selectedTab = firstTeam || (teams[0] || null);
     }
 
     teams.forEach(team => {
@@ -1043,7 +1156,9 @@
       rows = applyRowFilters(header, entry.rows || []);
     }
 
-    const dateStr = data.date || state.date;
+    const dateStr = (data.rangeFrom && data.rangeTo && data.rangeFrom !== data.rangeTo)
+      ? `${data.rangeFrom} → ${data.rangeTo} · ${data.rangeDays || daysBetween(data.rangeFrom, data.rangeTo)} days`
+      : (data.date || state.date);
 
     if (!rows.length) {
       contentEl.innerHTML = `
@@ -1056,7 +1171,7 @@
             </div>
           </div>
           <div class="state">
-            <p>No entries logged for ${escapeHtml(title)} on ${escapeHtml(dateStr)}.</p>
+            <p>No entries logged for ${escapeHtml(title)} ${(data.rangeFrom && data.rangeFrom !== data.rangeTo) ? 'in this range' : 'on ' + escapeHtml(dateStr)}.</p>
           </div>
         </div>`;
       const csvBtn = document.getElementById('csvExportBtn');
@@ -1469,7 +1584,22 @@
 
   // ---- Event wiring ----
   datePicker.addEventListener('change', () => {
+    // Top date picker always snaps to single-day mode for the chosen date
     state.date = datePicker.value;
+    state.dateFrom = state.date;
+    state.dateTo   = state.date;
+    // Reflect in period segmented: clear active state unless it's today/yesterday
+    const t = todayIsoLocal(), y = yesterdayIsoLocal();
+    document.querySelectorAll('#periodSegmented [data-p]').forEach(b => b.classList.remove('active'));
+    if (state.date === t) { document.querySelector('#periodSegmented [data-p="today"]').classList.add('active'); filters.period = 'today'; }
+    else if (state.date === y) { document.querySelector('#periodSegmented [data-p="yesterday"]').classList.add('active'); filters.period = 'yesterday'; }
+    else {
+      document.querySelector('#periodSegmented [data-p="custom"]').classList.add('active');
+      filters.period = 'custom';
+      $('customRange').classList.add('show');
+      $('customFrom').value = state.date;
+      $('customTo').value   = state.date;
+    }
     updateUrl(state.email, state.date);
     fetchData();
   });
@@ -1636,6 +1766,8 @@
       state.token = json.token;
       state.email = json.email;
       state.date = state.date || todayIsoLocal();
+      state.dateFrom = state.dateFrom || state.date;
+      state.dateTo   = state.dateTo   || state.date;
       history.replaceState(null, '', `${location.pathname}?date=${encodeURIComponent(state.date)}`);
       enterDashboard();
     } catch (err) {
@@ -1786,6 +1918,57 @@
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}`;
+  }
+
+  // ---- Range helpers ----
+  function toIso(d) {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  function fromIso(iso) {
+    const [y, m, d] = String(iso).split('-').map(Number);
+    return new Date(y, (m || 1) - 1, d || 1);
+  }
+  function isoAddDays(iso, n) {
+    const d = fromIso(iso); d.setDate(d.getDate() + n); return toIso(d);
+  }
+  function daysBetween(fromIsoStr, toIsoStr) {
+    const a = fromIso(fromIsoStr), b = fromIso(toIsoStr);
+    return Math.round((b - a) / 86400000) + 1;
+  }
+  function enumerateDays(fromIsoStr, toIsoStr) {
+    const out = [];
+    const n = daysBetween(fromIsoStr, toIsoStr);
+    for (let i = 0; i < n; i++) out.push(isoAddDays(fromIsoStr, i));
+    return out;
+  }
+  // Monday as week start (ISO week)
+  function weekRange(which /* 'this' | 'last' */) {
+    const d = new Date();
+    const day = d.getDay();                    // 0=Sun..6=Sat
+    const diffToMon = (day === 0 ? -6 : 1 - day);
+    const monday = new Date(d); monday.setDate(d.getDate() + diffToMon);
+    if (which === 'last') monday.setDate(monday.getDate() - 7);
+    const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+    // Cap "this week" end at today so we don't fetch future days
+    const today = new Date();
+    const end = (which === 'this' && sunday > today) ? today : sunday;
+    return { from: toIso(monday), to: toIso(end) };
+  }
+  function monthRange(which /* 'this' | 'last' */) {
+    const now = new Date();
+    const y = now.getFullYear(), m = now.getMonth();
+    let start, end;
+    if (which === 'this') {
+      start = new Date(y, m, 1);
+      end = now;                               // cap at today
+    } else {
+      start = new Date(y, m - 1, 1);
+      end   = new Date(y, m, 0);               // last day of prev month
+    }
+    return { from: toIso(start), to: toIso(end) };
   }
 
   function discoverTaskColumn(header) {
@@ -2009,30 +2192,56 @@
   }
 
   // Wire Period segmented
+  function applyPeriod(p) {
+    filters.period = p;
+    $('customRange').classList.toggle('show', p === 'custom');
+    let range = null;
+    if (p === 'today')      range = { from: todayIsoLocal(),     to: todayIsoLocal() };
+    else if (p === 'yesterday') range = { from: yesterdayIsoLocal(), to: yesterdayIsoLocal() };
+    else if (p === 'this_week')  range = weekRange('this');
+    else if (p === 'last_week')  range = weekRange('last');
+    else if (p === 'this_month') range = monthRange('this');
+    else if (p === 'last_month') range = monthRange('last');
+    else if (p === 'custom') {
+      // Seed custom inputs if empty; don't fetch until both are set
+      if (!$('customFrom').value) $('customFrom').value = state.dateFrom || todayIsoLocal();
+      if (!$('customTo').value)   $('customTo').value   = state.dateTo   || $('customFrom').value;
+      range = { from: $('customFrom').value, to: $('customTo').value };
+    }
+    if (range) {
+      state.dateFrom = range.from;
+      state.dateTo   = range.to;
+      state.date     = range.to;       // top datePicker shows the end-of-range
+      datePicker.value = state.date;
+      if (p === 'custom') {
+        $('customFrom').value = range.from;
+        $('customTo').value   = range.to;
+      }
+      fetchData();
+    }
+  }
   document.querySelectorAll('#periodSegmented [data-p]').forEach(btn => {
     btn.addEventListener('click', () => {
       if (btn.disabled) return;
       document.querySelectorAll('#periodSegmented [data-p]').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      filters.period = btn.dataset.p;
-      $('customRange').classList.toggle('show', filters.period === 'custom');
-      if (filters.period === 'today') {
-        state.date = todayIsoLocal();
-        datePicker.value = state.date;
-        fetchData();
-      } else if (filters.period === 'yesterday') {
-        state.date = yesterdayIsoLocal();
-        datePicker.value = state.date;
-        fetchData();
-      }
+      applyPeriod(btn.dataset.p);
     });
   });
-  $('customDate').addEventListener('change', (e) => {
-    if (!e.target.value) return;
-    state.date = e.target.value;
+  function onCustomRangeChange() {
+    const f = $('customFrom').value, t = $('customTo').value;
+    if (!f || !t) return;
+    // Swap if inverted (UX nicety)
+    let from = f, to = t;
+    if (fromIso(from) > fromIso(to)) { const tmp = from; from = to; to = tmp; $('customFrom').value = from; $('customTo').value = to; }
+    state.dateFrom = from;
+    state.dateTo   = to;
+    state.date     = to;
     datePicker.value = state.date;
     fetchData();
-  });
+  }
+  $('customFrom').addEventListener('change', onCustomRangeChange);
+  $('customTo').addEventListener('change', onCustomRangeChange);
 
   // Activity pills
   document.querySelectorAll('.pill-btn.activity').forEach(btn => {
@@ -2120,6 +2329,8 @@
 
     const params = getParams();
     state.date = params.date || todayIsoLocal();
+    state.dateFrom = state.date;
+    state.dateTo   = state.date;
 
     if (token && email) {
       state.token = token;
