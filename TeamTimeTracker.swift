@@ -19,7 +19,7 @@ import IOKit
 import CoreGraphics
 
 // ── Constants ──────────────────────────────────────────────────────────
-let APP_VERSION = "2.7.0"
+let APP_VERSION = "2.7.1"
 let SHEET_URL = "https://script.google.com/macros/s/AKfycbxkBAtowwxWuKkaga-aR93ssyxuygFZC-zYXsdm22aVKhXWB45E4YKMKVmc0Ty_ByFk/exec"
 let INSTALL_DIR = NSHomeDirectory() + "/Library/TeamTracker"
 let HTML_PATH = INSTALL_DIR + "/index.html"
@@ -30,6 +30,14 @@ let LOCK_BREAK_SEC: TimeInterval = 900       // 15 min
 let MANUAL_BREAK_WELCOME_SEC: TimeInterval = 300
 let UPDATE_CHECK_INTERVAL: TimeInterval = 7200   // 2 hrs
 let CONFIG_POLL_INTERVAL: TimeInterval = 300     // 5 min
+
+// ── Update safety constants ────────────────────────────────────────────
+let UPDATE_SNOOZE_KEY  = "ttk.updateSnoozeUntil"
+let UPDATE_ATTEMPT_KEY = "ttk.updateAttempts"       // [TimeInterval]
+let UPDATE_LAST_VER_KEY = "ttk.lastKnownVersion"
+let UPDATE_SNOOZE_SEC: TimeInterval = 4 * 3600     // 4 hours
+let UPDATE_LOOP_WINDOW: TimeInterval = 300         // 5 min
+let UPDATE_LOOP_MAX = 2                            // >2 attempts in window = loop
 
 // ── App Delegate ───────────────────────────────────────────────────────
 class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate {
@@ -53,8 +61,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         loadHTML()
         registerSystemHooks()
         startTimers()
+        postUpdateHousekeeping()    // detect post-update boot, heartbeat, resume state
         checkForUpdate()
         pollConfig()
+    }
+
+    // Detect if this launch came from an update install. If so, emit a
+    // post-update heartbeat and tell JS to resume the in-progress session
+    // (JS reads session state from the backend, so no local replay needed).
+    func postUpdateHousekeeping() {
+        let defaults = UserDefaults.standard
+        let last = defaults.string(forKey: UPDATE_LAST_VER_KEY) ?? ""
+        if !last.isEmpty && last != APP_VERSION {
+            // Just updated from `last` → `APP_VERSION`
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                guard let self = self else { return }
+                self.postToApi(action: "heartbeat", payload: [
+                    "phase": "post_update",
+                    "fromVersion": last,
+                    "toVersion": APP_VERSION,
+                    "user": NSFullUserName()
+                ]) { _ in }
+                self.sendToJS("onPostUpdate", payload: [
+                    "fromVersion": last,
+                    "toVersion": APP_VERSION
+                ])
+            }
+        }
+        defaults.set(APP_VERSION, forKey: UPDATE_LAST_VER_KEY)
     }
 
     // ── Dock icon — draw a branded icon at runtime ─────────────────────
@@ -307,18 +341,65 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
 
     @objc func manualConfigRefresh() { pollConfig() }
 
-    // ── Auto-update ────────────────────────────────────────────────────
+    // ── Auto-update (safe flow) ────────────────────────────────────────
+    //
+    // Flow:
+    //   1. checkForUpdate() — polls Config!B1, bails if no newer version
+    //   2. Loop guard — if >2 attempts in 5 min, stop (prevents flicker)
+    //   3. Snooze guard — if user clicked "Later" recently, skip auto-check
+    //      (manual "Check for Updates" always overrides snooze)
+    //   4. Confirmation dialog — user chooses Update Now / Later
+    //   5. Update Now → snapshot state → download → compile → relaunch
+    //
+    // Session continuity:
+    //   - Backend (Apps Script) owns session truth
+    //   - Pre-update heartbeat marks the pause; post-update (on relaunch)
+    //     marks the resume. Current task / elapsed time resume seamlessly.
+    //
+    var isManualUpdateCheck = false
+
     func checkForUpdate() {
         fetchConfig { [weak self] cfg in
-            guard let self = self,
-                  let v = cfg["version"] as? String,
-                  let src = cfg["sourceUrl"] as? String,
-                  self.isNewer(v) else { return }
-            self.performUpdate(version: v, sourceUrl: src)
+            guard let self = self else { return }
+            guard let v = cfg["version"] as? String,
+                  let src = cfg["sourceUrl"] as? String else { return }
+
+            if !self.isNewer(v) {
+                if self.isManualUpdateCheck {
+                    self.isManualUpdateCheck = false
+                    DispatchQueue.main.async { self.showUpToDateDialog() }
+                }
+                return
+            }
+
+            // Loop guard: abort if we've attempted too many times recently
+            if self.isInUpdateLoop() {
+                NSLog("Team Tracker: update loop detected (\(UPDATE_LOOP_MAX)+ attempts in \(Int(UPDATE_LOOP_WINDOW))s). Skipping.")
+                if self.isManualUpdateCheck {
+                    self.isManualUpdateCheck = false
+                    DispatchQueue.main.async { self.showLoopGuardDialog() }
+                }
+                return
+            }
+
+            // Snooze guard: respect user's "Later" choice (skipped for manual)
+            if !self.isManualUpdateCheck,
+               let snooze = UserDefaults.standard.object(forKey: UPDATE_SNOOZE_KEY) as? Date,
+               Date() < snooze {
+                return
+            }
+
+            DispatchQueue.main.async {
+                self.isManualUpdateCheck = false
+                self.promptForUpdate(version: v, sourceUrl: src)
+            }
         }
     }
 
-    @objc func manualUpdateCheck() { checkForUpdate() }
+    @objc func manualUpdateCheck() {
+        isManualUpdateCheck = true
+        checkForUpdate()
+    }
 
     func isNewer(_ remote: String) -> Bool {
         let r = remote.split(separator: ".").compactMap { Int($0) }
@@ -332,6 +413,100 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         return false
     }
 
+    // ── Loop guard helpers ─────────────────────────────────────────────
+    func recordUpdateAttempt() {
+        let now = Date().timeIntervalSince1970
+        var attempts = UserDefaults.standard.array(forKey: UPDATE_ATTEMPT_KEY) as? [TimeInterval] ?? []
+        let cutoff = now - UPDATE_LOOP_WINDOW
+        attempts = attempts.filter { $0 > cutoff }
+        attempts.append(now)
+        UserDefaults.standard.set(attempts, forKey: UPDATE_ATTEMPT_KEY)
+    }
+
+    func isInUpdateLoop() -> Bool {
+        let now = Date().timeIntervalSince1970
+        let attempts = UserDefaults.standard.array(forKey: UPDATE_ATTEMPT_KEY) as? [TimeInterval] ?? []
+        let cutoff = now - UPDATE_LOOP_WINDOW
+        return attempts.filter { $0 > cutoff }.count >= UPDATE_LOOP_MAX
+    }
+
+    // ── Confirmation dialogs ───────────────────────────────────────────
+    func promptForUpdate(version: String, sourceUrl: String) {
+        let alert = NSAlert()
+        alert.messageText = "Team Tracker Update Available"
+        alert.informativeText = """
+        Version \(version) is ready to install.
+        (You're currently on \(APP_VERSION).)
+
+        ✓ Your current task will resume
+        ✓ Your timer keeps running
+        ✓ No data will be lost
+
+        App will restart briefly (~10 seconds).
+        """
+        alert.addButton(withTitle: "Update Now")
+        alert.addButton(withTitle: "Later")
+        alert.alertStyle = .informational
+        alert.icon = NSApp.applicationIconImage
+
+        NSApp.activate(ignoringOtherApps: true)
+        let resp = alert.runModal()
+
+        if resp == .alertFirstButtonReturn {
+            // User chose Update Now
+            snapshotStateBeforeUpdate(targetVersion: version)
+            recordUpdateAttempt()
+            performUpdate(version: version, sourceUrl: sourceUrl)
+        } else {
+            // User chose Later — snooze 4 hours
+            let snoozeUntil = Date().addingTimeInterval(UPDATE_SNOOZE_SEC)
+            UserDefaults.standard.set(snoozeUntil, forKey: UPDATE_SNOOZE_KEY)
+            NSLog("Team Tracker: update snoozed until \(snoozeUntil)")
+        }
+    }
+
+    func showUpToDateDialog() {
+        let alert = NSAlert()
+        alert.messageText = "You're up to date"
+        alert.informativeText = "Team Tracker is running the latest version (\(APP_VERSION))."
+        alert.addButton(withTitle: "OK")
+        alert.alertStyle = .informational
+        alert.icon = NSApp.applicationIconImage
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    func showLoopGuardDialog() {
+        let alert = NSAlert()
+        alert.messageText = "Update paused"
+        alert.informativeText = "Too many update attempts recently. Please try again in a few minutes, or message @arun if the issue persists."
+        alert.addButton(withTitle: "OK")
+        alert.alertStyle = .warning
+        alert.icon = NSApp.applicationIconImage
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    // ── State snapshot before update ───────────────────────────────────
+    // Send pre-update heartbeat to Apps Script so backend knows the session
+    // was paused for an update (not abandoned). JS layer also gets a chance
+    // to persist anything it cares about.
+    func snapshotStateBeforeUpdate(targetVersion: String) {
+        postToApi(action: "heartbeat", payload: [
+            "phase": "pre_update",
+            "fromVersion": APP_VERSION,
+            "toVersion": targetVersion,
+            "user": NSFullUserName()
+        ]) { _ in }
+        sendToJS("onPreUpdate", payload: [
+            "fromVersion": APP_VERSION,
+            "toVersion": targetVersion
+        ])
+        // Small delay so the heartbeat request has a chance to flush
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+
+    // ── Perform update (download + compile + relaunch) ─────────────────
     func performUpdate(version: String, sourceUrl: String) {
         guard let url = URL(string: sourceUrl) else { return }
         URLSession.shared.dataTask(with: url) { data, _, _ in
