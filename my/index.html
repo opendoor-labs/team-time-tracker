@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>My Dashboard</title>
+<script>
+// Legacy path — redirect to canonical /dashboard/my/index.html, preserving hash (token+user)
+(function(){
+  var dest = "/dashboard/my/index.html" + (window.location.hash || "") + (window.location.search || "");
+  window.location.replace(dest);
+})();
+</script>
+</head>
+<body>Redirecting…</body>
+</html>

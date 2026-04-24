@@ -26,7 +26,7 @@ import CoreGraphics
 let APP_VERSION = "2.7.5"
 let SHEET_URL = "https://script.google.com/macros/s/AKfycbxkBAtowwxWuKkaga-aR93ssyxuygFZC-zYXsdm22aVKhXWB45E4YKMKVmc0Ty_ByFk/exec"
 let HTML_URL = "https://team-time-tracker-osoe.onrender.com/index.html"
-let MY_DASH_URL = "https://team-time-tracker-osoe.onrender.com/my/index.html"
+let MY_DASH_URL = "https://team-time-tracker-osoe.onrender.com/dashboard/my/index.html"
 let INSTALL_DIR = NSHomeDirectory() + "/Library/TeamTracker"
 let HTML_PATH = INSTALL_DIR + "/index.html"
 
