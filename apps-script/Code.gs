@@ -1003,6 +1003,16 @@ function todayPST_() { return Utilities.formatDate(new Date(), 'America/Los_Ange
 // Hybrid: PST calendar date + IST clock time, e.g. "2026-04-22 19:30:45"
 function nowPSTdateISTtime_() { return todayPST_() + ' ' + timeIST_(); }
 
+// Coerce a Sheets cell value to a PST "yyyy-MM-dd" string.
+// Google Sheets auto-converts date-like strings (e.g. "2026-04-24") written via
+// appendRow() to native Date objects on read, so a naive String(v).slice(0,10)
+// yields "Fri Apr 24" and breaks lexical date comparisons. This helper normalizes
+// both Date objects and strings to the canonical YYYY-MM-DD form.
+function _toYMD_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'America/Los_Angeles', 'yyyy-MM-dd');
+  return String(v || '').slice(0, 10);
+}
+
 // Parse TaskStartedAt cell value back to ms-epoch for the dashboard.
 // Handles: new format ("yyyy-MM-dd HH:mm:ss" IST string), legacy ms-number rows,
 // native Date objects (if the cell was coerced by Sheets), or blank.
@@ -1719,7 +1729,7 @@ function _readUserTeamLogRange_(ss, team, user, fromDate, toDate) {
     var start = Math.max(2, end - BLOCK + 1);
     var block = sh.getRange(start, 1, end - start + 1, lastCol).getValues();
     for (var i = block.length - 1; i >= 0; i--) {
-      var rowDate = String(block[i][0]).slice(0, 10);
+      var rowDate = _toYMD_(block[i][0]);
       if (rowDate < fromDate) { passed = true; break; }
       if (rowDate > toDate) continue;
       var rowUser = String(block[i][1] || '').toLowerCase().trim();
@@ -1765,7 +1775,7 @@ function _readUserSessionsRange_(ss, user, fromDate, toDate) {
   var rows = vals.filter(function (r) {
     var n = String(r[0] || '').toLowerCase().trim();
     if (n !== userLc) return false;
-    var d = String(r[1] || '').slice(0, 10);
+    var d = _toYMD_(r[1]);
     return d >= fromDate && d <= toDate;
   });
   return { header: header, rows: rows };
@@ -1781,7 +1791,7 @@ function _readUserAttendanceRange_(ss, user, fromDate, toDate) {
   var rows = vals.filter(function (r) {
     var n = String(r[1] || '').toLowerCase().trim();
     if (n !== userLc) return false;
-    var d = String(r[0] || '').slice(0, 10);
+    var d = _toYMD_(r[0]);
     return d >= fromDate && d <= toDate;
   });
   return { header: header, rows: rows };
