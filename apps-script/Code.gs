@@ -146,6 +146,8 @@ function doGet(e) {
       case 'requestOtp':      return json_(requestOtp_(ss, p.email));
       case 'verifyOtp':       return json_(verifyOtp_(ss, p.email, p.code));
       case 'myStats':         return json_(myStats_(ss, p));
+      // GET fallback for Mac app — avoids POST→GET body-drop on 302 redirect
+      case 'myDashboardToken': return json_(myDashboardToken_(ss, { user: p.user }));
       default:                return json_({ ok: false, error: 'unknown action: ' + p.action });
     }
   } catch (err) {

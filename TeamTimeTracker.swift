@@ -277,11 +277,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
     // app's identity IS the auth.
     @objc func openMyDashboard() {
         let fullName = NSFullUserName()
-        postToApi(action: "myDashboardToken", payload: ["user": fullName]) { [weak self] resp in
+        let encUser  = fullName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? fullName
+        // Use GET — Apps Script /exec returns 302, and URLSession drops the POST
+        // body on redirect, so POSTs arrive without action → 'unknown action'.
+        // GET survives the 302 cleanly.
+        guard let tokenURL = URL(string: SHEET_URL + "?action=myDashboardToken&user=" + encUser) else { return }
+        URLSession.shared.dataTask(with: tokenURL) { [weak self] data, _, err in
             guard let self = self else { return }
+            var resp: [String: Any] = [:]
+            if let d = data, let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                resp = obj
+            } else if let err = err {
+                resp = ["ok": false, "error": err.localizedDescription]
+            }
             if let ok = resp["ok"] as? Bool, ok, let token = resp["token"] as? String {
                 let encToken = token.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? token
-                let encUser  = fullName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? fullName
                 let full = MY_DASH_URL + "#token=" + encToken + "&user=" + encUser
                 DispatchQueue.main.async {
                     if let u = URL(string: full) { NSWorkspace.shared.open(u) }
@@ -297,7 +307,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
                     alert.runModal()
                 }
             }
-        }
+        }.resume()
     }
 
     // ── System hooks (lock/unlock/sleep/wake) ──────────────────────────
