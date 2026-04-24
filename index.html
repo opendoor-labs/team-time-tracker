@@ -1933,7 +1933,176 @@ window.onNative = (event, data) => {
   else if (event === 'onIdleTick'){ if (typeof handleNativeIdleTick === 'function') handleNativeIdleTick(data && data.seconds); }
   else if (event === 'onForceReset'){ if (typeof handleForceReset === 'function') handleForceReset(); }
   else if (event === 'onConfig'){ if (typeof handleConfig === 'function') handleConfig(data); }
+  else if (event === 'onPreUpdate'){ if (typeof handlePreUpdate === 'function') handlePreUpdate(data); }
+  else if (event === 'onPostUpdate'){ if (typeof handlePostUpdate === 'function') handlePostUpdate(data); }
 };
+
+// ═══════════════════════════════════════════════════════════════════
+// Snapshot / Restore — zero-data-loss across app updates & crashes
+// ═══════════════════════════════════════════════════════════════════
+// Strategy: every 1s (driven by the clock tick) + on every form keystroke,
+// serialize the full `state` + live form values + recent logs to
+// localStorage. WKWebView persists localStorage to disk across process
+// restarts. On relaunch, bootNative() calls restoreSnapshot() which
+// re-hydrates state, re-populates the form, and resumes the task timer.
+//
+// Keys:
+//   ttk.snapshot.v1   — full app state (JSON)
+//
+// Expires:
+//   If the snapshot is older than 18 hours, it's discarded (new day).
+//
+const SNAP_KEY = 'ttk.snapshot.v1';
+const SNAP_TTL_MS = 18 * 3600 * 1000;
+let _snapshotDirty = false;
+let _snapshotLastSave = 0;
+
+function markSnapshotDirty() { _snapshotDirty = true; }
+
+// Called from startClock tick (1/s) — cheap coalesced save
+function saveSnapshotIfDirty() {
+  if (!_snapshotDirty) return;
+  // Throttle to at most once per second (the tick is already 1s, belt+braces)
+  if (Date.now() - _snapshotLastSave < 1000) return;
+  saveSnapshot();
+}
+
+function saveSnapshot() {
+  try {
+    // Snapshot the form DOM so half-typed fields survive
+    const formValues = {};
+    const body = document.getElementById('formBody');
+    if (body) {
+      body.querySelectorAll('[data-field]').forEach(el => {
+        const label = el.getAttribute('data-field');
+        if (label) formValues[label] = el.value || '';
+      });
+    }
+    const snap = {
+      v: 1,
+      savedAt: Date.now(),
+      screen: state.screen,
+      state: state,
+      formValues: formValues,
+      loggedTasks: (typeof loggedTasks !== 'undefined') ? loggedTasks : [],
+    };
+    localStorage.setItem(SNAP_KEY, JSON.stringify(snap));
+    _snapshotDirty = false;
+    _snapshotLastSave = Date.now();
+  } catch (e) {
+    // QuotaExceeded or serialization error — not fatal, just skip this tick
+    console.warn('[snapshot] save failed', e);
+  }
+}
+
+function clearSnapshot() {
+  try { localStorage.removeItem(SNAP_KEY); } catch (e) {}
+}
+
+// Returns true if a snapshot was restored, false otherwise.
+function restoreSnapshot(reason) {
+  let snap = null;
+  try {
+    const raw = localStorage.getItem(SNAP_KEY);
+    if (!raw) return false;
+    snap = JSON.parse(raw);
+  } catch (e) { return false; }
+  if (!snap || !snap.state) return false;
+
+  // Expire stale snapshots (e.g. user took the next day off)
+  const age = Date.now() - (snap.savedAt || 0);
+  if (age > SNAP_TTL_MS) { clearSnapshot(); return false; }
+
+  // Only restore if the user was actively working (not on start/leave/weekoff)
+  if (snap.screen !== 'trackerScreen') { clearSnapshot(); return false; }
+
+  try {
+    // 1. Re-hydrate state (merge so new fields added in newer version aren't lost)
+    Object.assign(state, snap.state);
+
+    // 2. Re-hydrate recent-tasks list if present
+    if (Array.isArray(snap.loggedTasks) && typeof loggedTasks !== 'undefined') {
+      try { loggedTasks.length = 0; snap.loggedTasks.forEach(t => loggedTasks.push(t)); } catch(e){}
+    }
+
+    // 3. Rebuild tracker UI around the restored state
+    renderForm(state.team);
+    if (typeof renderTeamSwitch === 'function') renderTeamSwitch();
+    if (typeof renderRecentList === 'function') renderRecentList();
+
+    // 4. Put half-typed form values back
+    if (snap.formValues) {
+      const body = document.getElementById('formBody');
+      if (body) {
+        Object.entries(snap.formValues).forEach(([label, val]) => {
+          if (!val) return;
+          const el = body.querySelector(`[data-field="${CSS.escape(label)}"]`);
+          if (el) el.value = val;
+        });
+      }
+    }
+
+    // 5. Header / chips / screen
+    const teamLabel = (typeof TEAM_LABELS !== 'undefined' && TEAM_LABELS[state.team]) || state.team;
+    const head = document.getElementById('headTeam');
+    if (head) {
+      const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+      head.textContent = `${teamLabel} · ${today}`;
+    }
+    if (typeof setActiveActBtn === 'function') setActiveActBtn(state.activity);
+    if (typeof setStatusChip === 'function')   setStatusChip(state.activity);
+    showScreen('trackerScreen');
+    if (typeof applyFormFreezeState === 'function') applyFormFreezeState();
+
+    // 6. Restart the per-second clock + idle watcher
+    if (typeof startClock === 'function') startClock();
+    if (typeof startIdle === 'function')  startIdle();
+
+    // 7. Task timer — if a task was in progress, show the elapsed + resume label
+    if (state.taskStartedAt) {
+      const sub = document.getElementById('formSub');
+      if (sub) sub.textContent = '⏱ Timer resumed…';
+      const lbl = document.getElementById('timerLabel');
+      if (lbl) lbl.textContent = 'Current Task';
+    }
+
+    // 8. Counters
+    const sCount = document.getElementById('sCount');
+    if (sCount) sCount.textContent = state.tasksDone || 0;
+
+    // 9. Tell user what happened
+    if (reason === 'postUpdate') {
+      toast('✓', 'Updated! Your task, timer & form resumed where you left off.');
+    } else if (reason === 'relaunch') {
+      toast('↻', 'Welcome back — picked up from your last session.');
+    }
+    return true;
+  } catch (e) {
+    console.warn('[snapshot] restore failed', e);
+    clearSnapshot();
+    return false;
+  }
+}
+
+// Swift → JS: about to relaunch for an update.
+// State has been continuously saved by the clock tick already, but we
+// flush one more time here for belt-and-braces.
+function handlePreUpdate(data) {
+  try {
+    saveSnapshot();
+    const from = (data && data.fromVersion) || '';
+    const to   = (data && data.toVersion) || '';
+    // Best-effort toast — user might see it briefly before relaunch
+    toast('↻', `Updating ${from ? 'v'+from+' → ' : ''}v${to}… your work is saved.`);
+  } catch (e) {}
+}
+
+// Swift → JS: new version finished launching after an update.
+function handlePostUpdate(data) {
+  // Delay slightly so the UI has finished its initial render
+  setTimeout(() => { restoreSnapshot('postUpdate'); }, 150);
+}
+
 
 // ═══════════════════════════════════════════════════════════════════
 // App state
@@ -2466,6 +2635,8 @@ function renderForm(teamKey) {
       document.getElementById('currentTaskLine').innerHTML = taskVal
         ? `<b>${taskVal}</b>${addrVal ? ' · ' + truncate(addrVal, 40) : ''}`
         : `<span style="color: var(--dim);">Fill the form to start a task</span>`;
+      // Mark snapshot dirty so next clock tick persists the keystroke
+      if (typeof markSnapshotDirty === 'function') markSnapshotDirty();
     };
     el.addEventListener('input', go);
     el.addEventListener('change', go);
@@ -2637,6 +2808,12 @@ function startClock() {
     const delta = Date.now() - window._lastTick;
     window._lastTick = Date.now();
     state.totals[state.activity] = (state.totals[state.activity] || 0) + delta;
+
+    // Persist snapshot to localStorage every tick so update/crash/force-quit
+    // can all restore without data loss. Marked dirty by form input, activity
+    // changes, totals change each tick.
+    markSnapshotDirty();
+    saveSnapshotIfDirty();
 
     // Update stats
     document.getElementById('sProd').textContent = fmtHM(state.totals.production);
@@ -3223,6 +3400,8 @@ async function confirmEndShiftFinal() {
   try {
     localStorage.setItem('ttk_shiftEnded', new Date().toISOString().slice(0, 10));
   } catch(e){}
+  // Shift ended → clear the resume snapshot so we don't restore tomorrow
+  if (typeof clearSnapshot === 'function') clearSnapshot();
 
   toast('🏁', 'Shift ended — rest up!');
 }
@@ -3233,6 +3412,9 @@ async function confirmEndShiftFinal() {
   const u = await nativeCall('getUser', {});
   if (u && u.fullName) {
     const fullName = u.fullName;
+    // Seed state.user early so restoreSnapshot (below) uses the right name
+    // even before the UI setText calls run.
+    state.user = fullName;
     const firstName = (fullName.split(/\s+/)[0] || fullName);
     // Greeting of the hour
     const hr = new Date().getHours();
@@ -3258,6 +3440,17 @@ async function confirmEndShiftFinal() {
   if (dp) dp.style.display = 'none';
   const sd = document.getElementById('showDemoBtn');
   if (sd) sd.style.display = 'none';
+
+  // ── Auto-restore on launch ─────────────────────────────────────────
+  // If a fresh snapshot exists and the user was on the tracker screen
+  // when it saved, resume them seamlessly. Covers: force-quit, crash,
+  // laptop-closed-reopened, normal relaunch. Post-update relaunch is
+  // covered separately by onPostUpdate (fires ~2s after load), but
+  // calling restoreSnapshot here first means the user never sees the
+  // "Start Your Day" screen flash at all.
+  try {
+    if (typeof restoreSnapshot === 'function') restoreSnapshot('relaunch');
+  } catch (e) { console.warn('[snapshot] boot-restore failed', e); }
 })();
 
 // Mirror attendance + session lifecycle to backend

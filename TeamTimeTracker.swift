@@ -19,7 +19,7 @@ import IOKit
 import CoreGraphics
 
 // ── Constants ──────────────────────────────────────────────────────────
-let APP_VERSION = "2.7.3"
+let APP_VERSION = "2.7.4"
 let SHEET_URL = "https://script.google.com/macros/s/AKfycbxkBAtowwxWuKkaga-aR93ssyxuygFZC-zYXsdm22aVKhXWB45E4YKMKVmc0Ty_ByFk/exec"
 let INSTALL_DIR = NSHomeDirectory() + "/Library/TeamTracker"
 let HTML_PATH = INSTALL_DIR + "/index.html"
@@ -488,22 +488,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     }
 
     // ── State snapshot before update ───────────────────────────────────
-    // Send pre-update heartbeat to Apps Script so backend knows the session
-    // was paused for an update (not abandoned). JS layer also gets a chance
-    // to persist anything it cares about.
+    // Tell JS to flush its in-memory state to localStorage FIRST (so the
+    // new binary can restore task, form, shift-start on relaunch). Then
+    // send the pre-update heartbeat synchronously so backend sees the
+    // pause marker before the process dies.
+    //
+    // Order matters:
+    //   1. sendToJS('onPreUpdate')   → JS saves snapshot to localStorage
+    //   2. Sleep 1.2s                → let WKWebView flush localStorage to disk
+    //   3. Synchronous heartbeat     → backend pause marker (no fire-and-forget)
+    //
     func snapshotStateBeforeUpdate(targetVersion: String) {
+        sendToJS("onPreUpdate", payload: [
+            "fromVersion": APP_VERSION,
+            "toVersion": targetVersion
+        ])
+        // Give JS 1.2s to serialize state → localStorage and for WebKit to
+        // flush it to disk. localStorage writes are synchronous in JS but
+        // WebKit's disk flush is async; 1.2s covers both.
+        Thread.sleep(forTimeInterval: 1.2)
+
+        // Synchronous heartbeat — don't return until backend confirms (or times out).
+        let sema = DispatchSemaphore(value: 0)
         postToApi(action: "heartbeat", payload: [
             "phase": "pre_update",
             "fromVersion": APP_VERSION,
             "toVersion": targetVersion,
             "user": NSFullUserName()
-        ]) { _ in }
-        sendToJS("onPreUpdate", payload: [
-            "fromVersion": APP_VERSION,
-            "toVersion": targetVersion
-        ])
-        // Small delay so the heartbeat request has a chance to flush
-        Thread.sleep(forTimeInterval: 0.5)
+        ]) { _ in sema.signal() }
+        _ = sema.wait(timeout: .now() + 3.0)   // 3s cap so a stalled network can't block update
     }
 
     // ── Perform update (download + compile + relaunch) ─────────────────
