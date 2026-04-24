@@ -807,6 +807,10 @@ function liveActivity_(ss, p) {
   if (!who.ok) return { ok: false, error: who.error === 'expired' ? 'session_expired' : 'forbidden' };
   var wl = lookupWhitelist_(ss, who.email);
   if (!wl.ok) return { ok: false, error: 'forbidden' };
+  // ★ QC reviewers don't get live activity data (tasks-only contract).
+  // Returning empty rather than 'forbidden' so the dashboard can choose to
+  // hide the Live tab silently instead of throwing a banner.
+  if (wl.isQC) return { ok: true, users: [], byTeam: {}, isAdmin: false, isQC: true, teams: wl.teams };
   var allowed = wl.isAdmin ? null : {};
   if (!wl.isAdmin) wl.teams.forEach(function (t) { allowed[t] = true; });
 
@@ -882,7 +886,8 @@ function whoami_(ss, email) {
     email: wl.email,
     role: wl.role,
     isAdmin: wl.isAdmin,
-    teams: wl.isAdmin ? Object.keys(TEAM_TO_TAB) : wl.teams
+    isQC: !!wl.isQC,
+    teams: (wl.isAdmin || wl.isQC) ? Object.keys(TEAM_TO_TAB) : wl.teams
   };
 }
 
@@ -891,7 +896,7 @@ function checkWhitelist_(ss, email) {
   if (!wl.ok) return { ok: false, error: 'not_whitelisted' };
   return {
     ok: true, email: wl.email, role: wl.role,
-    teams: wl.teams, isAdmin: wl.isAdmin
+    teams: wl.teams, isAdmin: wl.isAdmin, isQC: !!wl.isQC
   };
 }
 
@@ -965,17 +970,35 @@ function tlDashboard_(ss, p) {
   if (!wl.ok) return { ok: false, error: 'forbidden' };
   // Default to PST date — Sessions tab stores dates in PST
   var date   = p.date ? String(p.date) : todayPST_();
-  var teams  = wl.isAdmin ? Object.keys(TEAM_TO_TAB) : wl.teams;
+  // QC reviewers see ALL teams (read-only, tasks-only).
+  var teams  = (wl.isAdmin || wl.isQC) ? Object.keys(TEAM_TO_TAB) : wl.teams;
   var logs   = {};
   for (var i = 0; i < teams.length; i++) {
     var r = readLog_(ss, { email: who.email, team: teams[i], date: date });
     if (r.ok) logs[teams[i]] = { header: r.header, rows: r.rows };
   }
+
+  // ★ QC-mode payload — strip everything except task logs. No attendance,
+  // no sessions, no admin extras. Frontend keys off wl.role to render
+  // a tasks-only view + read-only banner.
+  if (wl.isQC) {
+    return {
+      ok: true,
+      email: wl.email, role: wl.role,
+      isAdmin: false, isQC: true, readOnly: true,
+      teams: teams, date: date,
+      logs: logs,
+      attendance: { header: [], rows: [] },
+      sessions:   { header: [], rows: [] }
+    };
+  }
+
   var attendance = readByDate_(ss, 'Attendance', date, wl.isAdmin ? null : teams);
   // ★ CHANGED: pass team filter so TLs only see sessions for their team's users.
   var sessions   = readSessionsByDate_(ss, date, wl.isAdmin ? null : teams);
   var result = {
-    ok: true, email: wl.email, role: wl.role, isAdmin: wl.isAdmin,
+    ok: true, email: wl.email, role: wl.role,
+    isAdmin: wl.isAdmin, isQC: false,
     teams: teams, date: date,
     logs: logs, attendance: attendance, sessions: sessions
   };
@@ -998,7 +1021,13 @@ function lookupWhitelist_(ss, email) {
     if (String(rows[i][0] || '').toLowerCase() === email) {
       var role = String(rows[i][1] || '').toLowerCase();
       var teamsCell = String(rows[i][2] || '');
-      var isAdmin = role === 'super_admin' || teamsCell.toUpperCase() === 'ALL';
+      // ★ Strict admin gate — ONLY super_admin gets admin powers (whitelist
+      // edits, config, etc). Previously Teams=ALL also conferred isAdmin,
+      // which would have leaked admin-only fields to QC reviewers (Teams=ALL,
+      // role=qc). Restrict admin to the role itself.
+      var isAdmin = role === 'super_admin';
+      // ★ QC reviewer — read-only, tasks-only, all teams. See tlDashboard_.
+      var isQC    = role === 'qc';
       var teams = teamsCell.toUpperCase() === 'ALL'
         ? Object.keys(TEAM_TO_TAB)
         : teamsCell.split(',')
@@ -1008,7 +1037,7 @@ function lookupWhitelist_(ss, email) {
                    // compare apples to apples, regardless of how an admin
                    // typed the team name in the Whitelist sheet.
                    .map(function (t) { return resolveTeam_(t) || t; });
-      return { ok: true, email: email, role: role, teams: teams, isAdmin: isAdmin };
+      return { ok: true, email: email, role: role, teams: teams, isAdmin: isAdmin, isQC: isQC };
     }
   }
   return { ok: false };
@@ -1756,7 +1785,13 @@ function verifyOtp_(ss, email, code) {
   if (!wl.ok) return { ok: false, error: 'not_whitelisted' };
 
   var token = _signToken_({ email: email, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SEC });
-  return { ok: true, token: token, email: wl.email, role: wl.role, isAdmin: wl.isAdmin, teams: wl.teams };
+  return {
+    ok: true, token: token,
+    email: wl.email, role: wl.role,
+    isAdmin: wl.isAdmin, isQC: !!wl.isQC,
+    // QC reviewers see all teams; TLs see only their assigned teams.
+    teams: (wl.isAdmin || wl.isQC) ? Object.keys(TEAM_TO_TAB) : wl.teams
+  };
 }
 
 // ─── Session token helpers ─────────────────────────────────────────────

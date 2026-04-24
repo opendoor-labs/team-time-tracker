@@ -105,6 +105,7 @@
                 font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
   .role-badge.super-admin { background: var(--purple-50); color: var(--purple); }
   .role-badge.tl { background: var(--brand-50); color: var(--brand); }
+  .role-badge.qc { background: rgba(255,159,10,0.15); color: #ff9f0a; }
 
   /* ───── Summary cards ───── */
   .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
@@ -969,6 +970,14 @@
 
   // ---- Rendering ----
   function getAllTabKeys(data) {
+    // QC reviewers: tasks-only. No live, no attendance, no sessions, no admin.
+    if (data.isQC) {
+      const keys = [];
+      if (data.teams && Array.isArray(data.teams)) {
+        data.teams.forEach(t => keys.push(t));
+      }
+      return keys;
+    }
     const keys = ['__live'];
     if (data.teams && Array.isArray(data.teams)) {
       data.teams.forEach(t => keys.push(t));
@@ -998,6 +1007,9 @@
     if (data.role === 'super_admin' || data.isAdmin) {
       roleBadge.textContent = 'Super Admin';
       roleBadge.className = 'role-badge super-admin';
+    } else if (data.isQC || data.role === 'qc') {
+      roleBadge.textContent = 'QC · Read-only';
+      roleBadge.className = 'role-badge qc';
     } else {
       roleBadge.textContent = 'TL';
       roleBadge.className = 'role-badge tl';
@@ -1033,6 +1045,60 @@
     const data = state.data;
     if (!data || !data.logs) {
       cardsEl.classList.add('hidden');
+      return;
+    }
+
+    // QC mode — tasks-only summary. No prod hours, no break hours, no util.
+    if (data.isQC) {
+      let qcTasks = 0;
+      const teamCounts = {};
+      const userSet = new Set();
+      Object.keys(data.logs).forEach(team => {
+        if (!teamInFilter(team)) return;
+        const entry = data.logs[team] || { header: [], rows: [] };
+        const header = entry.header || [];
+        const rows = applyRowFilters(header, entry.rows || [], team);
+        const hLower = header.map(h => String(h).toLowerCase());
+        const actIdx = hLower.indexOf('activity');
+        const sysIdx = hLower.indexOf('system');
+        const userIdx = hLower.indexOf('user');
+        let teamCount = 0;
+        rows.forEach(r => {
+          const act = String(r[actIdx] || 'production').toLowerCase();
+          const isSystem = sysIdx >= 0 && String(r[sysIdx] || '').toUpperCase() === 'TRUE';
+          if (act === 'production' && !isSystem) {
+            qcTasks += 1;
+            teamCount += 1;
+            if (userIdx >= 0) userSet.add(String(r[userIdx] || '').toLowerCase());
+          }
+        });
+        if (teamCount > 0) teamCounts[team] = teamCount;
+      });
+      const topTeams = Object.entries(teamCounts).sort((a,b)=>b[1]-a[1]).slice(0,1);
+      const topTeam = topTeams.length ? `${topTeams[0][0]} (${topTeams[0][1]})` : '—';
+      cardsEl.classList.remove('hidden');
+      cardsEl.innerHTML = `
+        <div class="card" data-c="tasks">
+          <div class="k"><span class="icon">✓</span>Tasks for Review</div>
+          <div class="v">${qcTasks.toLocaleString()}</div>
+          <div class="sub">Across ${Object.keys(teamCounts).length} teams</div>
+        </div>
+        <div class="card" data-c="users">
+          <div class="k"><span class="icon">👥</span>Active Users</div>
+          <div class="v">${userSet.size}</div>
+          <div class="sub">Who logged tasks today</div>
+        </div>
+        <div class="card" data-c="topteam">
+          <div class="k"><span class="icon">🏆</span>Top Team</div>
+          <div class="v" style="font-size:18px">${escapeHtml(topTeam)}</div>
+          <div class="sub">Highest task volume</div>
+        </div>
+        <div class="card" data-c="readonly">
+          <div class="k"><span class="icon">🔒</span>Access Mode</div>
+          <div class="v" style="font-size:18px;color:#ff9f0a">Read-only</div>
+          <div class="sub">QC reviewer access</div>
+        </div>
+      `;
       return;
     }
 
@@ -1112,10 +1178,12 @@
     const teams = data.teams || [];
     tabsEl.innerHTML = '';
     tabsEl.classList.remove('hidden');
+    const isQC = !!data.isQC;
 
     // Live tab only makes sense in single-day mode (it reflects "right now" state).
+    // QC reviewers don't see the Live tab — tasks-only contract.
     const isSingleDay = !data.rangeFrom || data.rangeFrom === data.rangeTo;
-    if (isSingleDay) {
+    if (isSingleDay && !isQC) {
       const liveCount = state.liveData && Array.isArray(state.liveData.users) ? state.liveData.users.length : 0;
       const liveTab = document.createElement('button');
       liveTab.className = 'tab' + (state.selectedTab === '__live' ? ' active' : '');
@@ -1123,7 +1191,7 @@
       liveTab.addEventListener('click', () => { selectTab('__live'); });
       tabsEl.appendChild(liveTab);
     } else if (state.selectedTab === '__live') {
-      // Drop __live from selection when in a multi-day range
+      // Drop __live from selection when in a multi-day range or QC mode
       const firstTeam = teams.find(t => teamInFilter(t));
       state.selectedTab = firstTeam || (teams[0] || null);
     }
@@ -1140,20 +1208,23 @@
       tabsEl.appendChild(tab);
     });
 
-    // Attendance + Sessions: TLs see these too (backend filters to their team)
-    const sharedTabs = [
-      { key: '__attendance', label: 'Attendance', source: data.attendance },
-      { key: '__sessions', label: 'Sessions', source: data.sessions },
-    ];
-    sharedTabs.forEach(({ key, label, source }) => {
-      if (!source) return;
-      const count = getAdminRowCount(source);
-      const tab = document.createElement('button');
-      tab.className = 'tab admin' + (state.selectedTab === key ? ' active' : '');
-      tab.innerHTML = `${escapeHtml(label)} <span class="count-badge">${count}</span>`;
-      tab.addEventListener('click', () => { selectTab(key); });
-      tabsEl.appendChild(tab);
-    });
+    // Attendance + Sessions: TLs see these too (backend filters to their team).
+    // QC reviewers do NOT — tasks-only contract.
+    if (!isQC) {
+      const sharedTabs = [
+        { key: '__attendance', label: 'Attendance', source: data.attendance },
+        { key: '__sessions', label: 'Sessions', source: data.sessions },
+      ];
+      sharedTabs.forEach(({ key, label, source }) => {
+        if (!source) return;
+        const count = getAdminRowCount(source);
+        const tab = document.createElement('button');
+        tab.className = 'tab admin' + (state.selectedTab === key ? ' active' : '');
+        tab.innerHTML = `${escapeHtml(label)} <span class="count-badge">${count}</span>`;
+        tab.addEventListener('click', () => { selectTab(key); });
+        tabsEl.appendChild(tab);
+      });
+    }
     // Whitelist + Config: super-admin only
     if (data.isAdmin) {
       const adminTabs = [
@@ -1705,6 +1776,9 @@
     if (data.role === 'super_admin' || data.isAdmin) {
       $('profileRole').textContent = 'Super Admin';
       $('profileDesignation').textContent = 'Super Admin / TL';
+    } else if (data.isQC || data.role === 'qc') {
+      $('profileRole').textContent = 'QC Reviewer';
+      $('profileDesignation').textContent = 'QC · Read-only';
     } else {
       $('profileRole').textContent = 'Team Lead';
       $('profileDesignation').textContent = 'Team Lead';
