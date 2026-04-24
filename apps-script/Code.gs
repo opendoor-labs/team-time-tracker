@@ -338,7 +338,10 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
         sh.getRange(rowIdx, 5).setValue('production');          // E Activity
         sh.getRange(rowIdx, 6).setValue(tasksDone);             // F TasksDone
         sh.getRange(rowIdx, 7).setValue(prodMin);               // G ProdMin
-        sh.getRange(rowIdx, 10).setValue('');                   // J TaskStartedAt — task done
+        // NOTE: do NOT clear TaskStartedAt here. We leave it showing the
+        // LAST task's start time so TLs see a full start/end pair for
+        // every completion. When the user opens the next task, the next
+        // heartbeat will overwrite TaskStartedAt with the new start.
         sh.getRange(rowIdx, 11).setValue(istNow_());            // K TaskEndedAt
         sh.getRange(rowIdx, 12).setValue(nowPSTdateISTtime_()); // L UpdatedAt
         return { ok: true, rowIdx: rowIdx };
@@ -534,17 +537,20 @@ function heartbeat_(ss, b) {
     var user = String(b.user || '').trim();
     if (!user) return { ok: false, error: 'no user' };
 
-    // Preserve existing ShiftStartAt + TaskEndedAt unless client supplied them (avoid blanking).
-    // Column map: A=ShiftStartAt(0) B=User(1) ... K=TaskEndedAt(10) L=UpdatedAt(11)
-    var existingShiftStart = '';
-    var existingTaskEndedAt = '';
+    // Preserve existing ShiftStartAt, TaskStartedAt, TaskEndedAt unless client
+    // supplied fresh values. Column map:
+    //   A=ShiftStartAt(0) B=User(1) ... J=TaskStartedAt(9) K=TaskEndedAt(10) L=UpdatedAt(11)
+    var existingShiftStart   = '';
+    var existingTaskStarted  = '';
+    var existingTaskEndedAt  = '';
     var vals = sh.getDataRange().getValues();
     var matchedRow = -1;
     for (var i = 1; i < vals.length; i++) {
       if (String(vals[i][1]).toLowerCase() === user.toLowerCase()) {
         matchedRow = i + 1;
-        existingShiftStart  = String(vals[i][0]  || '');
-        existingTaskEndedAt = String(vals[i][10] || '');
+        existingShiftStart   = String(vals[i][0]  || '');
+        existingTaskStarted  = String(vals[i][9]  || '');
+        existingTaskEndedAt  = String(vals[i][10] || '');
         break;
       }
     }
@@ -568,9 +574,12 @@ function heartbeat_(ss, b) {
       Number(b.productionMin || 0),                           // G ProdMin
       Number(b.breakMin || 0),                                // H BreakMin
       Number(b.idleMin || 0),                                 // I IdleMin
-      b.taskStartedAt                                         // J TaskStartedAt
+      // J TaskStartedAt: client sends ms-epoch when a new task opens.
+      // If omitted, preserve the existing value so TLs keep seeing the
+      // LAST task's start time (paired with TaskEndedAt for span reading).
+      b.taskStartedAt
         ? Utilities.formatDate(new Date(Number(b.taskStartedAt)), TZ, 'yyyy-MM-dd HH:mm:ss')
-        : '',
+        : existingTaskStarted,
       existingTaskEndedAt,                                    // K TaskEndedAt (preserved; only _bumpLiveAfterTask_ writes it)
       nowPSTdateISTtime_()                                    // L UpdatedAt
     ];
