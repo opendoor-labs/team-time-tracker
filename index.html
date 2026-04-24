@@ -725,6 +725,37 @@
     padding-right: 28px;
   }
   .form-field textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+  /* Attachment field — file picker + thumbnail strip (Listings team only) */
+  .attach-wrap {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .attach-btn {
+    align-self: flex-start;
+    padding: 9px 14px; border-radius: 8px;
+    border: 1px dashed rgba(91,140,255,0.5);
+    background: rgba(10,132,255,0.06);
+    color: #5b8cff; font-family: inherit; font-size: 12px; font-weight: 600;
+    cursor: pointer; letter-spacing: 0.15px;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .attach-btn:hover { background: rgba(10,132,255,0.12); border-color: rgba(91,140,255,0.85); }
+  .attach-hint { font-size: 11px; color: rgba(255,255,255,0.4); line-height: 1.4; }
+  .attach-list {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px;
+  }
+  .attach-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 10px 6px 8px; border-radius: 8px;
+    background: rgba(48,209,88,0.10); border: 1px solid rgba(48,209,88,0.32);
+    font-size: 11px; color: #cfe9d6; max-width: 240px;
+  }
+  .attach-chip .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .attach-chip .sz { color: rgba(255,255,255,0.45); font-variant-numeric: tabular-nums; }
+  .attach-chip .x {
+    margin-left: 2px; cursor: pointer;
+    color: rgba(255,255,255,0.55); padding: 0 2px;
+  }
+  .attach-chip .x:hover { color: #ff453a; }
   /* Highlight missing required fields after a failed Log Task submit */
   .form-field .field-invalid {
     border-color: rgba(255,69,58,0.75) !important;
@@ -2278,6 +2309,9 @@ const TEAMS = {
     ]},
     { type: 'select', label: 'Markets', required: true, options: MARKETS },
     { type: 'select', label: 'Productivity Type', required: true, options: ['Closed','Pending','Follow Up','No action needed'] },
+    { type: 'text',     label: 'Comment',     required: false, placeholder: 'Optional notes', full: true },
+    { type: 'attachments', label: 'Screenshots', required: false, accept: 'image/png,image/jpeg', full: true,
+      hint: 'PNG/JPG only · uploaded to Listings QC Drive named after the Ticket/Property field above' },
   ]},
   SD: { fields: [
     { type: 'text', label: 'Ticket Link/Property Address', required: true, placeholder: 'https://... or 123 Main St' },
@@ -2746,13 +2780,19 @@ function switchTeam(newTeamKey) {
 // ═══════════════════════════════════════════════════════════════════
 // Dynamic per-team form
 // ═══════════════════════════════════════════════════════════════════
+// Selected files for the current task draft. Keyed by field label so a future
+// schema can have multiple file fields. Reset by clearForm() after submit.
+window._taskAttachments = window._taskAttachments || {};
+
 function renderForm(teamKey) {
   const schema = TEAMS[teamKey];
   const body = document.getElementById('formBody');
+  // Reset draft attachments whenever the form re-renders (team switch / clear).
+  window._taskAttachments = {};
   let html = '';
   schema.fields.forEach((f, i) => {
     const req = f.required ? '<span class="req">*</span>' : '';
-    const fullCls = f.full || f.type === 'textarea' ? ' full' : '';
+    const fullCls = f.full || f.type === 'textarea' || f.type === 'attachments' ? ' full' : '';
     html += `<div class="form-field${fullCls}">`;
     html += `<label>${f.label}${req}</label>`;
     if (f.type === 'text') {
@@ -2763,6 +2803,22 @@ function renderForm(teamKey) {
       html += `<select data-field="${f.label}"><option value="">— Select —</option>`;
       f.options.forEach(o => { html += `<option>${o}</option>`; });
       html += `</select>`;
+    } else if (f.type === 'attachments') {
+      const accept = f.accept || 'image/*';
+      const hint = f.hint || 'Attach files for this task';
+      html += `
+        <div class="attach-wrap">
+          <input type="file" data-field="${f.label}" multiple accept="${accept}"
+                 id="attachInput_${i}" style="display:none"
+                 onchange="handleAttachChange(this, '${f.label}')" />
+          <button type="button" class="attach-btn"
+                  onclick="document.getElementById('attachInput_${i}').click()">
+            📎 Attach Screenshots
+          </button>
+          <div class="attach-hint">${hint}</div>
+          <div class="attach-list" id="attachList_${f.label.replace(/[^a-zA-Z0-9]/g,'_')}"></div>
+        </div>
+      `;
     }
     html += `</div>`;
   });
@@ -2795,12 +2851,109 @@ function renderForm(teamKey) {
 
 function truncate(s, n) { return s.length > n ? s.slice(0, n-1) + '…' : s; }
 
+// ── Attachment field helpers ───────────────────────────────────────────────
+// User picks files via the hidden <input type="file"> → we stash File objects
+// in window._taskAttachments (NOT the DOM, since FileList isn't editable) and
+// render chips with X-buttons. logTask() reads files as base64 right before
+// firing the payload to Apps Script.
+
+function _attachListId_(label) {
+  return 'attachList_' + label.replace(/[^a-zA-Z0-9]/g, '_');
+}
+
+function _fmtBytes_(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024*1024) return (n/1024).toFixed(0) + ' KB';
+  return (n/(1024*1024)).toFixed(1) + ' MB';
+}
+
+function _renderAttachChips_(label) {
+  const container = document.getElementById(_attachListId_(label));
+  if (!container) return;
+  const files = (window._taskAttachments[label] || []);
+  if (!files.length) { container.innerHTML = ''; return; }
+  container.innerHTML = files.map((f, idx) => `
+    <span class="attach-chip" title="${f.name}">
+      <span>📷</span>
+      <span class="nm">${f.name}</span>
+      <span class="sz">${_fmtBytes_(f.size)}</span>
+      <span class="x" onclick="removeAttachment('${label}', ${idx})" title="Remove">✕</span>
+    </span>
+  `).join('');
+}
+
+function handleAttachChange(inputEl, label) {
+  const MAX_FILES = 10;
+  const MAX_BYTES = 10 * 1024 * 1024;  // 10 MB per file
+  const cur = window._taskAttachments[label] || [];
+  const incoming = Array.from(inputEl.files || []);
+  const accepted = [];
+  const rejected = [];
+  incoming.forEach(f => {
+    if (!/^image\/(png|jpeg|jpg)$/i.test(f.type)) { rejected.push(f.name + ' (not PNG/JPG)'); return; }
+    if (f.size > MAX_BYTES) { rejected.push(f.name + ' (>10 MB)'); return; }
+    if (cur.length + accepted.length >= MAX_FILES) { rejected.push(f.name + ' (max 10 files)'); return; }
+    accepted.push(f);
+  });
+  window._taskAttachments[label] = cur.concat(accepted);
+  inputEl.value = '';  // allow re-picking the same file later
+  _renderAttachChips_(label);
+  if (rejected.length) toast('⚠️', 'Skipped: ' + rejected.slice(0,2).join(', ') + (rejected.length>2?'…':''));
+  // Start the task timer if this was the user's first interaction
+  if (!state.taskStartedAt) {
+    state.taskStartedAt = Date.now();
+    const fs = document.getElementById('formSub'); if (fs) fs.textContent = '⏱ Timer running…';
+  }
+  if (typeof markSnapshotDirty === 'function') markSnapshotDirty();
+}
+
+function removeAttachment(label, idx) {
+  const arr = window._taskAttachments[label] || [];
+  arr.splice(idx, 1);
+  window._taskAttachments[label] = arr;
+  _renderAttachChips_(label);
+}
+
+// Read a File as base64 (sans the data:image/png;base64, prefix).
+function _fileToBase64_(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const s = String(reader.result || '');
+      const i = s.indexOf(',');
+      resolve(i >= 0 ? s.slice(i + 1) : s);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function _collectAttachments_() {
+  // Flatten all attachment fields into a single array for Apps Script.
+  const out = [];
+  const groups = window._taskAttachments || {};
+  for (const label of Object.keys(groups)) {
+    const files = groups[label] || [];
+    for (const f of files) {
+      try {
+        const data = await _fileToBase64_(f);
+        out.push({ name: f.name, mimeType: f.type || 'image/png', size: f.size, data });
+      } catch (e) {
+        // Skip unreadable files but don't block the task log
+        try { logErrorToSheet('attach', 'fileToBase64 failed', f.name, String(e && e.message || e)); } catch(_){}
+      }
+    }
+  }
+  return out;
+}
+
 function getFormData() {
   const body = document.getElementById('formBody');
   const schema = TEAMS[state.team];
   const data = {};
   let missing = [];
   schema.fields.forEach(f => {
+    if (f.type === 'attachments') return;  // files handled separately
     const el = body.querySelector(`[data-field="${f.label}"]`);
     const val = el ? el.value.trim() : '';
     data[f.label] = val;
@@ -2809,7 +2962,7 @@ function getFormData() {
   return { data, missing };
 }
 
-function logTask() {
+async function logTask() {
   if (state.activity !== 'production') {
     toast('⚠️', 'Switch to Production to log a task');
     return;
@@ -2831,6 +2984,24 @@ function logTask() {
   const taskType = data[taskLabel] || 'Task';
   const addr = data['Property Address'] || data['Ticket Link / Property'] || data['Ticket Link'] || '—';
 
+  // ── Attachments (Listings team only) ─────────────────────────────────────
+  // Lock the form for the duration of the upload so the user can't double-fire.
+  const btn = document.getElementById('logTaskBtn');
+  let attachments = [];
+  try {
+    const groups = window._taskAttachments || {};
+    const total = Object.values(groups).reduce((n, arr) => n + (arr ? arr.length : 0), 0);
+    if (total > 0) {
+      if (btn) { btn.disabled = true; btn.textContent = `📤 Uploading ${total}…`; }
+      attachments = await _collectAttachments_();
+    }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Log Task'; }
+    toast('⚠️', 'Failed to read screenshots — task not logged');
+    return;
+  }
+  if (btn) { btn.disabled = false; btn.textContent = '✓ Log Task'; }
+
   // Mark prior "new" items as not new
   loggedTasks.forEach(t => t._isNew = false);
   const isCrossTeam = state.team !== state.homeTeam;
@@ -2843,10 +3014,11 @@ function logTask() {
     team: state.team,              // which team's log tab this row writes to
     homeTeam: state.homeTeam,      // user's primary team (stored in sheet for analytics)
     crossTeam: isCrossTeam,        // UI flag: show ⚡ badge on this row
+    attachmentCount: attachments.length,
     _isNew: true,
   });
   state.tasksDone += 1;
-  // Production: ship to Apps Script
+  // Production: ship to Apps Script (attachments[] only present when files picked)
   nativeFire('logTask', {
     team: state.team,
     homeTeam: state.homeTeam,
@@ -2856,6 +3028,7 @@ function logTask() {
     durationMs: elapsed,
     activity: state.activity,
     system: false,
+    attachments,
   });
   if (isCrossTeam) {
     toast('⚡', `Logged to ${TEAM_LABELS[state.team]}_Log · cross-team from ${TEAM_LABELS[state.homeTeam]}`);

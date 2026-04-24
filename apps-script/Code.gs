@@ -27,6 +27,11 @@
 var SHEET_ID = '1mNOj9MWZAAVNEaWvnNjIkHkoUG1rMWHg0HWM1m47OXs';
 var TZ       = 'Asia/Calcutta';
 
+// Listings team — screenshot uploads land here. The folder must exist and the
+// Apps Script-running account must have edit access. Files are renamed using
+// the "Ticket Link/Property Address" field (sanitized) + PST date + IST time.
+var LISTINGS_DRIVE_FOLDER_ID = '1hV3TcPw4HWwE5KgsuJeIX2IgMNJLba4g';
+
 // Team → Log tab name
 var TEAM_TO_TAB = {
   'BRN':                     'BRN_Log',
@@ -286,14 +291,32 @@ function logTask_(ss, b) {
              data['Comments'] || '',
              durStr];
       break;
-    case 'Listings':
+    case 'Listings': {
+      // Save any attached screenshots to the Listings Drive folder, named
+      // after the Ticket/Property field. Failures don't block the task log.
+      var listingsAttachUrls = '';
+      try {
+        var atts = (b && b.attachments) || [];
+        if (atts.length) {
+          var baseName = addr_(data) || ('task_' + (user || 'user'));
+          var urls = _saveAttachmentsToDrive_(atts, baseName, LISTINGS_DRIVE_FOLDER_ID);
+          listingsAttachUrls = urls.join(', ');
+        }
+      } catch (driveErr) {
+        try { Logger.log('listings drive upload failed: ' + driveErr); } catch (_) {}
+        try { handleLogError_(ss, { source: 'apps-script', kind: 'listings-drive-upload',
+              message: String(driveErr && driveErr.message || driveErr), user: user }); } catch (_) {}
+      }
       row = [now, user, home, team, act,
              addr_(data),
              data['Task'] || '',
              data['Markets'] || data['Market'] || data['MARKETS'] || '',
              data['Productivity Type'] || '',
+             data['Comment'] || data['Comments'] || data['Notes'] || '',
+             listingsAttachUrls,
              durStr];
       break;
+    }
     case 'SD':
       row = [now, user, home, team, act,
              addr_(data),
@@ -1153,6 +1176,50 @@ function addr_(d) {
     d['Flip Address'] ||
     ''
   );
+}
+
+// Sanitize a free-text ticket/address into a safe filename stem.
+// Strips URL noise, replaces non-alphanumerics with underscores, collapses
+// runs, trims to 80 chars. Never returns empty (falls back to "task").
+function _safeFileBase_(raw) {
+  var s = String(raw || '').trim();
+  // If it's a URL, prefer the last path segment (more meaningful than host).
+  var m = s.match(/^https?:\/\/[^\s]+$/i);
+  if (m) {
+    try {
+      var path = s.replace(/^https?:\/\/[^\/]+\/?/i, '').split(/[?#]/)[0];
+      var seg = path.split('/').filter(Boolean).pop() || s;
+      s = seg;
+    } catch (e) {}
+  }
+  s = s.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80);
+  return s || 'task';
+}
+
+// Save base64-encoded attachments to a Drive folder. Each file is named
+// "<base>_<PSTdate>_<ISTtime>[_N].<ext>". Returns a list of viewer-shared
+// Drive URLs. Throws if folder is unreachable so caller can surface.
+function _saveAttachmentsToDrive_(attachments, baseName, folderId) {
+  var folder = DriveApp.getFolderById(folderId);
+  if (!folder) throw new Error('Drive folder not accessible: ' + folderId);
+  var safe = _safeFileBase_(baseName);
+  var dateStr = todayPST_();                // 2026-04-25
+  var timeStr = timeIST_().replace(':','').slice(0,4); // HHMM
+  var urls = [];
+  for (var i = 0; i < attachments.length; i++) {
+    var a = attachments[i] || {};
+    if (!a.data) continue;
+    var mime = a.mimeType || 'image/png';
+    var ext = (mime.indexOf('jpeg') >= 0) ? 'jpg' : (mime.indexOf('png') >= 0 ? 'png' : 'bin');
+    var suffix = (attachments.length > 1) ? ('_' + (i + 1)) : '';
+    var fname = safe + '_' + dateStr + '_' + timeStr + suffix + '.' + ext;
+    var bytes = Utilities.base64Decode(String(a.data));
+    var blob  = Utilities.newBlob(bytes, mime, fname);
+    var file  = folder.createFile(blob);
+    try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    urls.push(file.getUrl());
+  }
+  return urls;
 }
 
 // ─── One-time setup helpers (run from editor, optional) ────────────────
