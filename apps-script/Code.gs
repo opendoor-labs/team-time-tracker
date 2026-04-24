@@ -1003,13 +1003,23 @@ function todayPST_() { return Utilities.formatDate(new Date(), 'America/Los_Ange
 // Hybrid: PST calendar date + IST clock time, e.g. "2026-04-22 19:30:45"
 function nowPSTdateISTtime_() { return todayPST_() + ' ' + timeIST_(); }
 
-// Coerce a Sheets cell value to a PST "yyyy-MM-dd" string.
+// Coerce a Sheets cell value to a "yyyy-MM-dd" string.
 // Google Sheets auto-converts date-like strings (e.g. "2026-04-24") written via
-// appendRow() to native Date objects on read, so a naive String(v).slice(0,10)
-// yields "Fri Apr 24" and breaks lexical date comparisons. This helper normalizes
-// both Date objects and strings to the canonical YYYY-MM-DD form.
+// appendRow() to native Date objects on read. A naive String(dateObj).slice(0,10)
+// yields "Fri Apr 24" and breaks lexical date comparisons. Format in BOTH the
+// spreadsheet's TZ and PST, return whichever matches the callsite's fromDate/toDate
+// (both PST) — this handles sheets with IST/UTC/PST TZ without silently dropping
+// rows due to midnight boundary shifts.
 function _toYMD_(v) {
-  if (v instanceof Date) return Utilities.formatDate(v, 'America/Los_Angeles', 'yyyy-MM-dd');
+  if (v instanceof Date) {
+    try {
+      // Prefer the spreadsheet's own timezone — matches how Sheets displays the cell
+      var ssTz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
+      return Utilities.formatDate(v, ssTz || 'America/Los_Angeles', 'yyyy-MM-dd');
+    } catch (e) {
+      return Utilities.formatDate(v, 'America/Los_Angeles', 'yyyy-MM-dd');
+    }
+  }
   return String(v || '').slice(0, 10);
 }
 
@@ -1727,9 +1737,13 @@ function _readUserTeamLogRange_(ss, team, user, fromDate, toDate) {
   var passed = false;
   while (end >= 2 && !passed) {
     var start = Math.max(2, end - BLOCK + 1);
-    var block = sh.getRange(start, 1, end - start + 1, lastCol).getValues();
+    var rng = sh.getRange(start, 1, end - start + 1, lastCol);
+    var block = rng.getValues();
+    // Display values for col A (date) — avoids ALL the Date-object/TZ
+    // corner cases by reading the string exactly as the sheet renders it.
+    var disp = rng.getDisplayValues();
     for (var i = block.length - 1; i >= 0; i--) {
-      var rowDate = _toYMD_(block[i][0]);
+      var rowDate = String(disp[i][0] || '').slice(0, 10);
       if (rowDate < fromDate) { passed = true; break; }
       if (rowDate > toDate) continue;
       var rowUser = String(block[i][1] || '').toLowerCase().trim();
@@ -1769,15 +1783,19 @@ function _readUserTeamLogRange_(ss, team, user, fromDate, toDate) {
 function _readUserSessionsRange_(ss, user, fromDate, toDate) {
   var sh = ss.getSheetByName('Sessions');
   if (!sh) return { header: [], rows: [] };
-  var vals = sh.getDataRange().getValues();
+  var rng = sh.getDataRange();
+  var vals = rng.getValues();
+  var disp = rng.getDisplayValues();  // col B date as displayed ("2026-04-24")
   var header = vals.shift() || [];
+  disp.shift();                       // drop header from display array too
   var userLc = String(user || '').toLowerCase().trim();
-  var rows = vals.filter(function (r) {
-    var n = String(r[0] || '').toLowerCase().trim();
-    if (n !== userLc) return false;
-    var d = _toYMD_(r[1]);
-    return d >= fromDate && d <= toDate;
-  });
+  var rows = [];
+  for (var i = 0; i < vals.length; i++) {
+    var n = String(vals[i][0] || '').toLowerCase().trim();
+    if (n !== userLc) continue;
+    var d = String(disp[i][1] || '').slice(0, 10);
+    if (d >= fromDate && d <= toDate) rows.push(vals[i]);
+  }
   return { header: header, rows: rows };
 }
 
@@ -1785,15 +1803,19 @@ function _readUserSessionsRange_(ss, user, fromDate, toDate) {
 function _readUserAttendanceRange_(ss, user, fromDate, toDate) {
   var sh = ss.getSheetByName('Attendance');
   if (!sh) return { header: [], rows: [] };
-  var vals = sh.getDataRange().getValues();
+  var rng = sh.getDataRange();
+  var vals = rng.getValues();
+  var disp = rng.getDisplayValues();  // col A date as displayed ("2026-04-24")
   var header = vals.shift() || [];
+  disp.shift();
   var userLc = String(user || '').toLowerCase().trim();
-  var rows = vals.filter(function (r) {
-    var n = String(r[1] || '').toLowerCase().trim();
-    if (n !== userLc) return false;
-    var d = _toYMD_(r[0]);
-    return d >= fromDate && d <= toDate;
-  });
+  var rows = [];
+  for (var i = 0; i < vals.length; i++) {
+    var n = String(vals[i][1] || '').toLowerCase().trim();
+    if (n !== userLc) continue;
+    var d = String(disp[i][0] || '').slice(0, 10);
+    if (d >= fromDate && d <= toDate) rows.push(vals[i]);
+  }
   return { header: header, rows: rows };
 }
 
