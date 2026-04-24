@@ -2916,10 +2916,15 @@ function startClock() {
       updatePerfCard();
     }
 
-    // Heartbeat to backend every 90s — feeds the TL "Live Activity" view.
-    // 90s (not 30s) keeps us well under Apps Script's 6h/day runtime quota
-    // at 115 users while still refreshing the dashboard within 2min.
-    if (!window._lastHeartbeat || (Date.now() - window._lastHeartbeat) >= 90000) {
+    // Heartbeat to backend every 4 minutes — feeds the TL "Live Activity" view.
+    // Sizing rationale for 115 users × 9h shift:
+    //   1-min cadence = 62,100 calls/day → blows past the 20K/day URL-fetch quota
+    //   2-min cadence = 31,050 calls/day → still over quota
+    //   3-min cadence = 20,700 calls/day → right at the edge
+    //   4-min cadence = 15,525 calls/day → 77% of quota, 23% headroom  ← here
+    // Dashboard still looks "live" because liveActivity_() considers anything
+    // updated in the last 5 minutes as online (`staleMin: 5` default).
+    if (!window._lastHeartbeat || (Date.now() - window._lastHeartbeat) >= 240000) {
       window._lastHeartbeat = Date.now();
       sendHeartbeat();
     }
