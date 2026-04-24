@@ -299,7 +299,55 @@ function logTask_(ss, b) {
   }
 
   sh.appendRow(row);
+
+  // ── Live-tab side-effect: bump this user's TasksDone + ProdMin and
+  //    refresh UpdatedAt so the Live sheet reflects task completion
+  //    WITHOUT waiting for the next 4-min heartbeat. Non-system tasks
+  //    (b.system = false) count toward TasksDone; duration always adds
+  //    to ProdMin. Silent failure — logTask must never be blocked by a
+  //    Live-tab issue.
+  try {
+    _bumpLiveAfterTask_(ss, user, team, home, durSec, !!b.system);
+  } catch (liveErr) {
+    // Log but don't fail the task write
+    try { Logger.log('live bump failed: ' + liveErr); } catch (e) {}
+  }
   return { ok: true, tab: tab, row: sh.getLastRow() };
+}
+
+// Update the caller's Live row immediately after a task lands in the
+// team log. Keeps Live in sync with reality between heartbeats.
+function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
+  return _withLock_(function () {
+    var sh = ensureLiveSheet_(ss);
+    var canonTeam     = resolveTeam_(team)     || String(team || '');
+    var canonHomeTeam = resolveTeam_(homeTeam) || String(homeTeam || '');
+    var vals = sh.getDataRange().getValues();
+    var addMin = Math.round((Number(durSec) || 0) / 60);
+    var tsInc  = isSystem ? 0 : 1;   // system-auto tasks don't bump user's count
+    for (var i = 1; i < vals.length; i++) {
+      if (String(vals[i][0]).toLowerCase() === String(user).toLowerCase()) {
+        var rowIdx = i + 1;
+        var tasksDone = Number(vals[i][4] || 0) + tsInc;
+        var prodMin   = Number(vals[i][5] || 0) + addMin;
+        // Only touch the cells we know changed — leave ShiftStartAt alone.
+        sh.getRange(rowIdx, 3).setValue(canonTeam);            // C Team
+        sh.getRange(rowIdx, 4).setValue('production');         // D Activity
+        sh.getRange(rowIdx, 5).setValue(tasksDone);            // E TasksDone
+        sh.getRange(rowIdx, 6).setValue(prodMin);              // F ProdMin
+        sh.getRange(rowIdx, 10).setValue(nowPSTdateISTtime_()); // J UpdatedAt
+        return { ok: true, rowIdx: rowIdx };
+      }
+    }
+    // No existing row → seed one so Live starts reflecting activity even
+    // if the app missed firing shiftStart for some reason.
+    sh.appendRow([
+      user, canonHomeTeam, canonTeam, 'production',
+      tsInc, addMin, 0, 0, '',
+      nowPSTdateISTtime_(), istNow_()
+    ]);
+    return { ok: true, rowIdx: sh.getLastRow(), seeded: true };
+  });
 }
 
 function markAttendance_(ss, b) {
