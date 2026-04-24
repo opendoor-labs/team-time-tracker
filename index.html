@@ -1692,7 +1692,7 @@
           <div class="perf-card">
             <div class="perf-head">
               <span>⚡ My Performance · Today</span>
-              <span class="perf-hint">Utilization = Prod ÷ logged-in time</span>
+              <span class="perf-hint">Utilization = Production ÷ Total Logged</span>
             </div>
             <div class="perf-grid">
               <div class="perf-tile">
@@ -2992,28 +2992,26 @@ function updateBreakLimitBanner() {
 }
 
 // Compute & render the 4 headline metrics: Utilization %, Tasks, Throughput, Prod hrs.
+// Uses the SAME formula as the menu bar (computeUtilization) to guarantee
+// the two numbers are always identical — no "app says 97 but dashboard says 93"
+// confusion ever again.
+//
+//   Utilization %  = Production hours ÷ Total Logged hours × 100
+//   Task Throughput = Tasks completed ÷ Production hours
 function updatePerfCard() {
   const t = state.totals || {};
-  const prodMs   = t.production || 0;
-  const breakMs  = (t.break || 0) + (t.auto_break || 0);
-  const meetMs   = t.meeting || 0;
-  const trainMs  = t.training || 0;
-  const dinnerMs = t.dinner || 0;
-  const idleMs   = state.idleTotalMs || 0;
+  const prodMs  = t.production || 0;
+  const tasks   = state.tasksDone || 0;
+  const prodHrs = prodMs / 3600000;
 
-  // Logged-in time = all activity states (idle already counted inside Production, so don't double-add)
-  const loggedInMs = prodMs + breakMs + meetMs + trainMs + dinnerMs;
-  // Active working time = Production minus idle-within-production
-  const activeMs   = Math.max(0, prodMs - idleMs);
-  const tasks      = state.tasksDone || 0;
-  const prodHrs    = prodMs / 3600000;
+  // Delegate utilization math to the single source of truth.
+  const u = computeUtilization();
+  const utilPct       = u.pct;
+  const totalLoggedMs = u.totalLoggedMs;
 
-  // Utilization % — Active working ÷ total logged-in time
-  let utilPct = 0;
-  if (loggedInMs > 0) utilPct = Math.round((activeMs / loggedInMs) * 100);
   const pUtil = document.getElementById('pUtil');
   if (pUtil) {
-    pUtil.textContent = loggedInMs > 30000 ? (utilPct + '%') : '—';
+    pUtil.textContent = totalLoggedMs > 30000 ? (utilPct + '%') : '—';
     pUtil.classList.remove('util-good','util-ok','util-low');
     if (utilPct >= 75)      pUtil.classList.add('util-good');
     else if (utilPct >= 50) pUtil.classList.add('util-ok');
@@ -3549,23 +3547,33 @@ function fmtHM(ms) {
   return `${h}h ${String(m).padStart(2,'0')}m`;
 }
 
-// Total utilization = productive time / total shift time.
-// Productive time = production + meeting + training (work-related buckets).
-// Total shift time prefers wall-clock (start→now); falls back to sum of
-// all buckets when shiftStartMs is missing (older snapshots).
+// Utilization = Production hours ÷ Total Logged hours × 100
+//   Numerator: Production bucket ONLY (pure heads-down QC work)
+//   Denominator: Total Logged = wall-clock from shift start → now
+//     → breaks, meetings, training, dinner, idle all count against you
+//       because they're "logged-in but not producing."
+// Fallback (shiftStartMs missing on legacy snapshots): sum every bucket
+// + idle so the denominator still represents full logged time.
 function computeUtilization(endMs) {
   const t = state.totals || {};
-  const productiveMs = (t.production || 0) + (t.meeting || 0) + (t.training || 0);
-  let totalMs = 0;
+  const productionMs = t.production || 0;
+  let totalLoggedMs = 0;
   const end = endMs || state.shiftEndTime || Date.now();
   if (state.shiftStartMs && end > state.shiftStartMs) {
-    totalMs = end - state.shiftStartMs;
+    // Primary path — 99%+ of calls land here
+    totalLoggedMs = end - state.shiftStartMs;
   } else {
-    totalMs = (t.production || 0) + (t.break || 0) + (t.auto_break || 0) +
-              (t.meeting || 0) + (t.dinner || 0) + (t.training || 0);
+    // Legacy snapshot fallback: sum every tracked bucket, incl. idle
+    totalLoggedMs = (t.production || 0) + (t.break || 0) + (t.auto_break || 0) +
+                    (t.meeting || 0)    + (t.dinner || 0) + (t.training || 0) +
+                    (state.idleTotalMs || 0);
   }
-  const pct = totalMs > 0 ? Math.round((productiveMs / totalMs) * 100) : 0;
-  return { productiveMs, totalMs, pct };
+  // Clamp to [0, 100] — wall-clock can briefly lag bucket sums during
+  // a running timer tick, producing >100% for a split second otherwise.
+  const raw = totalLoggedMs > 0 ? (productionMs / totalLoggedMs) * 100 : 0;
+  const pct = Math.max(0, Math.min(100, Math.round(raw)));
+  // Return legacy field names for existing callers; add new aliases.
+  return { productiveMs: productionMs, productionMs, totalMs: totalLoggedMs, totalLoggedMs, pct };
 }
 
 function confirmEndShift() {
