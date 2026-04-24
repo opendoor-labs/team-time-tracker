@@ -337,6 +337,7 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
         sh.getRange(rowIdx, 6).setValue(prodMin);              // F ProdMin
         sh.getRange(rowIdx, 9).setValue('');                   // I TaskStartedAt — task done, no active task
         sh.getRange(rowIdx, 10).setValue(nowPSTdateISTtime_()); // J UpdatedAt
+        sh.getRange(rowIdx, 12).setValue(istNow_());            // L TaskEndedAt (IST wall-clock of completion)
         return { ok: true, rowIdx: rowIdx };
       }
     }
@@ -345,7 +346,7 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
     sh.appendRow([
       user, canonHomeTeam, canonTeam, 'production',
       tsInc, addMin, 0, 0, '',
-      nowPSTdateISTtime_(), istNow_()
+      nowPSTdateISTtime_(), istNow_(), istNow_()
     ]);
     return { ok: true, rowIdx: sh.getLastRow(), seeded: true };
   });
@@ -484,23 +485,31 @@ function clearForceReset_(ss, b) {
 }
 
 // ─── Heartbeat: upsert current activity into "Live" sheet (keyed by user) ─
-// Schema: User | HomeTeam | Team | Activity | TasksDone | ProdMin | BreakMin | IdleMin | TaskStartedAt | UpdatedAt (PST date + IST time) | ShiftStartAt
-// Ensure Live sheet exists and has the 11-column schema (adds ShiftStartAt if missing).
+// Schema (12 cols): User | HomeTeam | Team | Activity | TasksDone | ProdMin |
+//   BreakMin | IdleMin | TaskStartedAt | UpdatedAt (PST date + IST time) |
+//   ShiftStartAt | TaskEndedAt
+// Ensure Live sheet exists and has the 12-column schema (adds cols if missing).
 function ensureLiveSheet_(ss) {
   var sh = ss.getSheetByName('Live');
   if (!sh) {
     sh = ss.insertSheet('Live');
     sh.appendRow(['User','HomeTeam','Team','Activity','TasksDone',
-                  'ProdMin','BreakMin','IdleMin','TaskStartedAt','UpdatedAt','ShiftStartAt']);
+                  'ProdMin','BreakMin','IdleMin','TaskStartedAt','UpdatedAt','ShiftStartAt','TaskEndedAt']);
     sh.setFrozenRows(1);
-    // Prevent Sheets from auto-typing col I as a date.
+    // Prevent Sheets from auto-typing cols I (TaskStartedAt) + L (TaskEndedAt) as dates.
     sh.getRange('I:I').setNumberFormat('@');
+    sh.getRange('L:L').setNumberFormat('@');
     return sh;
   }
-  // Migrate: add ShiftStartAt column if missing
+  // Migrate: add columns if missing (idempotent).
   var header = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0];
   if (header.indexOf('ShiftStartAt') === -1) {
     sh.getRange(1, header.length + 1).setValue('ShiftStartAt');
+    header.push('ShiftStartAt');
+  }
+  if (header.indexOf('TaskEndedAt') === -1) {
+    sh.getRange(1, header.length + 1).setValue('TaskEndedAt');
+    sh.getRange(1, header.length + 1, sh.getMaxRows(), 1).setNumberFormat('@');
   }
   return sh;
 }
@@ -516,14 +525,16 @@ function heartbeat_(ss, b) {
     var user = String(b.user || '').trim();
     if (!user) return { ok: false, error: 'no user' };
 
-    // Preserve existing ShiftStartAt unless client supplied one (avoid blanking).
+    // Preserve existing ShiftStartAt + TaskEndedAt unless client supplied them (avoid blanking).
     var existingShiftStart = '';
+    var existingTaskEndedAt = '';
     var vals = sh.getDataRange().getValues();
     var matchedRow = -1;
     for (var i = 1; i < vals.length; i++) {
       if (String(vals[i][0]).toLowerCase() === user.toLowerCase()) {
         matchedRow = i + 1;
         existingShiftStart = String(vals[i][10] || '');
+        existingTaskEndedAt = String(vals[i][11] || '');
         break;
       }
     }
@@ -547,7 +558,8 @@ function heartbeat_(ss, b) {
       Number(b.idleMin || 0),
       b.taskStartedAt ? Utilities.formatDate(new Date(Number(b.taskStartedAt)), TZ, 'yyyy-MM-dd HH:mm:ss') : '',
       nowPSTdateISTtime_(),
-      shiftStartAt
+      shiftStartAt,
+      existingTaskEndedAt   // preserve TaskEndedAt — only _bumpLiveAfterTask_ writes it
     ];
     if (matchedRow > 0) {
       sh.getRange(matchedRow, 1, 1, row.length).setValues([row]);
@@ -585,7 +597,7 @@ function shiftStart_(ss, b) {
     sh.appendRow([
       user, canonHomeTeam, canonTeam,
       'production', 0, 0, 0, 0, '',
-      nowPSTdateISTtime_(), shiftStartAt
+      nowPSTdateISTtime_(), shiftStartAt, ''
     ]);
     return { ok: true, upsert: 'insert', row: sh.getLastRow(), shiftStartAt: shiftStartAt };
   });
@@ -684,6 +696,7 @@ function liveActivity_(ss, p) {
       taskStartedAt: parseTaskStartedAt_(r[8]),
       updatedAt:  updatedAtStr,
       shiftStartAt: String(r[10] || ''),
+      taskEndedAt: String(r[11] || ''),
       ageMin:     Math.round(ageMin * 10) / 10
     };
     users.push(u);
