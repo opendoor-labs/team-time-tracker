@@ -3707,53 +3707,16 @@ async function confirmEndShiftFinal() {
   if (sd) sd.style.display = 'none';
 
   // ── Auto-restore on launch ─────────────────────────────────────────
-  // Priority 1: if today's shift already ended, go straight to the
-  //             end-of-day screen — don't show Start Your Day OR
-  //             resume the tracker.
-  // Priority 2: if a fresh snapshot exists and the user was on the
-  //             tracker screen when it saved, resume them seamlessly.
-  // Covers: force-quit, crash, laptop-closed-reopened, normal relaunch.
+  // If a fresh snapshot exists and the user was on the tracker screen
+  // when it saved, resume them seamlessly. Covers: force-quit, crash,
+  // laptop-closed-reopened, normal relaunch.
+  //
+  // If today's shift already ended: restoreSnapshot() will see
+  // ttk_shiftEnded === today, clear any stale snapshot, and return
+  // false — so the default Start Your Day screen stays visible. This
+  // is what the user wants: reopen after End Shift = fresh Start Day,
+  // not a memorial End-of-Day screen that sticks around all day.
   try {
-    const endedFor = localStorage.getItem('ttk_shiftEnded') || '';
-    const today = new Date().toISOString().slice(0, 10);
-    if (endedFor === today) {
-      // Make sure no stale snapshot tries to override this later
-      if (typeof clearSnapshot === 'function') clearSnapshot();
-      if (typeof showScreen === 'function') showScreen('endOfDayScreen');
-      // Re-hydrate the end-of-day summary from localStorage so the user
-      // sees the same stats they saw at End Shift time, even after quit.
-      let restored = false;
-      try {
-        const raw = localStorage.getItem('ttk_endOfDaySummary');
-        if (raw) {
-          const s = JSON.parse(raw);
-          if (s && s.date === today) {
-            const g   = document.getElementById('endOfDayGreet');
-            const d   = document.getElementById('endOfDayDate');
-            const sum = document.getElementById('endOfDaySummary');
-            if (g   && s.greet)       { g.textContent   = s.greet;       restored = true; }
-            if (d   && s.dateText)    { d.textContent   = s.dateText; }
-            if (sum && s.summaryHTML) { sum.innerHTML   = s.summaryHTML; }
-          }
-        }
-      } catch(e) { console.warn('[eod] restore failed', e); }
-      // No saved summary (e.g. End Shift happened on an older build):
-      // hide the empty stats card so we never show blank dashes.
-      if (!restored) {
-        const greetEl = document.getElementById('endOfDayGreet');
-        if (greetEl) {
-          const firstName = (state.user || '').split(/\s+/)[0] || 'you';
-          greetEl.textContent = `Shift ended — see you tomorrow, ${firstName}!`;
-        }
-        // Find the "Your day at a glance" card inside endOfDayScreen and hide it
-        const eodScreen = document.getElementById('endOfDayScreen');
-        if (eodScreen) {
-          const card = eodScreen.querySelector('.quote-card');
-          if (card) card.style.display = 'none';
-        }
-      }
-      return;  // skip the restoreSnapshot path entirely
-    }
     if (typeof restoreSnapshot === 'function') restoreSnapshot('relaunch');
   } catch (e) { console.warn('[snapshot] boot-restore failed', e); }
 })();
