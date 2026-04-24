@@ -3618,22 +3618,36 @@ async function confirmEndShiftFinal() {
 
   // Build the end-of-day summary text
   const firstName = (state.user || '').split(/\s+/)[0] || 'you';
-  document.getElementById('endOfDayGreet').textContent = `Nice work today, ${firstName}!`;
-  document.getElementById('endOfDayDate').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  const greetText = `Nice work today, ${firstName}!`;
+  const dateText = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
   const u = computeUtilization(state.shiftEndTime);
   // Color-code utilization: green ≥75%, amber 50-74%, red <50%
   const utilColor = u.pct >= 75 ? '#1a8f3c' : (u.pct >= 50 ? '#c27b00' : '#b33a3a');
-  document.getElementById('endOfDaySummary').innerHTML = `
+  const summaryHTML = `
     ✅ <b>${state.tasksDone || 0}</b> tasks logged<br>
     🎯 <b>${fmtHM(t.production)}</b> of production<br>
     ☕ <b>${fmtHM(t.break)}</b> on breaks · 👥 <b>${fmtHM(t.meeting)}</b> in meetings<br>
     🍽️ <b>${fmtHM(t.dinner || 0)}</b> dinner · 📚 <b>${fmtHM(t.training)}</b> training<br>
     💤 <b>${fmtHM(state.idleTotalMs)}</b> idle time detected<br>
-    <div style="margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb">
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.15)">
       ⏱ <b>${fmtHM(u.totalMs)}</b> total shift ·
       📊 <b style="color:${utilColor}">${u.pct}%</b> utilization
     </div>
   `;
+  document.getElementById('endOfDayGreet').textContent = greetText;
+  document.getElementById('endOfDayDate').textContent = dateText;
+  document.getElementById('endOfDaySummary').innerHTML = summaryHTML;
+  // Persist so we can re-render the same summary if the user quits and
+  // reopens the app — otherwise bootNative would land them on an empty
+  // end-of-day screen with just a "—" placeholder.
+  try {
+    localStorage.setItem('ttk_endOfDaySummary', JSON.stringify({
+      date: new Date().toISOString().slice(0, 10),
+      greet: greetText,
+      dateText: dateText,
+      summaryHTML: summaryHTML
+    }));
+  } catch(e) {}
 
   // Swap to end-of-day screen. IMPORTANT: use showScreen() (not raw DOM)
   // so state.screen updates to 'endOfDayScreen'. If any stray save happens
@@ -3706,11 +3720,30 @@ async function confirmEndShiftFinal() {
       // Make sure no stale snapshot tries to override this later
       if (typeof clearSnapshot === 'function') clearSnapshot();
       if (typeof showScreen === 'function') showScreen('endOfDayScreen');
-      // If the screen needs a greet/date re-seed on relaunch:
-      const greetEl = document.getElementById('endOfDayGreet');
-      if (greetEl) {
-        const firstName = (state.user || '').split(/\s+/)[0] || 'you';
-        greetEl.textContent = `Shift ended — see you tomorrow, ${firstName}!`;
+      // Re-hydrate the end-of-day summary from localStorage so the user
+      // sees the same stats they saw at End Shift time, even after quit.
+      let restored = false;
+      try {
+        const raw = localStorage.getItem('ttk_endOfDaySummary');
+        if (raw) {
+          const s = JSON.parse(raw);
+          if (s && s.date === today) {
+            const g   = document.getElementById('endOfDayGreet');
+            const d   = document.getElementById('endOfDayDate');
+            const sum = document.getElementById('endOfDaySummary');
+            if (g   && s.greet)       { g.textContent   = s.greet;       restored = true; }
+            if (d   && s.dateText)    { d.textContent   = s.dateText; }
+            if (sum && s.summaryHTML) { sum.innerHTML   = s.summaryHTML; }
+          }
+        }
+      } catch(e) { console.warn('[eod] restore failed', e); }
+      // Fallback greet if no persisted summary was found
+      if (!restored) {
+        const greetEl = document.getElementById('endOfDayGreet');
+        if (greetEl) {
+          const firstName = (state.user || '').split(/\s+/)[0] || 'you';
+          greetEl.textContent = `Shift ended — see you tomorrow, ${firstName}!`;
+        }
       }
       return;  // skip the restoreSnapshot path entirely
     }
