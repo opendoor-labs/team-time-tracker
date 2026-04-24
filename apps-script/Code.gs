@@ -1,0 +1,1530 @@
+// ═══════════════════════════════════════════════════════════════════════
+//  Team Time Tracker — Apps Script v2.7.5 (HARDENED)
+//  Sheet: Team_Tracker_2026_v2.7
+//  Sheet ID: 1mNOj9MWZAAVNEaWvnNjIkHkoUG1rMWHg0HWM1m47OXs
+//
+//  CHANGES vs v2.7:
+//    • LockService on every upsert handler (shiftStart_, heartbeat_,
+//      markAttendance_, closeSession_, clearForceReset_) — eliminates
+//      duplicate-row race conditions under concurrent requests.
+//    • shiftStart_ appendRow writes '' (not 0) for TaskStartedAt — fixes
+//      "1899-12-30 0:00:00" in column I for brand-new shift rows.
+//    • NEW handleLogError_() — persists client JS + Swift errors into a
+//      fresh "Errors" tab so Arun sees failures before users report them.
+//
+//  Privacy model (strict):
+//    - super_admin  → all 17 team tabs + Attendance + Sessions + Whitelist + Config + Audit
+//    - tl           → ONLY tabs for teams listed in their Whitelist.Teams (comma-separated)
+//                     + Attendance/Sessions filtered to their team members
+//    - everyone else → blocked (returns { ok:false, error:'forbidden' })
+//
+//  Whitelist tab columns: A=Email | B=Role | C=Teams | D=Notes
+//    Role   = 'super_admin' or 'tl'
+//    Teams  = 'ALL' (super_admin) OR comma-separated team names (tl)
+//             Team names MUST match the keys in TEAM_TO_TAB exactly.
+// ═══════════════════════════════════════════════════════════════════════
+
+var SHEET_ID = '1mNOj9MWZAAVNEaWvnNjIkHkoUG1rMWHg0HWM1m47OXs';
+var TZ       = 'Asia/Calcutta';
+
+// Team → Log tab name
+var TEAM_TO_TAB = {
+  'BRN':                     'BRN_Log',
+  'HQI':                     'HQI_Log',
+  'HOA':                     'HOA_Log',
+  'HOC WO':                  'HOC_WO_Log',
+  'LWO':                     'LWO_Log',
+  'TP Sourcing':             'TP_Sourcing_Log',
+  'Utilities Turn On':       'Utilities_TurnOn_Log',
+  'Utilities NST':           'Utilities_NST_Log',
+  'Utilities Blocked Cases': 'Utilities_Blocked_Log',
+  'TC':                      'TC_Log',
+  'TS':                      'TS_Log',
+  'VA':                      'VA_Log',
+  'HOC Permits':             'HOC_Permits_Log',
+  'Maintenance & Scheduling':'Maintenance_Log',
+  'Trust / Safety':          'TrustSafety_Log',
+  'Listings':                'Listings_Log',
+  'SD':                      'SD_Log'
+};
+
+// Resolve whatever team string the dashboard sends (e.g. "Utilities_NST",
+// "Trust_Safety", "Maintenance_Scheduling") to the canonical TEAM_TO_TAB key.
+// Strategy: strip everything but [a-z0-9] from both sides and match. This
+// survives underscores, dropped special chars ('/' , '&'), casing, and
+// lost spaces — the app has done all of these across different teams.
+// Returns the canonical key (e.g. "Trust / Safety") or null if unknown.
+function resolveTeam_(rawTeam) {
+  var s = String(rawTeam || '').trim();
+  if (!s) return null;
+  // Fast path: exact match
+  if (TEAM_TO_TAB[s]) return s;
+  var norm = s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!resolveTeam_.cache) {
+    resolveTeam_.cache = {};
+    Object.keys(TEAM_TO_TAB).forEach(function (k) {
+      resolveTeam_.cache[k.toLowerCase().replace(/[^a-z0-9]/g, '')] = k;
+    });
+    // Short aliases the dashboard sends for teams whose canonical names
+    // include extra trailing words or connectors ('&', '/', 'Cases', etc.)
+    resolveTeam_.cache['utilitiesblocked']       = 'Utilities Blocked Cases';
+    resolveTeam_.cache['utilitiesblockedcases']  = 'Utilities Blocked Cases';
+    resolveTeam_.cache['maintenance']            = 'Maintenance & Scheduling';
+    resolveTeam_.cache['maintenancescheduling']  = 'Maintenance & Scheduling';
+    resolveTeam_.cache['trustsafety']            = 'Trust / Safety';
+    resolveTeam_.cache['utilitiesturnon']        = 'Utilities Turn On';
+  }
+  return resolveTeam_.cache[norm] || null;
+}
+
+// ─── Lock helper ───────────────────────────────────────────────────────
+// Apps Script web apps run doPost concurrently. Any handler that does
+// read → search → conditional-append needs serialization, or two parallel
+// requests for the same user both see "no row" and both append → dup row.
+// Usage: wrap the body of an upsert handler with _withLock_(fn).
+function _withLock_(fn) {
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(5000); }
+  catch (e) { return { ok: false, error: 'busy', detail: String(e) }; }
+  try { return fn(); }
+  finally { lock.releaseLock(); }
+}
+
+// ─── Main routers ──────────────────────────────────────────────────────
+function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    // Audit removed from hot path (was writing ~130K rows/day at 115 users
+    // and burning Apps Script execution quota). Re-enable per-user via
+    // Config!B8 = "debug:email@opendoor.com" if debugging a specific case.
+    if (_debugAuditFor_(ss, data.email || data.user || '')) {
+      audit_(ss, data.action || 'post', data.email || data.user || '', data);
+    }
+    switch (data.action) {
+      case 'logTask':         return json_(logTask_(ss, data));
+      case 'markAttendance':  return json_(markAttendance_(ss, data));
+      case 'closeSession':    return json_(closeSession_(ss, data));
+      case 'clearForceReset': return json_(clearForceReset_(ss, data));
+      case 'heartbeat':       return json_(heartbeat_(ss, data));
+      case 'liveStatus':      return json_(heartbeat_(ss, data));
+      case 'shiftStart':      return json_(shiftStart_(ss, data));
+      case 'idleAlert':       return json_({ ok: true });
+      case 'logError':        return json_(handleLogError_(ss, data));
+      default:                return json_({ ok: false, error: 'unknown action: ' + data.action });
+    }
+  } catch (err) {
+    return json_({ ok: false, error: String(err) });
+  }
+}
+
+// Opt-in audit — only writes when Config!B8 starts with "debug:<email>".
+function _debugAuditFor_(ss, email) {
+  try {
+    var sh = ss.getSheetByName('Config');
+    if (!sh) return false;
+    var v = String(sh.getRange('B8').getValue() || '');
+    if (v.indexOf('debug:') !== 0) return false;
+    var target = v.slice(6).trim().toLowerCase();
+    return !!target && target === String(email || '').toLowerCase();
+  } catch (e) { return false; }
+}
+
+function doGet(e) {
+  try {
+    var p  = e.parameter || {};
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    switch (p.action) {
+      case 'getConfig':       return json_(getConfig_(ss));
+      case 'checkWhitelist':  return json_(checkWhitelist_(ss, p.email));
+      case 'readLog':         return json_(readLog_(ss, p));
+      case 'tlDashboard':     return json_(tlDashboard_(ss, p));
+      case 'liveActivity':    return json_(liveActivity_(ss, p));
+      case 'whoami':          return json_(whoami_(ss, p.email));
+      // Email-OTP auth (browser flow)
+      case 'requestOtp':      return json_(requestOtp_(ss, p.email));
+      case 'verifyOtp':       return json_(verifyOtp_(ss, p.email, p.code));
+      default:                return json_({ ok: false, error: 'unknown action: ' + p.action });
+    }
+  } catch (err) {
+    return json_({ ok: false, error: String(err) });
+  }
+}
+
+// ─── POST handlers ─────────────────────────────────────────────────────
+function logTask_(ss, b) {
+  // Resolve whatever form the dashboard sends (Utilities_NST, Trust_Safety,
+  // Maintenance_Scheduling, etc.) to the canonical TEAM_TO_TAB key so both
+  // the tab lookup AND the switch (team) below match.
+  var team = resolveTeam_(b.team);
+  if (!team) return { ok: false, error: 'unknown team: ' + b.team };
+  var tab  = TEAM_TO_TAB[team];
+  if (!tab) return { ok: false, error: 'unknown team: ' + team };
+  var sh = ss.getSheetByName(tab);
+  if (!sh) return { ok: false, error: 'tab missing: ' + tab };
+
+  var data   = b.data || {};
+  var durSec = Math.round((b.durationMs || 0) / 1000);
+  var durStr = fmtDur_(durSec);
+  var user   = b.user || '';
+  var home   = b.homeTeam || team;
+  // Timestamp = PST date + IST time (date rolls at PST midnight, clock stays in IST)
+  var now    = nowPSTdateISTtime_();
+  var act    = b.activity || 'production';
+  var sys    = b.system ? 'TRUE' : '';
+
+  var row;
+  // Per-team row mapping — MUST match tab headers.
+  switch (team) {
+    case 'BRN':
+      row = [now, user, home, team, act,
+             data['Property Address'] || '',
+             data['Productivity Type'] || '',
+             data['Sub Task'] || '',
+             durStr, b.system ? 'System' : 'Completed', sys];
+      break;
+    case 'HQI':
+      row = [now, user, home, team, act,
+             data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
+             data['Ticket Link'] || '',
+             data['Productivity Type'] || '',
+             data['Sub Task / Action Taken'] || '',
+             data['Status'] || '',
+             data['Priority'] || '',
+             durStr, b.system ? 'System' : 'Completed', sys];
+      break;
+    case 'HOA':
+      row = [now, user, home, team, act,
+             data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
+             data['Property Address'] || '',
+             data['Productivity Type'] || '',
+             data['Project / Task'] || '',
+             data['Sub Task / Action Taken'] || '',
+             data['Status'] || '',
+             data['HOA Name'] || '',
+             data['Management Name'] || '',
+             data['HOA Email'] || '',
+             data['HOA Phone'] || '',
+             durStr, sys];
+      break;
+    case 'HOC WO':
+      row = [now, user, home, team, act,
+             data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
+             data['Property Address'] || '',
+             data['Productivity Type'] || '',
+             data['Project / Task'] || '',
+             data['Sub Task / Action Taken'] || '',
+             data['Status'] || '',
+             durStr];
+      break;
+    case 'LWO':
+    case 'TP Sourcing':
+      row = [now, user, home, team, act,
+             data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
+             data['Productivity Type'] || '',
+             data['Sub Type'] || '',
+             durStr];
+      break;
+    case 'Utilities Turn On':
+    case 'Utilities NST':
+    case 'Utilities Blocked Cases':
+      row = [now, user, home, team, act,
+             data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
+             data['Productivity Type'] || '',
+             data['Task Type'] || '',
+             data['Case / Ticket #'] || data['Case/Ticket #'] || '',
+             data['Comment'] || '',
+             durStr];
+      break;
+    case 'TC':
+    case 'TS':
+      row = [now, user, home, team, act,
+             data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
+             data['Task Type'] || data['Task type'] || '',
+             data['Flip State'] || '',
+             data['Status'] || '',
+             data['Comments'] || '',
+             durStr];
+      break;
+    case 'VA':
+      row = [now, user, home, team, act,
+             data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
+             data['Maestro Link'] || '',
+             data['Admin RBR Link'] || '',
+             data['Task Type'] || '',
+             durStr];
+      break;
+    case 'HOC Permits':
+      row = [now, user, home, team, act,
+             data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
+             data['Productivity Type'] || '',
+             data['Comments'] || '',
+             durStr];
+      break;
+    case 'Maintenance & Scheduling':
+      row = [now, user, home, team, act,
+             data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
+             data['Process'] || '',
+             data['Productivity Type'] || '',
+             durStr];
+      break;
+    case 'Trust / Safety':
+      row = [now, user, home, team, act,
+             data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
+             data['Productivity Type'] || '',
+             data['Process'] || '',
+             data['Subtype'] || '',
+             data['Comments'] || '',
+             durStr];
+      break;
+    case 'Listings':
+      row = [now, user, home, team, act,
+             addr_(data),
+             data['Task'] || '',
+             data['Markets'] || data['Market'] || data['MARKETS'] || '',
+             data['Productivity Type'] || '',
+             durStr];
+      break;
+    case 'SD':
+      row = [now, user, home, team, act,
+             addr_(data),
+             data['Task'] || '',
+             data['Markets'] || data['Market'] || data['MARKETS'] || '',
+             data['Notes'] || '',
+             data['Drive Link'] || '',
+             durStr];
+      break;
+    default:
+      return { ok: false, error: 'no row mapping for team: ' + team };
+  }
+
+  sh.appendRow(row);
+  return { ok: true, tab: tab, row: sh.getLastRow() };
+}
+
+function markAttendance_(ss, b) {
+  return _withLock_(function () {
+    var sh = ss.getSheetByName('Attendance');
+    if (!sh) return { ok: false, error: 'Attendance missing' };
+    // Date = PST (stable across midnight IST); Timestamp = IST clock time
+    var today = todayPST_();
+    var stamp = timeIST_();
+    var user  = b.user || '';
+    // Canonicalize team so TL attendance filter (which compares against
+    // whitelist canonical names) doesn't silently drop rows.
+    var canonTeam = resolveTeam_(b.team) || String(b.team || '');
+    var rng   = sh.getDataRange().getValues();
+    for (var i = 1; i < rng.length; i++) {
+      if (rng[i][0] === today && rng[i][1] === user) {
+        sh.getRange(i + 1, 1, 1, 7).setValues([[today, user, canonTeam, b.status || '', stamp, 'Mac', b.notes || '']]);
+        return { ok: true, updated: true };
+      }
+    }
+    sh.appendRow([today, user, canonTeam, b.status || '', stamp, 'Mac', b.notes || '']);
+    return { ok: true, inserted: true };
+  });
+}
+
+// Sessions schema (11 cols):
+//   A=Name | B=Date | C=Start | D=End | E=Production(min) | F=Break(min)
+//   G=Dinner(min) | H=Meeting(min) | I=Training(min) | J=Idle(min) | K=Break Exceeded(min)
+var BREAK_ALLOWANCE_MIN = 60;  // 1 hour break allowance per day
+
+function closeSession_(ss, b) {
+  return _withLock_(function () {
+    var sh = ss.getSheetByName('Sessions');
+    if (!sh) return { ok: false, error: 'Sessions missing' };
+    // Date in PST (so a late-night IST shift stays on one date row)
+    // Times in IST (so the team reads start/end in their own clock)
+    var today = todayPST_();
+    var user  = b.user || '';
+    var nowTs = timeIST_();
+
+    var prodMin     = Number(b.productionMin) || 0;
+    var breakMin    = Number(b.breakMin)      || 0;
+    var dinnerMin   = Number(b.dinnerMin)     || 0;
+    var meetingMin  = Number(b.meetingMin)    || 0;
+    var trainingMin = Number(b.trainingMin)   || 0;
+    var idleMin     = Number(b.idleMin)       || 0;
+    var breakExceeded = Math.max(0, breakMin - BREAK_ALLOWANCE_MIN);
+
+    // Find existing row for [user, today] — Name in col A, Date in col B
+    var rng = sh.getDataRange().getValues();
+    for (var i = 1; i < rng.length; i++) {
+      if (rng[i][0] === user && rng[i][1] === today) {
+        sh.getRange(i + 1, 4).setValue(nowTs);         // End
+        sh.getRange(i + 1, 5).setValue(prodMin);       // Production
+        sh.getRange(i + 1, 6).setValue(breakMin);      // Break
+        sh.getRange(i + 1, 7).setValue(dinnerMin);     // Dinner
+        sh.getRange(i + 1, 8).setValue(meetingMin);    // Meeting
+        sh.getRange(i + 1, 9).setValue(trainingMin);   // Training
+        sh.getRange(i + 1, 10).setValue(idleMin);      // Idle
+        sh.getRange(i + 1, 11).setValue(breakExceeded);// Break Exceeded
+        // Guard against Sheets auto-formatting these minute cells as DateTime.
+        sh.getRange(i + 1, 5, 1, 7).setNumberFormat('0');
+        return { ok: true, updated: true, breakExceeded: breakExceeded };
+      }
+    }
+    sh.appendRow([user, today, nowTs, nowTs,
+                  prodMin, breakMin, dinnerMin, meetingMin, trainingMin, idleMin, breakExceeded]);
+    // Force minute cols to integer format (new row just appended at bottom)
+    sh.getRange(sh.getLastRow(), 5, 1, 7).setNumberFormat('0');
+    return { ok: true, inserted: true, breakExceeded: breakExceeded };
+  });
+}
+
+// One-shot cleanup. Run from the Apps Script editor once to:
+//   1) Reformat Sessions cols E:K as plain integers
+//   2) Rewrite any existing "0" cells so Sheets re-evaluates display
+// Use when you see "1900-01-01 0:00:00" or similar date-like junk.
+function fixSessionsFormat() {
+  var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('Sessions');
+  if (!sh) return { ok: false, error: 'Sessions sheet missing' };
+  var lastRow = Math.max(sh.getLastRow(), 2);
+  // Columns E..K (5..11) → integer format
+  sh.getRange(2, 5, lastRow - 1, 7).setNumberFormat('0');
+  // Also coerce existing bogus values back to clean numbers.
+  var rng  = sh.getRange(2, 5, lastRow - 1, 7);
+  var vals = rng.getValues();
+  var cleaned = 0;
+  for (var r = 0; r < vals.length; r++) {
+    for (var c = 0; c < vals[r].length; c++) {
+      var v = vals[r][c];
+      if (v instanceof Date) { vals[r][c] = 0; cleaned++; }
+      else if (typeof v === 'string' && /^\s*1899|^\s*1900/.test(v)) { vals[r][c] = 0; cleaned++; }
+      else if (typeof v !== 'number') { vals[r][c] = Number(v) || 0; }
+    }
+  }
+  rng.setValues(vals);
+  return { ok: true, reformattedCols: 'E:K', rowsScanned: vals.length, cellsCleaned: cleaned };
+}
+
+// Companion cleanup for the Live tab. Sets col I (TaskStartedAt) format to
+// plain text and rewrites any rows currently holding the Sheets epoch value
+// "1899-12-30 0:00:00" back to empty string. Run once from the editor.
+function fixLiveTaskStartedAt() {
+  var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('Live');
+  if (!sh) return { ok: false, error: 'Live sheet missing' };
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return { ok: true, cleared: 0 };
+  var rng = sh.getRange(2, 9, lastRow - 1, 1);   // col I only
+  rng.setNumberFormat('@');                       // plain text
+  var vals = rng.getValues();
+  var cleaned = 0;
+  for (var r = 0; r < vals.length; r++) {
+    var v = vals[r][0];
+    if (v instanceof Date) { vals[r][0] = ''; cleaned++; }
+    else if (typeof v === 'number' && v === 0) { vals[r][0] = ''; cleaned++; }
+    else if (typeof v === 'string' && /^1899-12-30/.test(v)) { vals[r][0] = ''; cleaned++; }
+  }
+  rng.setValues(vals);
+  return { ok: true, rowsScanned: vals.length, cellsCleaned: cleaned };
+}
+
+function clearForceReset_(ss, b) {
+  return _withLock_(function () {
+    var sh      = ss.getSheetByName('Config');
+    var current = String(sh.getRange('B3').getValue() || '');
+    if (!current) return { ok: true, cleared: false };
+    var target  = String(b.user || '').toLowerCase();
+    var names   = current.split(',').map(function (s) { return s.trim(); })
+                         .filter(function (s) { return s && s.toLowerCase() !== target; });
+    sh.getRange('B3').setValue(names.join(','));
+    return { ok: true, cleared: true };
+  });
+}
+
+// ─── Heartbeat: upsert current activity into "Live" sheet (keyed by user) ─
+// Schema: User | HomeTeam | Team | Activity | TasksDone | ProdMin | BreakMin | IdleMin | TaskStartedAt | UpdatedAt (PST date + IST time) | ShiftStartAt
+// Ensure Live sheet exists and has the 11-column schema (adds ShiftStartAt if missing).
+function ensureLiveSheet_(ss) {
+  var sh = ss.getSheetByName('Live');
+  if (!sh) {
+    sh = ss.insertSheet('Live');
+    sh.appendRow(['User','HomeTeam','Team','Activity','TasksDone',
+                  'ProdMin','BreakMin','IdleMin','TaskStartedAt','UpdatedAt','ShiftStartAt']);
+    sh.setFrozenRows(1);
+    // Prevent Sheets from auto-typing col I as a date.
+    sh.getRange('I:I').setNumberFormat('@');
+    return sh;
+  }
+  // Migrate: add ShiftStartAt column if missing
+  var header = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0];
+  if (header.indexOf('ShiftStartAt') === -1) {
+    sh.getRange(1, header.length + 1).setValue('ShiftStartAt');
+  }
+  return sh;
+}
+
+// Current IST wall-clock time, "YYYY-MM-DD HH:MM:SS"
+function istNow_() {
+  return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss');
+}
+
+function heartbeat_(ss, b) {
+  return _withLock_(function () {
+    var sh = ensureLiveSheet_(ss);
+    var user = String(b.user || '').trim();
+    if (!user) return { ok: false, error: 'no user' };
+
+    // Preserve existing ShiftStartAt unless client supplied one (avoid blanking).
+    var existingShiftStart = '';
+    var vals = sh.getDataRange().getValues();
+    var matchedRow = -1;
+    for (var i = 1; i < vals.length; i++) {
+      if (String(vals[i][0]).toLowerCase() === user.toLowerCase()) {
+        matchedRow = i + 1;
+        existingShiftStart = String(vals[i][10] || '');
+        break;
+      }
+    }
+    var shiftStartAt = String(b.shiftStartAt || '').trim() || existingShiftStart;
+
+    // Canonicalize team/homeTeam so Live.Team matches what TL dashboards
+    // filter on (Whitelist stores canonical names like "Utilities Blocked Cases",
+    // but the app sends "Utilities_Blocked"). Fall back to raw if resolver
+    // can't match (unknown team — better to log raw than drop the heartbeat).
+    var canonTeam     = resolveTeam_(b.team)     || String(b.team || '');
+    var canonHomeTeam = resolveTeam_(b.homeTeam) || String(b.homeTeam || '');
+
+    var row = [
+      user,
+      canonHomeTeam,
+      canonTeam,
+      String(b.activity || ''),
+      Number(b.tasksDone || 0),
+      Number(b.productionMin || 0),
+      Number(b.breakMin || 0),
+      Number(b.idleMin || 0),
+      b.taskStartedAt ? Utilities.formatDate(new Date(Number(b.taskStartedAt)), TZ, 'yyyy-MM-dd HH:mm:ss') : '',
+      nowPSTdateISTtime_(),
+      shiftStartAt
+    ];
+    if (matchedRow > 0) {
+      sh.getRange(matchedRow, 1, 1, row.length).setValues([row]);
+      return { ok: true, upsert: 'update', row: matchedRow };
+    }
+    sh.appendRow(row);
+    return { ok: true, upsert: 'insert', row: sh.getLastRow() };
+  });
+}
+
+// Explicit "Start Your Day" signal — stamps ShiftStartAt with IST wall-clock.
+// If the row doesn't exist yet, seed it; if it exists, only set ShiftStartAt + refresh UpdatedAt.
+function shiftStart_(ss, b) {
+  return _withLock_(function () {
+    var sh = ensureLiveSheet_(ss);
+    var user = String(b.user || '').trim();
+    if (!user) return { ok: false, error: 'no user' };
+    var shiftStartAt = String(b.shiftStartAt || '').trim() || istNow_();
+    // Canonicalize for Live.Team/HomeTeam — see heartbeat_ comment.
+    var canonTeam     = resolveTeam_(b.team)     || String(b.team || '');
+    var canonHomeTeam = resolveTeam_(b.homeTeam) || String(b.homeTeam || '');
+    var vals = sh.getDataRange().getValues();
+    for (var i = 1; i < vals.length; i++) {
+      if (String(vals[i][0]).toLowerCase() === user.toLowerCase()) {
+        sh.getRange(i + 1, 11).setValue(shiftStartAt);       // ShiftStartAt (col K)
+        sh.getRange(i + 1, 10).setValue(nowPSTdateISTtime_()); // UpdatedAt
+        if (b.homeTeam) sh.getRange(i + 1, 2).setValue(canonHomeTeam);
+        if (b.team)     sh.getRange(i + 1, 3).setValue(canonTeam);
+        return { ok: true, upsert: 'update', row: i + 1, shiftStartAt: shiftStartAt };
+      }
+    }
+    // IMPORTANT: col I (TaskStartedAt) = '' not 0.  Writing 0 makes Sheets
+    // render the cell as the epoch "1899-12-30 0:00:00" because col I is
+    // date-formatted. Empty string stays genuinely empty.
+    sh.appendRow([
+      user, canonHomeTeam, canonTeam,
+      'production', 0, 0, 0, 0, '',
+      nowPSTdateISTtime_(), shiftStartAt
+    ]);
+    return { ok: true, upsert: 'insert', row: sh.getLastRow(), shiftStartAt: shiftStartAt };
+  });
+}
+
+// ─── Error telemetry: client JS + Swift crash reports land here ────────
+// Schema of the Errors tab (auto-created if someone deletes it):
+//   A=Timestamp (IST) · B=User · C=Version · D=Source (js|swift)
+//   E=Kind · F=Message · G=URL/Context · H=Stack
+// Capped at 2,000 rows so it never slows down the sheet. No lock needed —
+// pure append, each row is a distinct event.
+function handleLogError_(ss, body) {
+  try {
+    var sh = ss.getSheetByName('Errors');
+    if (!sh) {
+      sh = ss.insertSheet('Errors');
+      sh.appendRow([
+        'Timestamp (IST)', 'User', 'Version', 'Source',
+        'Kind', 'Message', 'URL/Context', 'Stack'
+      ]);
+      sh.setFrozenRows(1);
+    }
+
+    var nowIST = Utilities.formatDate(
+      new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'
+    );
+
+    sh.appendRow([
+      nowIST,
+      String(body.user || '').slice(0, 80),
+      String(body.version || '').slice(0, 20),
+      String(body.source || 'js').slice(0, 10),
+      String(body.kind || 'error').slice(0, 40),
+      String(body.message || '').slice(0, 500),
+      String(body.context || '').slice(0, 200),
+      String(body.stack || '').slice(0, 1500)
+    ]);
+
+    // Cap the tab at 2,000 rows so it never slows down the sheet.
+    var rows = sh.getLastRow();
+    if (rows > 2001) {
+      sh.deleteRows(2, rows - 2001);  // keep header + latest 2,000
+    }
+
+    return { ok: true };
+  } catch (err) {
+    // Never crash the request — telemetry must never break the app.
+    return { ok: false, error: String(err) };
+  }
+}
+
+// ─── Live activity read: returns all users whose heartbeat is recent ─────
+// Rows older than `staleMin` minutes (default 5) are considered offline and dropped.
+function liveActivity_(ss, p) {
+  // TL privacy: require valid session; filter users to caller's allowed teams.
+  var who = _resolveCaller_(p);
+  if (!who.ok) return { ok: false, error: who.error === 'expired' ? 'session_expired' : 'forbidden' };
+  var wl = lookupWhitelist_(ss, who.email);
+  if (!wl.ok) return { ok: false, error: 'forbidden' };
+  var allowed = wl.isAdmin ? null : {};
+  if (!wl.isAdmin) wl.teams.forEach(function (t) { allowed[t] = true; });
+
+  var sh = ss.getSheetByName('Live');
+  if (!sh) return { ok: true, users: [], byTeam: {}, isAdmin: wl.isAdmin, teams: wl.teams };
+  var staleMin = Number((p && p.staleMin) || 5);
+  var now = new Date();
+  var vals = sh.getDataRange().getValues();
+  var header = vals.shift() || [];
+  var users = [];
+  var byTeam = {};
+  vals.forEach(function (r) {
+    var updatedAtStr = String(r[9] || '');
+    var parts = updatedAtStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+    if (!parts) return;
+    var istNowStr = Utilities.formatDate(now, TZ, 'yyyy-MM-dd HH:mm:ss');
+    var istNowParts = istNowStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+    if (!istNowParts) return;
+    var toMs = function (m) {
+      return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
+    };
+    var ageMin = (toMs(istNowParts) - toMs(parts)) / 60000;
+    if (ageMin > staleMin) return;
+    var homeTeam = String(r[1] || '');
+    var team     = String(r[2] || '');
+    // TL filter: show user only if their active team OR home team is allowed
+    if (allowed && !allowed[team] && !allowed[homeTeam]) return;
+    var u = {
+      user:       String(r[0] || ''),
+      homeTeam:   homeTeam,
+      team:       team,
+      activity:   String(r[3] || ''),
+      tasksDone:  Number(r[4] || 0),
+      prodMin:    Number(r[5] || 0),
+      breakMin:   Number(r[6] || 0),
+      idleMin:    Number(r[7] || 0),
+      taskStartedAt: parseTaskStartedAt_(r[8]),
+      updatedAt:  updatedAtStr,
+      shiftStartAt: String(r[10] || ''),
+      ageMin:     Math.round(ageMin * 10) / 10
+    };
+    users.push(u);
+    var teamKey = u.team || u.homeTeam || 'Unassigned';
+    if (!byTeam[teamKey]) byTeam[teamKey] = [];
+    byTeam[teamKey].push(u);
+  });
+  return { ok: true, users: users, byTeam: byTeam, staleMin: staleMin, isAdmin: wl.isAdmin, teams: wl.teams };
+}
+
+// ─── GET handlers ──────────────────────────────────────────────────────
+function getConfig_(ss) {
+  var sh = ss.getSheetByName('Config');
+  if (!sh) return {};
+  return {
+    version:    String(sh.getRange('B1').getValue() || ''),
+    sourceUrl:  String(sh.getRange('B2').getValue() || ''),
+    forceReset: String(sh.getRange('B3').getValue() || ''),
+    banner:     String(sh.getRange('B6').getValue() || ''),
+    killSwitch: String(sh.getRange('B7').getValue() || 'TRUE').toUpperCase() === 'TRUE'
+  };
+}
+
+// Returns identity + allowed teams for a caller. Used by dashboard to render UI.
+function whoami_(ss, email) {
+  var wl = lookupWhitelist_(ss, email);
+  if (!wl.ok) return { ok: false, error: 'not_whitelisted' };
+  return {
+    ok: true,
+    email: wl.email,
+    role: wl.role,
+    isAdmin: wl.isAdmin,
+    teams: wl.isAdmin ? Object.keys(TEAM_TO_TAB) : wl.teams
+  };
+}
+
+function checkWhitelist_(ss, email) {
+  var wl = lookupWhitelist_(ss, email);
+  if (!wl.ok) return { ok: false, error: 'not_whitelisted' };
+  return {
+    ok: true, email: wl.email, role: wl.role,
+    teams: wl.teams, isAdmin: wl.isAdmin
+  };
+}
+
+// Read a single team log — TL-privacy enforced.
+function readLog_(ss, p) {
+  var wl = lookupWhitelist_(ss, p.email);
+  if (!wl.ok) return { ok: false, error: 'forbidden' };
+  var rawTeam = String(p.team || '').trim();
+  if (!rawTeam) return { ok: false, error: 'team required' };
+  var team = resolveTeam_(rawTeam);
+  if (!team) return { ok: false, error: 'unknown team: ' + rawTeam };
+  if (!wl.isAdmin && wl.teams.indexOf(team) < 0) {
+    return { ok: false, error: 'forbidden_team' };
+  }
+  var tab = TEAM_TO_TAB[team];
+  if (!tab) return { ok: false, error: 'unknown team: ' + team };
+
+  var date = p.date ? String(p.date) : '';
+
+  // Past date? Serve from Drive monthly archive (active sheet keeps only
+  // today's rows after nightly archive job runs at 8 AM IST).
+  if (date && date !== todayPST_()) {
+    var arch = readArchiveLog_(team, date);
+    if (arch.ok) {
+      return { ok: true, team: team, tab: tab, header: arch.header, rows: arch.rows, source: 'archive' };
+    }
+    // Fall through: if archive miss, try active sheet anyway (transitional week)
+  }
+
+  var sh = ss.getSheetByName(tab);
+  if (!sh) return { ok: false, error: 'tab missing: ' + tab };
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return { ok: true, team: team, tab: tab, header: [], rows: [], source: 'active' };
+
+  // Read header once (col count comes from actual sheet)
+  var lastCol = sh.getLastColumn();
+  var header  = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+
+  // No date filter → return full tab (used rarely, usually bounded to "today" tabs)
+  if (!date) {
+    var all = lastRow > 1 ? sh.getRange(2, 1, lastRow - 1, lastCol).getValues() : [];
+    return { ok: true, team: team, tab: tab, header: header, rows: all, source: 'active' };
+  }
+
+  // Bottom-up scan: logs are append-only and sorted by time in col A.
+  // Reads 500 rows at a time from the bottom and stops when we pass the
+  // requested date. 50-100x faster than full-sheet scan at 30K+ rows.
+  var BLOCK = 500;
+  var matched = [];
+  var passed = false;
+  var end = lastRow;
+  while (end >= 2 && !passed) {
+    var start = Math.max(2, end - BLOCK + 1);
+    var block = sh.getRange(start, 1, end - start + 1, lastCol).getValues();
+    for (var i = block.length - 1; i >= 0; i--) {
+      var rowDate = String(block[i][0]).slice(0, 10);
+      if (rowDate === date) matched.unshift(block[i]);
+      else if (rowDate < date) { passed = true; break; } // gone past target
+    }
+    end = start - 1;
+  }
+  return { ok: true, team: team, tab: tab, header: header, rows: matched, source: 'active' };
+}
+
+// Multi-tab read for dashboard — respects scope.
+// Caller must pass a valid session token (preferred) or whitelisted email.
+function tlDashboard_(ss, p) {
+  var who = _resolveCaller_(p);
+  if (!who.ok) return { ok: false, error: who.error === 'expired' ? 'session_expired' : 'forbidden' };
+  var wl = lookupWhitelist_(ss, who.email);
+  if (!wl.ok) return { ok: false, error: 'forbidden' };
+  // Default to PST date — Sessions tab stores dates in PST
+  var date   = p.date ? String(p.date) : todayPST_();
+  var teams  = wl.isAdmin ? Object.keys(TEAM_TO_TAB) : wl.teams;
+  var logs   = {};
+  for (var i = 0; i < teams.length; i++) {
+    var r = readLog_(ss, { email: who.email, team: teams[i], date: date });
+    if (r.ok) logs[teams[i]] = { header: r.header, rows: r.rows };
+  }
+  var attendance = readByDate_(ss, 'Attendance', date, wl.isAdmin ? null : teams);
+  // ★ CHANGED: pass team filter so TLs only see sessions for their team's users.
+  var sessions   = readSessionsByDate_(ss, date, wl.isAdmin ? null : teams);
+  var result = {
+    ok: true, email: wl.email, role: wl.role, isAdmin: wl.isAdmin,
+    teams: teams, date: date,
+    logs: logs, attendance: attendance, sessions: sessions
+  };
+  // Admin-only extras
+  if (wl.isAdmin) {
+    result.whitelist = getSheet_(ss, 'Whitelist');
+    result.config    = getConfig_(ss);
+  }
+  return result;
+}
+
+// ─── Privacy helpers ───────────────────────────────────────────────────
+function lookupWhitelist_(ss, email) {
+  email = String(email || '').toLowerCase();
+  if (!email) return { ok: false };
+  var sh = ss.getSheetByName('Whitelist');
+  if (!sh) return { ok: false };
+  var rows = sh.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || '').toLowerCase() === email) {
+      var role = String(rows[i][1] || '').toLowerCase();
+      var teamsCell = String(rows[i][2] || '');
+      var isAdmin = role === 'super_admin' || teamsCell.toUpperCase() === 'ALL';
+      var teams = teamsCell.toUpperCase() === 'ALL'
+        ? Object.keys(TEAM_TO_TAB)
+        : teamsCell.split(',')
+                   .map(function (s) { return s.trim(); })
+                   .filter(Boolean)
+                   // Canonicalize each team so downstream filters always
+                   // compare apples to apples, regardless of how an admin
+                   // typed the team name in the Whitelist sheet.
+                   .map(function (t) { return resolveTeam_(t) || t; });
+      return { ok: true, email: email, role: role, teams: teams, isAdmin: isAdmin };
+    }
+  }
+  return { ok: false };
+}
+
+function readByDate_(ss, tabName, date, teamFilter) {
+  var sh = ss.getSheetByName(tabName);
+  if (!sh) return { header: [], rows: [] };
+  var vals = sh.getDataRange().getValues();
+  var header = vals.shift() || [];
+  var rows = vals.filter(function (r) { return String(r[0]).indexOf(date) === 0; });
+  if (teamFilter && teamFilter.length) {
+    rows = rows.filter(function (r) { return teamFilter.indexOf(String(r[2] || '')) >= 0; });
+  }
+  return { header: header, rows: rows };
+}
+
+// ★ CHANGED: Sessions-specific reader with TL team filtering.
+// Schema: A=Name, B=Date, C=Start, D=End, E=Production, F=Break, G=Dinner,
+//         H=Meeting, I=Training, J=Idle, K=Break Exceeded.
+// Sessions has no Team column, so for TL callers we derive the allowed-user
+// set from Attendance (date + team) AND from that date's team-log rows (col B=User),
+// then filter Sessions by Name. teamFilter=null → super-admin path (no filter).
+function readSessionsByDate_(ss, date, teamFilter) {
+  var sh = ss.getSheetByName('Sessions');
+  if (!sh) return { header: [], rows: [] };
+  var vals = sh.getDataRange().getValues();
+  var header = vals.shift() || [];
+  var rows = vals.filter(function (r) { return String(r[1]).indexOf(date) === 0; });
+
+  // Super-admin path — no filter (identical to previous behavior)
+  if (!teamFilter || !teamFilter.length) {
+    return { header: header, rows: rows };
+  }
+
+  // Build allowed-name set: (1) Attendance for date+team, (2) team-log rows for date
+  var teamSet = {};
+  teamFilter.forEach(function (t) { teamSet[t] = true; });
+  var nameSet = {};
+
+  // (1) Attendance: col A=Date, col B=User, col C=Team
+  var att = ss.getSheetByName('Attendance');
+  if (att) {
+    var aVals = att.getDataRange().getValues();
+    for (var i = 1; i < aVals.length; i++) {
+      if (String(aVals[i][0]).indexOf(date) !== 0) continue;
+      var team = String(aVals[i][2] || '');
+      if (!teamSet[team]) continue;
+      var name = String(aVals[i][1] || '').toLowerCase().trim();
+      if (name) nameSet[name] = true;
+    }
+  }
+
+  // (2) Team logs for this date — covers users who logged tasks but skipped attendance
+  Object.keys(teamSet).forEach(function (team) {
+    var tab = TEAM_TO_TAB[team];
+    if (!tab) return;
+    var sh2 = ss.getSheetByName(tab);
+    if (!sh2) return;
+    var lr = sh2.getLastRow();
+    if (lr < 2) return;
+    var block = sh2.getRange(2, 1, lr - 1, 2).getValues(); // A=Timestamp, B=User
+    for (var j = 0; j < block.length; j++) {
+      if (String(block[j][0]).indexOf(date) !== 0) continue;
+      var n = String(block[j][1] || '').toLowerCase().trim();
+      if (n) nameSet[n] = true;
+    }
+  });
+
+  var filtered = rows.filter(function (r) {
+    var n = String(r[0] || '').toLowerCase().trim(); // Sessions col A = Name
+    return !!nameSet[n];
+  });
+  return { header: header, rows: filtered };
+}
+
+function getSheet_(ss, tabName) {
+  var sh = ss.getSheetByName(tabName);
+  if (!sh) return { header: [], rows: [] };
+  var vals = sh.getDataRange().getValues();
+  var header = vals.shift() || [];
+  return { header: header, rows: vals };
+}
+
+// ─── Utilities ─────────────────────────────────────────────────────────
+function audit_(ss, action, email, payload) {
+  try {
+    var sh = ss.getSheetByName('Audit');
+    if (!sh) return;
+    var snip = JSON.stringify(payload || {}).slice(0, 500);
+    sh.appendRow([nowIST_(), action, email, (payload && payload.user) || '', snip]);
+  } catch (e) {}
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function nowIST_()   { return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'); }
+function todayIST_() { return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd'); }
+function timeIST_()  { return Utilities.formatDate(new Date(), TZ, 'HH:mm:ss'); }
+function todayPST_() { return Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd'); }
+// Hybrid: PST calendar date + IST clock time, e.g. "2026-04-22 19:30:45"
+function nowPSTdateISTtime_() { return todayPST_() + ' ' + timeIST_(); }
+
+// Parse TaskStartedAt cell value back to ms-epoch for the dashboard.
+// Handles: new format ("yyyy-MM-dd HH:mm:ss" IST string), legacy ms-number rows,
+// native Date objects (if the cell was coerced by Sheets), or blank.
+function parseTaskStartedAt_(v) {
+  if (!v) return 0;
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === 'number') return v;
+  var s = String(v).trim();
+  if (!s) return 0;
+  if (/^\d+$/.test(s)) return Number(s);            // legacy raw-ms row
+  var t = new Date(s.replace(' ', 'T') + '+05:30'); // IST → ms
+  return isNaN(t.getTime()) ? 0 : t.getTime();
+}
+
+function fmtDur_(sec) {
+  sec = Math.max(0, sec | 0);
+  var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return (h ? (h + 'h ') : '') + (m + 'm ') + s + 's';
+}
+
+// Extract a property-address string from a task payload. Handles all the
+// field-name variants the dashboard may send (Listings/SD teams use a
+// dedicated "Property Address" field; others tuck it into a ticket/address
+// combo field). Never throws — returns '' if nothing found.
+function addr_(d) {
+  d = d || {};
+  return String(
+    d['Property Address'] ||
+    d['Address'] ||
+    d['Ticket Link/Property Address'] ||
+    d['Ticket Link / Property Address'] ||
+    d['Flip Address'] ||
+    ''
+  );
+}
+
+// ─── One-time setup helpers (run from editor, optional) ────────────────
+function setForceReset(names) {
+  SpreadsheetApp.openById(SHEET_ID).getSheetByName('Config').getRange('B3').setValue(names || '');
+}
+function setSourceUrl(url) {
+  SpreadsheetApp.openById(SHEET_ID).getSheetByName('Config').getRange('B2').setValue(url || '');
+}
+function setVersion(ver) {
+  SpreadsheetApp.openById(SHEET_ID).getSheetByName('Config').getRange('B1').setValue(ver || '');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ARCHIVE SYSTEM — Phase 1.5
+//  Daily at 8 AM IST, move yesterday's team-log rows into per-team monthly
+//  rollup files in Drive ("Team Tracker Archives/{team}/{team}_Log_{yyyy_mm}").
+//  Each team folder auto-shared (read-only) with TLs from Whitelist.
+//  Dashboard transparently falls through to archives when TL picks a past
+//  date — same table, same filters, just slower cache-cold (~800ms).
+// ═══════════════════════════════════════════════════════════════════════
+
+// Config!B9 holds the Drive folder ID of the archive root. If empty,
+// ARCHIVE_ROOT_DEFAULT (the folder Arun provided) is used.
+// Run setupArchive() once from the editor to initialise subfolders + permissions.
+var ARCHIVE_ROOT_DEFAULT = '1hHzoyp8unXqbDUehmqob5Nl1k_FQ__5C';
+// Name of the admin-only subfolder that holds full-sheet daily snapshots.
+var OVERALL_FOLDER_NAME = '_Overall (Admins Only)';
+
+function _getArchiveRootId_() {
+  var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('Config');
+  var id = String(sh.getRange('B9').getValue() || '').trim();
+  return id || ARCHIVE_ROOT_DEFAULT;
+}
+function _setArchiveRootId_(id) {
+  var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('Config');
+  sh.getRange('B9').setValue(id);
+}
+
+// Run ONCE from the Apps Script editor: uses the provided root folder,
+// creates 17 team subfolders + an admin-only Overall subfolder,
+// shares each with the TL on Whitelist, writes root id to B9.
+function setupArchive() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var rootId = _getArchiveRootId_();
+  var root;
+  try {
+    root = DriveApp.getFolderById(rootId);
+  } catch (e) {
+    throw new Error('Cannot access archive root folder (' + rootId + '). Make sure the Apps Script owner has edit access. ' + e);
+  }
+  _setArchiveRootId_(root.getId());
+
+  // Team subfolders
+  var teams = Object.keys(TEAM_TO_TAB);
+  teams.forEach(function (team) {
+    var safe = _folderNameForTeam_(team);
+    var folder = _findOrCreateChild_(root, safe);
+    Logger.log('Folder ready: ' + safe + ' → ' + folder.getId());
+  });
+
+  // Admin-only overall folder
+  var overall = _findOrCreateChild_(root, OVERALL_FOLDER_NAME);
+  Logger.log('Overall folder ready → ' + overall.getId());
+
+  // Grant access from Whitelist
+  syncArchivePermissions();
+  return { ok: true, rootId: root.getId(), teams: teams.length, overall: overall.getId() };
+}
+
+function _folderNameForTeam_(team) {
+  // Drive folder names can't contain '/'. Replace with '-' for 'Trust / Safety'.
+  return team.replace(/\//g, '-').replace(/\s+/g, ' ').trim();
+}
+
+function _findOrCreateChild_(parent, name) {
+  var it = parent.getFoldersByName(name);
+  if (it.hasNext()) return it.next();
+  return parent.createFolder(name);
+}
+
+function _findFileInFolder_(folder, name) {
+  var it = folder.getFilesByName(name);
+  return it.hasNext() ? it.next() : null;
+}
+
+// Sync Drive permissions from Whitelist — run daily or when TL roster changes.
+// Super_admins → edit on root. TLs → view on their team subfolders.
+function syncArchivePermissions() {
+  var rootId = _getArchiveRootId_();
+  if (!rootId) return { ok: false, error: 'archive not set up; run setupArchive()' };
+  var root = DriveApp.getFolderById(rootId);
+
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var wl = ss.getSheetByName('Whitelist');
+  if (!wl) return { ok: false, error: 'no Whitelist tab' };
+  var rows = wl.getDataRange().getValues();
+  var admins = [];
+  var tlTeams = {}; // team -> [email, ...]
+  for (var i = 1; i < rows.length; i++) {
+    var email = String(rows[i][0] || '').toLowerCase().trim();
+    var role  = String(rows[i][1] || '').toLowerCase().trim();
+    var teams = String(rows[i][2] || '');
+    if (!email) continue;
+    if (role === 'super_admin' || teams.toUpperCase() === 'ALL') {
+      admins.push(email);
+    } else if (role === 'tl') {
+      teams.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (t) {
+        (tlTeams[t] = tlTeams[t] || []).push(email);
+      });
+    }
+  }
+
+  // Super_admins get editor access on root (cascades to all subfolders)
+  admins.forEach(function (e) {
+    try { root.addEditor(e); } catch (err) { Logger.log('addEditor ' + e + ' failed: ' + err); }
+  });
+
+  // TLs get viewer access on their team folder
+  Object.keys(TEAM_TO_TAB).forEach(function (team) {
+    var folder = _findOrCreateChild_(root, _folderNameForTeam_(team));
+    var emails = tlTeams[team] || [];
+    emails.forEach(function (e) {
+      try { folder.addViewer(e); } catch (err) { Logger.log('addViewer ' + e + '@' + team + ' failed: ' + err); }
+    });
+  });
+
+  // Overall folder → super_admins only. Explicitly revoke any inherited
+  // TL viewers that may have been added earlier. (addEditor on root already
+  // cascades to admins; removeViewer on this folder strips any TL who
+  // might have been added before this lock-down was in place.)
+  try {
+    var overall = _findOrCreateChild_(root, OVERALL_FOLDER_NAME);
+    // Strip all viewers/editors who aren't super_admin
+    var adminSet = {};
+    admins.forEach(function (e) { adminSet[String(e).toLowerCase()] = true; });
+    overall.getViewers().forEach(function (u) {
+      var em = String(u.getEmail() || '').toLowerCase();
+      if (em && !adminSet[em]) { try { overall.removeViewer(em); } catch (err) {} }
+    });
+    overall.getEditors().forEach(function (u) {
+      var em = String(u.getEmail() || '').toLowerCase();
+      if (em && !adminSet[em]) { try { overall.removeEditor(em); } catch (err) {} }
+    });
+    // Ensure admins are editors here too
+    admins.forEach(function (e) { try { overall.addEditor(e); } catch (err) {} });
+  } catch (err) { Logger.log('overall lockdown failed: ' + err); }
+
+  return { ok: true, admins: admins.length, teams: Object.keys(tlTeams).length };
+}
+
+// Get or create the monthly rollup spreadsheet for a team, e.g. "BRN_Log_2026_04".
+function _getMonthlyArchiveFile_(team, yyyymm) {
+  var rootId = _getArchiveRootId_();
+  if (!rootId) throw new Error('archive not set up; run setupArchive()');
+  var root = DriveApp.getFolderById(rootId);
+  var folder = _findOrCreateChild_(root, _folderNameForTeam_(team));
+  var baseName = TEAM_TO_TAB[team].replace(/_Log$/, '') + '_Log_' + yyyymm;
+  var existing = _findFileInFolder_(folder, baseName);
+  if (existing) {
+    return SpreadsheetApp.openById(existing.getId());
+  }
+  // Create new spreadsheet and move it into the team folder
+  var ssArch = SpreadsheetApp.create(baseName);
+  var file = DriveApp.getFileById(ssArch.getId());
+  folder.addFile(file);
+  try { DriveApp.getRootFolder().removeFile(file); } catch (e) {}
+  return ssArch;
+}
+
+// Daily trigger entry point — install via installArchiveTrigger().
+// Moves yesterday's rows (PST date) from each team tab into its monthly
+// archive file, verifies the copy, then deletes the source rows.
+function dailyArchive() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var cutoff = _yesterdayPST_();        // "yyyy-mm-dd" — date BEING archived
+  var yyyymm = cutoff.slice(0, 7).replace('-', '_'); // "2026_04"
+  var log = { date: cutoff, started: istNow_(), teams: {}, ok: true, errors: [] };
+
+  Object.keys(TEAM_TO_TAB).forEach(function (team) {
+    try {
+      var res = _archiveTeamDay_(ss, team, cutoff, yyyymm);
+      log.teams[team] = res;
+    } catch (err) {
+      log.ok = false;
+      log.errors.push(team + ': ' + err);
+      log.teams[team] = { ok: false, error: String(err) };
+    }
+  });
+
+  // Full-sheet daily snapshot → admin-only folder.
+  // This is a copy of the whole spreadsheet (every tab as-of this moment)
+  // so super_admins can always reconstruct any day even if team moves fail.
+  try {
+    var snap = _archiveFullSheet_(ss, cutoff);
+    log.overall = snap;
+  } catch (err) {
+    log.ok = false;
+    log.errors.push('overall: ' + err);
+    log.overall = { ok: false, error: String(err) };
+  }
+
+  log.finished = istNow_();
+  _writeArchiveLog_(ss, log);
+  if (!log.ok) _alertArchiveFailure_(log);
+  return log;
+}
+
+// Full spreadsheet snapshot → admin-only folder. Makes a Drive copy of the
+// entire workbook BEFORE team moves delete the rows, so admins have a
+// belt-and-braces per-day record even if a team-level move fails.
+function _archiveFullSheet_(ss, cutoff) {
+  var rootId = _getArchiveRootId_();
+  var root = DriveApp.getFolderById(rootId);
+  var overall = _findOrCreateChild_(root, OVERALL_FOLDER_NAME);
+  var name = 'Overall_Snapshot_' + cutoff;
+  // If today's snapshot already exists, skip (idempotent re-runs)
+  var existing = _findFileInFolder_(overall, name);
+  if (existing) {
+    return { ok: true, note: 'snapshot already exists', file: name, id: existing.getId() };
+  }
+  var srcFile = DriveApp.getFileById(ss.getId());
+  var copy = srcFile.makeCopy(name, overall);
+  return { ok: true, file: name, id: copy.getId() };
+}
+
+function _archiveTeamDay_(ss, team, cutoff, yyyymm) {
+  var tab = TEAM_TO_TAB[team];
+  var sh = ss.getSheetByName(tab);
+  if (!sh) return { ok: true, moved: 0, note: 'tab missing' };
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return { ok: true, moved: 0, note: 'empty' };
+
+  var lastCol = sh.getLastColumn();
+  var header  = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  var values  = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  // Rows to archive = col A starts with cutoff date.
+  // Find contiguous bottom range with date < today (handles the intended case:
+  // tab has only today's rows at the top after archive, BUT first-run has
+  // months of data, so we explicitly filter by exact cutoff date here).
+  var toArchive = [];
+  var toKeep = [];
+  values.forEach(function (r) {
+    var d = String(r[0]).slice(0, 10);
+    if (d === cutoff) toArchive.push(r);
+    else toKeep.push(r);
+  });
+  if (toArchive.length === 0) return { ok: true, moved: 0, note: 'no rows for ' + cutoff };
+
+  // Write to monthly archive file
+  var archSs = _getMonthlyArchiveFile_(team, yyyymm);
+  var archSh = archSs.getSheets()[0];
+  // Ensure archive header (only on first write)
+  if (archSh.getLastRow() < 1) {
+    archSh.getRange(1, 1, 1, header.length).setValues([header]);
+    archSh.setFrozenRows(1);
+  }
+  var archStart = archSh.getLastRow() + 1;
+  archSh.getRange(archStart, 1, toArchive.length, toArchive[0].length).setValues(toArchive);
+  SpreadsheetApp.flush();
+
+  // Verify: count archived rows matches source
+  var writtenRows = archSh.getRange(archStart, 1, toArchive.length, 1).getValues();
+  if (writtenRows.length !== toArchive.length) {
+    throw new Error('verify failed for ' + team + ': expected ' + toArchive.length + ', got ' + writtenRows.length);
+  }
+
+  // Safe to delete from source — rewrite tab with keep-rows only
+  sh.getRange(2, 1, values.length, lastCol).clearContent();
+  if (toKeep.length > 0) {
+    sh.getRange(2, 1, toKeep.length, toKeep[0].length).setValues(toKeep);
+  }
+  SpreadsheetApp.flush();
+  return { ok: true, moved: toArchive.length, kept: toKeep.length, archiveFile: archSs.getName() };
+}
+
+function _yesterdayPST_() {
+  var d = new Date();
+  d.setTime(d.getTime() - 86400000);
+  return Utilities.formatDate(d, 'America/Los_Angeles', 'yyyy-MM-dd');
+}
+
+function _writeArchiveLog_(ss, log) {
+  var sh = ss.getSheetByName('ArchiveLog');
+  if (!sh) {
+    sh = ss.insertSheet('ArchiveLog');
+    sh.appendRow(['Date', 'Started', 'Finished', 'OK', 'Team', 'Moved', 'Kept', 'File', 'Error']);
+    sh.setFrozenRows(1);
+  }
+  Object.keys(log.teams).forEach(function (team) {
+    var t = log.teams[team];
+    sh.appendRow([
+      log.date, log.started, log.finished, t.ok === false ? 'NO' : 'YES',
+      team, t.moved || 0, t.kept || 0, t.archiveFile || '', t.error || t.note || ''
+    ]);
+  });
+  // Overall snapshot row
+  if (log.overall) {
+    var o = log.overall;
+    sh.appendRow([
+      log.date, log.started, log.finished, o.ok === false ? 'NO' : 'YES',
+      '__OVERALL__', 0, 0, o.file || '', o.error || o.note || ''
+    ]);
+  }
+}
+
+function _alertArchiveFailure_(log) {
+  try {
+    var admins = [];
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    var wl = ss.getSheetByName('Whitelist');
+    var rows = wl.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++) {
+      var role = String(rows[i][1] || '').toLowerCase();
+      if (role === 'super_admin') admins.push(String(rows[i][0] || ''));
+    }
+    if (admins.length === 0) return;
+    MailApp.sendEmail({
+      to: admins.join(','),
+      subject: '⚠️ Team Tracker archive FAILED for ' + log.date,
+      body: 'Daily archive did not complete cleanly.\n\nErrors:\n' + log.errors.join('\n') +
+            '\n\nCheck the ArchiveLog tab for details.\nSheet: https://docs.google.com/spreadsheets/d/' + SHEET_ID
+    });
+  } catch (e) { Logger.log('alert failed: ' + e); }
+}
+
+// Install 8 AM IST daily trigger. Run once from editor.
+function installArchiveTrigger() {
+  // Remove any existing dailyArchive triggers first (idempotent)
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'dailyArchive') ScriptApp.deleteTrigger(t);
+  });
+  // 8 AM IST = 2:30 AM UTC = previous day 19:30 PST. Apps Script schedules
+  // in the script's timezone — set project TZ to Asia/Calcutta, or use nearHour.
+  ScriptApp.newTrigger('dailyArchive')
+    .timeBased()
+    .atHour(8)  // IST assumed from script TZ; if project TZ differs, adjust.
+    .everyDays(1)
+    .create();
+  return { ok: true };
+}
+
+// ─── Archive READ (dashboard fallback) ─────────────────────────────────
+// Called by readLog_() when date !== today. Uses CacheService so repeat
+// reads in the same 10-min window stay instant.
+function readArchiveLog_(team, date) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var key = 'arch:' + team + ':' + date;
+    var hit = cache.get(key);
+    if (hit) return JSON.parse(hit);
+
+    var rootId = _getArchiveRootId_();
+    if (!rootId) return { ok: false, error: 'archive not configured' };
+    var root = DriveApp.getFolderById(rootId);
+    var folder = _findOrCreateChild_(root, _folderNameForTeam_(team));
+    var yyyymm = date.slice(0, 7).replace('-', '_');
+    var baseName = TEAM_TO_TAB[team].replace(/_Log$/, '') + '_Log_' + yyyymm;
+    var file = _findFileInFolder_(folder, baseName);
+    if (!file) return { ok: true, header: [], rows: [], note: 'no archive file for ' + yyyymm };
+
+    var archSs = SpreadsheetApp.openById(file.getId());
+    var sh = archSs.getSheets()[0];
+    var lastRow = sh.getLastRow();
+    var lastCol = sh.getLastColumn();
+    if (lastRow < 2) return { ok: true, header: [], rows: [] };
+    var header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+    var values = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+    var rows = values.filter(function (r) { return String(r[0]).slice(0, 10) === date; });
+    var result = { ok: true, header: header, rows: rows, source: 'archive', file: baseName };
+    // Cache 10 min — plenty for multiple TL hits on same date
+    cache.put(key, JSON.stringify(result), 600);
+    return result;
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// RESET — wipes all logs for a clean rollout start.
+// Destructive: clears every team tab, Live, ArchiveLog, and trashes every
+// file inside each team folder + _Overall folder on Drive.
+// Run ONCE from the Apps Script editor when you want a fresh slate.
+// ═══════════════════════════════════════════════════════════════════════
+function resetAllLogs() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var report = { clearedTabs: [], clearedLive: false, clearedArchiveLog: false, deletedDriveFiles: 0, errors: [] };
+
+  // 1. Clear each team tab (keep row 1 header)
+  Object.keys(TEAM_TO_TAB).forEach(function (team) {
+    var tab = TEAM_TO_TAB[team];
+    var sh = ss.getSheetByName(tab);
+    if (!sh) return;
+    var lastRow = sh.getLastRow();
+    if (lastRow > 1) {
+      sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).clearContent();
+    }
+    report.clearedTabs.push(tab);
+  });
+
+  // 2. Clear Live tab (keep row 1 header)
+  var live = ss.getSheetByName('Live');
+  if (live && live.getLastRow() > 1) {
+    live.getRange(2, 1, live.getLastRow() - 1, live.getLastColumn()).clearContent();
+    report.clearedLive = true;
+  }
+
+  // 3. Clear ArchiveLog tab (keep row 1 header)
+  var al = ss.getSheetByName('ArchiveLog');
+  if (al && al.getLastRow() > 1) {
+    al.getRange(2, 1, al.getLastRow() - 1, al.getLastColumn()).clearContent();
+    report.clearedArchiveLog = true;
+  }
+
+  // 4. Trash every file inside each team folder + _Overall folder
+  try {
+    var rootId = _getArchiveRootId_();
+    var root = DriveApp.getFolderById(rootId);
+    // Team folders
+    Object.keys(TEAM_TO_TAB).forEach(function (team) {
+      var folder = _findOrCreateChild_(root, _folderNameForTeam_(team));
+      var it = folder.getFiles();
+      while (it.hasNext()) {
+        var f = it.next();
+        f.setTrashed(true);
+        report.deletedDriveFiles++;
+      }
+    });
+    // Overall folder
+    var overall = _findOrCreateChild_(root, OVERALL_FOLDER_NAME);
+    var it2 = overall.getFiles();
+    while (it2.hasNext()) {
+      var f2 = it2.next();
+      f2.setTrashed(true);
+      report.deletedDriveFiles++;
+    }
+  } catch (err) {
+    report.errors.push('drive cleanup: ' + err);
+  }
+
+  // 5. Flush cache so archive reads don't return stale data
+  try { CacheService.getScriptCache().removeAll([]); } catch (e) {}
+
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// EMAIL-OTP AUTHENTICATION
+// Replaces the free-text email gate. Proves the person on the other end
+// actually controls the inbox — stops TL-A from impersonating TL-B by
+// typing their email. Flow:
+//   1) requestOtp  → generate 6-digit code, cache 10 min, email it
+//   2) verifyOtp   → check code, issue HMAC-signed session token (8h TTL)
+//   3) every privileged endpoint (tlDashboard, liveActivity) verifies the
+//      token on each call (drop-in: pass ?token=... instead of ?email=...)
+// No Google Cloud, no OAuth consent screen, no paid infra.
+// ═══════════════════════════════════════════════════════════════════════
+
+var OTP_TTL_SEC       = 600;       // 10 min — code expires
+var SESSION_TTL_SEC   = 8 * 3600;  // 8 hours — one TL work-day
+var OTP_RATE_LIMIT    = 3;         // max 3 codes per email per 10 min
+
+function requestOtp_(ss, email) {
+  email = String(email || '').toLowerCase().trim();
+  if (!email) return { ok: false, error: 'email_required' };
+
+  // Must be on the Whitelist — don't leak OTPs to random addresses
+  var wl = lookupWhitelist_(ss, email);
+  if (!wl.ok) return { ok: false, error: 'not_whitelisted' };
+
+  // Rate limit: prevent abuse
+  var cache = CacheService.getScriptCache();
+  var rlKey = 'otp_rl:' + email;
+  var count = Number(cache.get(rlKey) || 0);
+  if (count >= OTP_RATE_LIMIT) {
+    return { ok: false, error: 'rate_limited', message: 'Too many codes requested. Wait 10 minutes.' };
+  }
+  cache.put(rlKey, String(count + 1), OTP_TTL_SEC);
+
+  // Generate 6-digit code
+  var code = '';
+  for (var i = 0; i < 6; i++) code += Math.floor(Math.random() * 10);
+  cache.put('otp:' + email, code, OTP_TTL_SEC);
+
+  // Email it (MailApp has a 100/day free quota, 1500/day on Workspace)
+  try {
+    MailApp.sendEmail({
+      to: email,
+      subject: 'Your Team Tracker sign-in code: ' + code,
+      htmlBody:
+        '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:480px;padding:24px;background:#0f1420;color:#e6edf5;border-radius:12px">' +
+        '<h2 style="margin:0 0 12px">Team Tracker Dashboard</h2>' +
+        '<p style="color:#9aa7b8;margin:0 0 24px">Use this code to sign in. It expires in 10 minutes.</p>' +
+        '<div style="font-size:42px;letter-spacing:8px;font-weight:700;color:#4f8cff;background:#1a2133;padding:20px;border-radius:8px;text-align:center;font-family:monospace">' + code + '</div>' +
+        '<p style="color:#6b7a8f;font-size:13px;margin:24px 0 0">Didn\'t request this? Ignore this email. Your account is safe.</p>' +
+        '</div>'
+    });
+  } catch (err) {
+    return { ok: false, error: 'mail_failed', message: String(err) };
+  }
+
+  return { ok: true, message: 'Code sent. Check your email.' };
+}
+
+function verifyOtp_(ss, email, code) {
+  email = String(email || '').toLowerCase().trim();
+  code  = String(code  || '').trim();
+  if (!email || !code) return { ok: false, error: 'missing_fields' };
+
+  var cache = CacheService.getScriptCache();
+  var stored = cache.get('otp:' + email);
+  if (!stored) return { ok: false, error: 'code_expired_or_invalid' };
+  if (stored !== code) return { ok: false, error: 'code_mismatch' };
+
+  // Consume the code (single-use)
+  cache.remove('otp:' + email);
+
+  // Re-check whitelist (it may have been revoked since requestOtp)
+  var wl = lookupWhitelist_(ss, email);
+  if (!wl.ok) return { ok: false, error: 'not_whitelisted' };
+
+  var token = _signToken_({ email: email, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SEC });
+  return { ok: true, token: token, email: wl.email, role: wl.role, isAdmin: wl.isAdmin, teams: wl.teams };
+}
+
+// ─── Session token helpers ─────────────────────────────────────────────
+// Format: base64url(payload).base64url(HMAC-SHA256(payload, SECRET))
+// Secret lives in Config!B10 — auto-generated on first use if empty.
+function _getHmacSecret_() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = ss.getSheetByName('Config');
+  var v = String(sh.getRange('B10').getValue() || '').trim();
+  if (v) return v;
+  // First use — generate a 32-byte random secret and persist it
+  var bytes = [];
+  for (var i = 0; i < 32; i++) bytes.push(Math.floor(Math.random() * 256));
+  var secret = Utilities.base64EncodeWebSafe(Utilities.newBlob(bytes).getBytes());
+  sh.getRange('A10').setValue('sessionSecret');
+  sh.getRange('B10').setValue(secret);
+  return secret;
+}
+
+function _b64url_(bytes) {
+  return Utilities.base64EncodeWebSafe(bytes).replace(/=+$/, '');
+}
+
+function _signToken_(payload) {
+  var secret = _getHmacSecret_();
+  var payloadStr = JSON.stringify(payload);
+  var payloadB64 = _b64url_(Utilities.newBlob(payloadStr).getBytes());
+  var sig = Utilities.computeHmacSha256Signature(payloadStr, secret);
+  var sigB64 = _b64url_(sig);
+  return payloadB64 + '.' + sigB64;
+}
+
+function _verifyToken_(token) {
+  if (!token) return { ok: false, error: 'no_token' };
+  var parts = String(token).split('.');
+  if (parts.length !== 2) return { ok: false, error: 'bad_token' };
+  try {
+    // Decode payload
+    var padded = parts[0] + '==='.slice((parts[0].length + 3) % 4);
+    var payloadBytes = Utilities.base64DecodeWebSafe(padded);
+    var payloadStr = Utilities.newBlob(payloadBytes).getDataAsString();
+    // Recompute signature
+    var secret = _getHmacSecret_();
+    var expectedSig = Utilities.computeHmacSha256Signature(payloadStr, secret);
+    var expectedB64 = _b64url_(expectedSig);
+    if (expectedB64 !== parts[1]) return { ok: false, error: 'bad_signature' };
+    // Check expiry
+    var payload = JSON.parse(payloadStr);
+    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) {
+      return { ok: false, error: 'expired' };
+    }
+    return { ok: true, email: String(payload.email || '').toLowerCase() };
+  } catch (err) {
+    return { ok: false, error: 'parse_error: ' + err };
+  }
+}
+
+// Resolves the "who is calling" email for a request. Prefers a signed
+// session token; falls back to raw email param (for the OTP endpoints
+// themselves and for backward compat during transition).
+function _resolveCaller_(p) {
+  if (p && p.token) {
+    var v = _verifyToken_(p.token);
+    if (v.ok) return { ok: true, email: v.email, viaToken: true };
+    return { ok: false, error: v.error };
+  }
+  if (p && p.email) return { ok: true, email: String(p.email).toLowerCase(), viaToken: false };
+  return { ok: false, error: 'no_auth' };
+}
