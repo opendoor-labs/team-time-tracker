@@ -2817,22 +2817,16 @@ function renderForm(teamKey) {
       f.options.forEach(o => { html += `<option>${o}</option>`; });
       html += `</select>`;
     } else if (f.type === 'attachments') {
-      const accept = f.accept || 'image/*';
       const hint = f.hint || 'Attach files for this task';
-      // WKWebView quirk: runOpenPanel only fires reliably when the click
-      // lands DIRECTLY on the <input type="file">. Programmatic .click()
-      // and even <label for="..."> with off-screen input can fail silently.
-      // Most reliable: nest the input INSIDE the label, make the input
-      // cover the label area but be invisible — every click on the
-      // pretty-styled label hits the real input.
+      // Native bridge approach: button calls Swift's NSOpenPanel directly
+      // via the `pickFiles` op. WKWebView's <input type="file"> + runOpenPanel
+      // proved unreliable across multiple patterns (programmatic .click,
+      // <label for>, overlay input) — all failed silently for some users.
+      // The Swift bridge is bulletproof and returns base64-encoded files
+      // directly, skipping the FileReader step entirely.
       html += `
         <div class="attach-wrap">
-          <label class="attach-btn">
-            <span>📎 Attach Screenshots</span>
-            <input type="file" data-field="${f.label}" multiple accept="${accept}"
-                   id="attachInput_${i}" class="attach-input-overlay"
-                   onchange="handleAttachChange(this, '${f.label}')" />
-          </label>
+          <button type="button" class="attach-btn" onclick="pickAttachmentsViaSwift('${f.label}')">📎 Attach Screenshots</button>
           <div class="attach-hint">${hint}</div>
           <div class="attach-list" id="attachList_${f.label.replace(/[^a-zA-Z0-9]/g,'_')}"></div>
         </div>
@@ -2900,6 +2894,43 @@ function _renderAttachChips_(label) {
   `).join('');
 }
 
+// Native Swift file picker — used instead of <input type="file"> because
+// WKWebView's runOpenPanel is unreliable. Calls Swift's `pickFiles` op,
+// which spawns NSOpenPanel and returns base64-encoded files.
+async function pickAttachmentsViaSwift(label) {
+  const MAX_FILES = 10;
+  const MAX_BYTES = 10 * 1024 * 1024;
+  // Browser-mode fallback (testing in Chrome) → use a transient <input>
+  if (!IS_NATIVE) {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.multiple = true; inp.accept = 'image/png,image/jpeg';
+    inp.onchange = () => handleAttachChange(inp, label);
+    inp.click();
+    return;
+  }
+  let res;
+  try { res = await nativeCall('pickFiles', { multiple: true, accept: 'image/png,image/jpeg' }); }
+  catch (e) { toast('⚠️', 'Could not open file picker'); return; }
+  const files = (res && res.files) || [];
+  if (!files.length) return;  // user cancelled
+  const cur = window._taskAttachments[label] || [];
+  const accepted = [];
+  const rejected = [];
+  files.forEach(f => {
+    if (f.size > MAX_BYTES) { rejected.push(f.name + ' (>10 MB)'); return; }
+    if (cur.length + accepted.length >= MAX_FILES) { rejected.push(f.name + ' (max 10 files)'); return; }
+    accepted.push(f);
+  });
+  window._taskAttachments[label] = cur.concat(accepted);
+  _renderAttachChips_(label);
+  if (rejected.length) toast('⚠️', 'Skipped: ' + rejected.slice(0,2).join(', ') + (rejected.length>2?'…':''));
+  if (!state.taskStartedAt) {
+    state.taskStartedAt = Date.now();
+    const fs = document.getElementById('formSub'); if (fs) fs.textContent = '⏱ Timer running…';
+  }
+  if (typeof markSnapshotDirty === 'function') markSnapshotDirty();
+}
+
 function handleAttachChange(inputEl, label) {
   const MAX_FILES = 10;
   const MAX_BYTES = 10 * 1024 * 1024;  // 10 MB per file
@@ -2948,11 +2979,18 @@ function _fileToBase64_(file) {
 
 async function _collectAttachments_() {
   // Flatten all attachment fields into a single array for Apps Script.
+  // Files from the Swift bridge already have base64 .data — push as-is.
+  // Files from the legacy <input type="file"> path are File objects → read.
   const out = [];
   const groups = window._taskAttachments || {};
   for (const label of Object.keys(groups)) {
     const files = groups[label] || [];
     for (const f of files) {
+      if (f && f.data) {
+        // Already base64-encoded by Swift NSOpenPanel
+        out.push({ name: f.name, mimeType: f.mimeType || 'image/png', size: f.size, data: f.data });
+        continue;
+      }
       try {
         const data = await _fileToBase64_(f);
         out.push({ name: f.name, mimeType: f.type || 'image/png', size: f.size, data });

@@ -428,6 +428,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
             DispatchQueue.main.async { self.window.orderOut(nil) }
         case "reloadUI":
             DispatchQueue.main.async { self.reloadFromRender() }
+        case "pickFiles":
+            // Native file picker for the Listings team's "Attach Screenshots"
+            // button. WKWebView's runOpenPanel proved unreliable, so the HTML
+            // calls this op directly. We open NSOpenPanel, read selected
+            // files, base64-encode them, and reply with an array.
+            DispatchQueue.main.async {
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = true
+                panel.canChooseDirectories = false
+                panel.allowsMultipleSelection = (payload["multiple"] as? Bool) ?? true
+                panel.allowedFileTypes = ["png", "jpg", "jpeg"]
+                panel.title = "Attach Screenshots"
+                NSApp.activate(ignoringOtherApps: true)
+                self.window.makeKeyAndOrderFront(nil)
+                panel.begin { result in
+                    var files: [[String: Any]] = []
+                    if result == .OK {
+                        let maxBytes = 10 * 1024 * 1024
+                        for url in panel.urls {
+                            if let data = try? Data(contentsOf: url), data.count <= maxBytes {
+                                let ext = url.pathExtension.lowercased()
+                                let mime = (ext == "png") ? "image/png" : "image/jpeg"
+                                files.append([
+                                    "name": url.lastPathComponent,
+                                    "mimeType": mime,
+                                    "size": data.count,
+                                    "data": data.base64EncodedString()
+                                ])
+                            }
+                        }
+                    }
+                    self.reply(requestId, data: ["ok": true, "files": files])
+                }
+            }
         case "quit":
             NSApp.terminate(nil)
         default:
