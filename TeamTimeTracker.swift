@@ -273,6 +273,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
     // Manual reload: pulls fresh HTML, then reloads the webview.
     // State survives because index.html owns it in localStorage and
     // rehydrates on load via restoreSnapshot().
+    //
+    // CRITICAL: We force a synchronous saveSnapshot() in JS BEFORE the
+    // webview reloads. The 1-second clock-tick save is usually enough,
+    // but Reload UI may be clicked between ticks, or the user may have
+    // mid-form edits the tick hasn't picked up yet. Explicit pre-save
+    // closes the gap so the next boot's restoreSnapshot() always finds
+    // fresh state.
     @objc func reloadFromRender() {
         guard let url = URL(string: HTML_URL) else { return }
         var req = URLRequest(url: url, timeoutInterval: HTML_REFRESH_TIMEOUT)
@@ -282,7 +289,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
             if let d = data, d.count > 10_000 {
                 try? d.write(to: URL(fileURLWithPath: HTML_PATH))
             }
-            DispatchQueue.main.async { self.loadHTML() }
+            DispatchQueue.main.async {
+                // Force-flush localStorage snapshot before reloading the page
+                // so restoreSnapshot() on the next boot has the latest state.
+                let flushJs = "try{if(window.saveSnapshot)window.saveSnapshot();}catch(e){}"
+                self.webView.evaluateJavaScript(flushJs) { _, _ in
+                    self.loadHTML()
+                }
+            }
         }.resume()
     }
 
