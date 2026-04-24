@@ -973,8 +973,13 @@
     if (data.teams && Array.isArray(data.teams)) {
       data.teams.forEach(t => keys.push(t));
     }
+    // Attendance + Sessions: visible to TLs too (scoped by backend to their team)
+    ['attendance', 'sessions'].forEach(k => {
+      if (data[k]) keys.push('__' + k);
+    });
+    // Whitelist + Config: super-admin only
     if (data.isAdmin) {
-      ['attendance', 'sessions', 'whitelist', 'config'].forEach(k => {
+      ['whitelist', 'config'].forEach(k => {
         if (data[k]) keys.push('__' + k);
       });
     }
@@ -1135,10 +1140,23 @@
       tabsEl.appendChild(tab);
     });
 
+    // Attendance + Sessions: TLs see these too (backend filters to their team)
+    const sharedTabs = [
+      { key: '__attendance', label: 'Attendance', source: data.attendance },
+      { key: '__sessions', label: 'Sessions', source: data.sessions },
+    ];
+    sharedTabs.forEach(({ key, label, source }) => {
+      if (!source) return;
+      const count = getAdminRowCount(source);
+      const tab = document.createElement('button');
+      tab.className = 'tab admin' + (state.selectedTab === key ? ' active' : '');
+      tab.innerHTML = `${escapeHtml(label)} <span class="count-badge">${count}</span>`;
+      tab.addEventListener('click', () => { selectTab(key); });
+      tabsEl.appendChild(tab);
+    });
+    // Whitelist + Config: super-admin only
     if (data.isAdmin) {
       const adminTabs = [
-        { key: '__attendance', label: 'Attendance', source: data.attendance },
-        { key: '__sessions', label: 'Sessions', source: data.sessions },
         { key: '__whitelist', label: 'Whitelist', source: data.whitelist },
         { key: '__config', label: 'Config', source: data.config },
       ];
