@@ -26,6 +26,7 @@ import CoreGraphics
 let APP_VERSION = "2.7.5"
 let SHEET_URL = "https://script.google.com/macros/s/AKfycbxkBAtowwxWuKkaga-aR93ssyxuygFZC-zYXsdm22aVKhXWB45E4YKMKVmc0Ty_ByFk/exec"
 let HTML_URL = "https://team-time-tracker-osoe.onrender.com/index.html"
+let MY_DASH_URL = "https://team-time-tracker-osoe.onrender.com/my/index.html"
 let INSTALL_DIR = NSHomeDirectory() + "/Library/TeamTracker"
 let HTML_PATH = INSTALL_DIR + "/index.html"
 
@@ -141,6 +142,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Open Tracker",
                                 action: #selector(showWindow), keyEquivalent: "o"))
+        menu.addItem(NSMenuItem(title: "My Dashboard",
+                                action: #selector(openMyDashboard), keyEquivalent: "d"))
         menu.addItem(NSMenuItem(title: "Reload UI (pull latest)",
                                 action: #selector(reloadFromRender), keyEquivalent: "r"))
         menu.addItem(NSMenuItem.separator())
@@ -265,6 +268,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
         NSApp.activate(ignoringOtherApps: true)
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
+    }
+
+    // ── My Dashboard (personal per-user dashboard) ─────────────────────
+    // Asks backend for a short-lived signed token tied to this user's full
+    // name, then opens the Render-hosted /my/ dashboard in the default
+    // browser with token+user in the URL hash. No login screen — the Mac
+    // app's identity IS the auth.
+    @objc func openMyDashboard() {
+        let fullName = NSFullUserName()
+        postToApi(action: "myDashboardToken", payload: ["user": fullName]) { [weak self] resp in
+            guard let self = self else { return }
+            if let ok = resp["ok"] as? Bool, ok, let token = resp["token"] as? String {
+                let encToken = token.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? token
+                let encUser  = fullName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? fullName
+                let full = MY_DASH_URL + "#token=" + encToken + "&user=" + encUser
+                DispatchQueue.main.async {
+                    if let u = URL(string: full) { NSWorkspace.shared.open(u) }
+                }
+            } else {
+                DispatchQueue.main.async {
+                    let alert = NSAlert()
+                    alert.messageText = "Couldn't open My Dashboard"
+                    alert.informativeText = (resp["error"] as? String)
+                        ?? "Unknown error. Please check your internet connection and try again."
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
+            }
+        }
     }
 
     // ── System hooks (lock/unlock/sleep/wake) ──────────────────────────

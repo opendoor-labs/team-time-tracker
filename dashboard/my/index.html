@@ -1,0 +1,904 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>TTK — My Dashboard</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: #111933;
+    --panel-2: #162044;
+    --text: #e6ecff;
+    --muted: #92a0c8;
+    --accent: #4c8bff;
+    --accent-2: #36d399;
+    --warn: #f5a524;
+    --bad: #ef4444;
+    --border: #223060;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+    font-size: 14px; }
+  a { color: var(--accent); text-decoration: none; }
+
+  header {
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #0e1530 0%, #0b1020 100%);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header .brand { font-weight: 700; font-size: 16px; letter-spacing: 0.3px; }
+  header .brand small { color: var(--muted); font-weight: 500; margin-left: 8px; }
+  header .user { display:flex; align-items:center; gap:14px; color: var(--muted); font-size:13px; }
+  header .dot { width:8px; height:8px; border-radius:50%; background: var(--accent-2);
+    box-shadow: 0 0 10px var(--accent-2); }
+  header .dot.stale { background: var(--warn); box-shadow: 0 0 10px var(--warn); }
+
+  main { padding: 20px 24px 60px; max-width: 1200px; margin: 0 auto; }
+
+  .filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+    margin-bottom: 20px;
+    padding: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .filters label { display: flex; flex-direction: column; gap: 4px;
+    font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px;}
+  .filters input, .filters select {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 14px;
+    outline: none;
+  }
+  .filters input:focus, .filters select:focus { border-color: var(--accent); }
+  .custom-range { display:none; gap:10px; }
+  .custom-range.show { display: flex; }
+
+  .heroGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .card .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  .card .v { font-size: 28px; font-weight: 700; margin-top: 4px; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .card.accent { border-color: rgba(76,139,255,0.5); }
+  .card.green  { border-color: rgba(54,211,153,0.5); }
+  .card.warn   { border-color: rgba(245,165,36,0.5); }
+
+  .bar-wrap { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+  .bar { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+  section.block {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+  section.block h2 {
+    margin: 0 0 12px 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  section.block h2 small { color: var(--muted); font-weight: 400; font-size: 12px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { text-align: left; color: var(--muted); font-weight: 500;
+    padding: 8px 10px; border-bottom: 1px solid var(--border);
+    text-transform: uppercase; font-size: 11px; letter-spacing: .5px; }
+  tbody td { padding: 9px 10px; border-bottom: 1px solid rgba(34,48,96,0.4); }
+  tbody tr:hover { background: rgba(76,139,255,0.06); }
+  tbody td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .empty { padding: 20px; text-align: center; color: var(--muted); }
+
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    background: var(--panel-2);
+    color: var(--muted);
+    border: 1px solid var(--border);
+  }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+  button.btn {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 13px;
+  }
+  button.btn:hover { background: var(--accent); border-color: var(--accent); }
+  button.btn.active { background: var(--accent); border-color: var(--accent); }
+
+  .error {
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.4);
+    color: #ffb4b4;
+    padding: 12px 14px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+  }
+  .loading { color: var(--muted); padding: 8px 0; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">⏱ TTK — My Dashboard <small id="subBrand">your personal productivity view</small></div>
+  <div class="user">
+    <span id="userLabel">—</span>
+    <span class="dot" id="liveDot" title="Live sync on"></span>
+    <span id="syncLabel">Live</span>
+  </div>
+</header>
+
+<main>
+
+  <div id="errBox" class="error" style="display:none"></div>
+
+  <div class="filters" id="filtersBox">
+    <label>Period
+      <select id="fPeriod">
+        <option value="today">Today</option>
+        <option value="week">This Week</option>
+        <option value="lastweek">Last Week</option>
+        <option value="month">This Month</option>
+        <option value="lastmonth">Last Month</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </label>
+    <label class="customOnly">From
+      <input type="date" id="fFrom" />
+    </label>
+    <label class="customOnly">To
+      <input type="date" id="fTo" />
+    </label>
+    <label id="teamPickerLabel" style="display:none">Team
+      <select id="fTeam"><option value="">All my teams</option></select>
+    </label>
+    <label id="roleProdLabel" style="display:none">Productivity Type
+      <select id="fRoleProd"><option value="">All</option></select>
+    </label>
+    <label id="roleTaskLabel" style="display:none">Task
+      <select id="fRoleTask"><option value="">All</option></select>
+    </label>
+    <label id="roleSubLabel" style="display:none">Sub Task
+      <select id="fRoleSub"><option value="">All</option></select>
+    </label>
+    <label id="roleStatusLabel" style="display:none">Status
+      <select id="fRoleStatus"><option value="">All</option></select>
+    </label>
+  </div>
+
+  <div class="heroGrid">
+    <div class="card accent">
+      <div class="k">Tasks Completed</div>
+      <div class="v" id="statTasks">—</div>
+      <div class="sub" id="statTasksSub">in the selected range</div>
+    </div>
+    <div class="card green">
+      <div class="k">Production Time</div>
+      <div class="v" id="statProd">—</div>
+      <div class="sub" id="statProdSub">includes Meeting + Training</div>
+    </div>
+    <div class="card warn">
+      <div class="k">Utilization</div>
+      <div class="v" id="statUtil">—</div>
+      <div class="bar-wrap"><div class="bar" id="statUtilBar" style="width:0%"></div></div>
+      <div class="sub" id="statUtilSub">matches your Mac app formula</div>
+    </div>
+    <div class="card">
+      <div class="k">Shifts</div>
+      <div class="v" id="statShifts">—</div>
+      <div class="sub" id="statShiftsSub">days you clocked in</div>
+    </div>
+  </div>
+
+  <section class="block" id="roleBreakdownBlock">
+    <h2>Breakdown by filter <small id="bkLabel"></small></h2>
+    <div id="bkBody" class="empty">Pick a filter above to see a breakdown.</div>
+  </section>
+
+  <div class="grid2">
+    <section class="block">
+      <h2>Task-wise count <small>top entries in range</small></h2>
+      <div id="taskTableWrap" class="empty">Loading…</div>
+    </section>
+    <section class="block">
+      <h2>Status-wise count <small>top entries in range</small></h2>
+      <div id="statusTableWrap" class="empty">—</div>
+    </section>
+  </div>
+
+  <section class="block">
+    <h2>Recent tasks <small>most recent 200 rows from your team logs</small></h2>
+    <div id="recentWrap" class="empty">Loading…</div>
+  </section>
+
+  <p style="color:var(--muted);font-size:12px;margin-top:24px">
+    Data refreshes every 30 seconds and whenever you switch back to this tab.
+    Opened from your Mac app — only your tasks are shown.
+  </p>
+</main>
+
+<script>
+  // ============================================================
+  // CONFIG — must stay in sync with dashboard/index.html API_URL
+  // ============================================================
+  const API_URL = 'https://script.google.com/macros/s/AKfycbxkBAtowwxWuKkaga-aR93ssyxuygFZC-zYXsdm22aVKhXWB45E4YKMKVmc0Ty_ByFk/exec';
+
+  // Role catalog — mirrors dashboard/index.html. Keep in sync if teams change.
+  const ROLE_CATALOG = {
+    'BRN': {
+      productivity: { col: 'Productivity Type', options: [
+        'Finalisation Report','Follow-Up','New Work Order','People Engagement Activity',
+        'QC / Approval','SP Follow-up Call','SP Initial Call','WO Closure'
+      ]},
+      subtask: { col: 'Sub Task', options: [
+        'Maestro (updates and responses)','Maestro (creating Lineitem)','Admin (adding Reports)',
+        'Email','Admin (notes)','No Action Required','Appliance ordering','CO Request',
+        'ELA message','Preliminary invoice','BR/ACM/Triage Support','Maestro (QC approvals)',
+        'People engagement activities','Slack (updates and responses)',
+        'Spokephone (Calling / Texting)','Utility ticket (Creation/Update)',
+        'Vendor (Message and response)','Vendor Calling','Vendor Selection',
+        'Work order tracker updates','Workorder QC','Zendesk (Responses and Updates)'
+      ]}
+    },
+    'HQI': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-Up','Duplicate','PA','Audit','Overdue']},
+      subtask: { col: 'Sub Task / Action Taken', options: [
+        'Create HPM Visit','Create Incident Report','Create Side Conversation',
+        'Create Utility Ticket','Due Diligence Check','First Actions Notes',
+        'Follow-up and Escalations','Maintenance Vendor Notes','Create WO/LWO','HOA Ticket','QC'
+      ]},
+      status: { col: 'Status', options: [
+        'New → Solved','New → On-Hold','On-Hold → Solved','On-Hold → Follow-up',
+        '(Others) On-Hold → Solved','(Others) On-Hold → Follow-up',
+        '(Others) New → Solved','(Others) New → On-Hold',
+        'QC Completed','Duplicate → Solved'
+      ]}
+    },
+    'HOA': {
+      productivity: { col: 'Productivity Type', options: ['Follow-Up','Overdue','Duplicate','New']},
+      task: { col: 'Project/Task', options: [
+        'Non-Violation HOA','ARC','Gate Access (JIRA)','Maintenance ZD','HQI (ZD)','Violation (ZD)'
+      ]},
+      subtask: { col: 'Sub Task/Action Taken', options: [
+        'Contact HOA','Follow up and Escalation Notes','Acquire HOA contact info','ARC form fill',
+        'Contact Vendor','Create Child ticket','Create HPM Visit','Create Side Conversation',
+        'Create WO','First Action Notes','Inbound Call','Online Registration','Setting up Access',
+        'In Renovation','Duplicate','Due diligence Check'
+      ]},
+      status: { col: 'Status', options: [
+        'New->On-Hold','On-Hold->Solved','On-Hold->Follow-up',
+        '(Others) On-Hold->Solved','(Others) On-Hold->Follow-up',
+        '(Others) New->Solved','(Others) New->On-Hold',
+        'Duplicate->Solved','New->Solved'
+      ]}
+    },
+    'HOC WO': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-up','Overdue','Email Triage','Duplicate','Audit']},
+      task: { col: 'Project/Task', options: [
+        'Signage','SALA','RaaS','STPP','PAR','Needs Triage','HQI (ZD)','Maintenance ZD',
+        'HQI (JIRA)','OD Select','Email Triage','Audit'
+      ]},
+      subtask: { col: 'Sub Task/Action Taken', options: [
+        'Create WO','Invoice Created','Slack request (Signtracker)','Slack request (UpSignDown)',
+        'Create HPM Visit','Create Incident Report','Create Side Conversation','Create Utility Ticket',
+        'Due Diligence Check','First Actions Notes','Follow-up and Escalations',
+        'Maintenance Vendor notes','Create WO/LWO','HOA Ticket','Email Triage','Duplicate','Audit'
+      ]},
+      status: { col: 'Status', options: [
+        'New->Solved','New->On-Hold','On-Hold->Solved','On-Hold->Follow-up',
+        '(Others) On-Hold->Solved','(Others) On-Hold->Follow-up',
+        '(Others) New->Solved','(Others) New->On-Hold',
+        'Duplicate->Solved'
+      ]}
+    },
+    'LWO': {
+      productivity: { col: 'Productivity Type', options: ['Follow-Up','New Work Order','QC/ Approval','Spokephone','WO Closure','People Engagement Activity']},
+      subtask: { col: 'Sub Type', options: [
+        'Admin (adding notes)','LWO Closed Sheet','Maestro (Vendor Updates)','Spokephone (Calling / Texting)',
+        'BR Child Ticket (GS/CO)','No Action Required','Slack (updates and responses)',
+        'Maestro (Workorder Creation)','Utility ticket (Creation / Update)','Zendesk (Responses and Updates)',
+        'Zendesk (Side Conversation)','Maestro ( QC approvals )','Rework tracker updates',
+        'Work order tracker updates','Lien waiver processing','BR investigations','Verbiage completion',
+        'Visit creation','People engagement activities'
+      ]}
+    },
+    'TP Sourcing': {
+      productivity: { col: 'Productivity Type', options: ['Regular Sourcing','Referrals Sourcing','IBB Sourcing','TPEA Rating','Non-Compliance Report']},
+      subtask: { col: 'Sub Type', options: ['Sourcing Leads','Follow-up Calls','Follow-up Email','Follow-up Text','Sending rating emails','Non-compliance calling','Non-compliance Email']}
+    },
+    'Utilities Turn On': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-Up','Resolved']},
+      task: { col: 'Task Type', options: ['Turn On','Verification']}
+    },
+    'Utilities NST': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-Up','Resolved']},
+      task: { col: 'Task Type', options: ['NST','Verification']}
+    },
+    'Utilities Blocked Cases': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-Up','Resolved']},
+      task: { col: 'Task Type', options: ['Blocked Cases']}
+    },
+    'TC': {
+      task: { col: 'Task type', options: [
+        'Demand review and update (TC)','Order HOA docs (TC)','Jira Tickets (TC)',
+        'HOA litigation (TC)','HOA Insurance (TC)','CC&R','Follow up & Escalation','Triage'
+      ]},
+      status: { col: 'Status', options: [
+        'New -> Solved','New -> On-Hold','Unassigned New -> Solved','Unassigned New -> On-Hold',
+        'Follow-up -> Solved','Follow-up -> On-Hold',
+        'Follow-up (Others) -> Solved','Follow-up (Others) -> On-Hold',
+        'Duplicate Solved','NA'
+      ]}
+    },
+    'TS': {
+      task: { col: 'Task type', options: [
+        'EMD','Insurance Claim','Solar',
+        'Closing - Review, validate and upload final settlement statement',
+        'Closing - Review, validate and upload deed',
+        'Closing - Verify confirmation of close with title',
+        'Follow up'
+      ]},
+      status: { col: 'Status', options: [
+        'New -> Solved','New -> On-Hold',
+        'Follow-up -> Solved','Follow-up -> On-Hold',
+        'Follow-up (Others) -> Solved','Follow-up (Others) -> On-Hold',
+        'Duplicate Solved','NA'
+      ]}
+    },
+    'VA': {
+      task: { col: 'Task Type', options: ['VA','Reno','Break','Meeting','Acq Escalation channel','QC']}
+    },
+    'HOC Permits': {
+      productivity: { col: 'Productivity Type', options: ['New','Follow-Up','QC','Reno']}
+    },
+    'Maintenance & Scheduling': {
+      productivity: { col: 'Productivity Type', options: ['New','Followup']},
+      task: { col: 'Process', options: ['Denial','Adhoc Request','TOM/BOM','Photo Auditing','HPM Visit']}
+    },
+    'Trust / Safety': {
+      productivity: { col: 'Productivity Type', options: ['New','Followup']},
+      task: { col: 'Process', options: ['Alfred','Rental Scam tickets','Identity Escalation']},
+      subtask: { col: 'Subtype', options: ['Agent','Buyer','Vendor','Merge','IDV','RSV','QC']}
+    },
+    'Listings': {
+      productivity: { col: 'Productivity Type', options: ['Closed','Pending','Follow Up','No action needed']},
+      task: { col: 'Task', options: [
+        'Photo Review','DEF','Create Listing','Additional Thread','JIRA','BOM Ticket',
+        'Home TOM/BOM Date Passed','Violation Ticket','5 days ago Ticket','QC','RAMP',
+        'QC - Extra Audits','Lock Box','Zillow 3D','Reno VA','Showami','Late Photo Task'
+      ]}
+    },
+    'SD': {
+      task: { col: 'Task', options: [
+        'New Create','FT Closed','FT Pending','WO Update','WO No - Changes','JIRA Closed',
+        'JIRA Pending','QC','DEF - Listings','QC - Extra Audits','Reno Process',
+        'Photo Review - Listings','TX QC Check','Additional Thread'
+      ]}
+    }
+  };
+
+  const ROLES = ['productivity','task','subtask','status'];
+  const ROLE_LABELS = { productivity: 'Productivity Type', task: 'Task', subtask: 'Sub Task', status: 'Status' };
+
+  // ============================================================
+  // TOKEN + USER from hash (set by Swift app when it opens Chrome)
+  // e.g. /my/index.html#token=...&user=Full%20Name
+  // ============================================================
+  function parseHash() {
+    var h = (location.hash || '').replace(/^#/, '');
+    var out = {};
+    h.split('&').forEach(function (kv) {
+      if (!kv) return;
+      var i = kv.indexOf('=');
+      if (i < 0) { out[decodeURIComponent(kv)] = ''; return; }
+      out[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+    });
+    return out;
+  }
+  // Also accept ?token=&user= via query string as a fallback
+  function parseQuery() {
+    var out = {};
+    (location.search || '').replace(/^\?/, '').split('&').forEach(function (kv) {
+      if (!kv) return;
+      var i = kv.indexOf('=');
+      if (i < 0) { out[decodeURIComponent(kv)] = ''; return; }
+      out[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+    });
+    return out;
+  }
+
+  var hash  = parseHash();
+  var qs    = parseQuery();
+  var TOKEN = hash.token || qs.token || '';
+  var USER  = hash.user  || qs.user  || '';
+
+  // Persist token + user in sessionStorage so a page reload keeps working
+  try {
+    if (TOKEN) sessionStorage.setItem('my_ttk_token', TOKEN);
+    else TOKEN = sessionStorage.getItem('my_ttk_token') || '';
+    if (USER) sessionStorage.setItem('my_ttk_user', USER);
+    else USER = sessionStorage.getItem('my_ttk_user') || '';
+  } catch (e) {}
+
+  document.getElementById('userLabel').textContent = USER || 'Not signed in';
+
+  if (!TOKEN) {
+    showError('You need to open this dashboard from the Team Time Tracker menu-bar app. ' +
+              'The app signs you in automatically — please click “My Dashboard” in the app menu.');
+  }
+
+  // ============================================================
+  // PERIOD + DATE RANGE helpers
+  // ============================================================
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+  function fmtDate(d) { return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()); }
+  function todayLocal() { return new Date(); }
+  function startOfWeek(d) { // Mon-start
+    var x = new Date(d); var day = (x.getDay() + 6) % 7;
+    x.setDate(x.getDate() - day); x.setHours(0,0,0,0); return x;
+  }
+  function startOfMonth(d) { var x = new Date(d.getFullYear(), d.getMonth(), 1); return x; }
+  function endOfMonth(d) { var x = new Date(d.getFullYear(), d.getMonth()+1, 0); return x; }
+
+  function computeRange(period) {
+    var now = todayLocal();
+    if (period === 'today') return { from: fmtDate(now), to: fmtDate(now) };
+    if (period === 'week') {
+      var s = startOfWeek(now); return { from: fmtDate(s), to: fmtDate(now) };
+    }
+    if (period === 'lastweek') {
+      var s2 = startOfWeek(now); var e = new Date(s2); e.setDate(e.getDate()-1);
+      var s = new Date(s2); s.setDate(s.getDate()-7);
+      return { from: fmtDate(s), to: fmtDate(e) };
+    }
+    if (period === 'month') {
+      return { from: fmtDate(startOfMonth(now)), to: fmtDate(now) };
+    }
+    if (period === 'lastmonth') {
+      var firstThis = startOfMonth(now);
+      var lastPrev = new Date(firstThis); lastPrev.setDate(lastPrev.getDate()-1);
+      var firstPrev = startOfMonth(lastPrev);
+      return { from: fmtDate(firstPrev), to: fmtDate(lastPrev) };
+    }
+    // custom — caller uses the visible inputs
+    return null;
+  }
+
+  // ============================================================
+  // API
+  // ============================================================
+  async function callMyStats(fromDate, toDate, team) {
+    var url = API_URL + '?action=myStats'
+      + '&token=' + encodeURIComponent(TOKEN)
+      + '&fromDate=' + encodeURIComponent(fromDate)
+      + '&toDate='   + encodeURIComponent(toDate);
+    if (team) url += '&team=' + encodeURIComponent(team);
+    var res = await fetch(url, { method: 'GET' });
+    return res.json();
+  }
+
+  // ============================================================
+  // RENDER
+  // ============================================================
+  var lastPayload = null;
+  var lastRowsFiltered = [];
+  var lastHeader = [];
+  var lastTeam = null;
+
+  function showError(msg) {
+    var box = document.getElementById('errBox');
+    box.textContent = msg;
+    box.style.display = 'block';
+  }
+  function clearError() { document.getElementById('errBox').style.display = 'none'; }
+
+  function minToHM(m) {
+    if (!m || m < 0) return '0h 0m';
+    var h = Math.floor(m / 60);
+    var mm = Math.round(m - h*60);
+    return h + 'h ' + mm + 'm';
+  }
+
+  function renderHero(totals) {
+    document.getElementById('statShifts').textContent = totals.shifts || 0;
+    document.getElementById('statProd').textContent   = minToHM(totals.productiveMin || 0);
+    document.getElementById('statProdSub').textContent =
+      'Prod: ' + minToHM(totals.productionMin||0) + ' · Meeting: ' + minToHM(totals.meetingMin||0)
+      + ' · Training: ' + minToHM(totals.trainingMin||0);
+    var u = totals.utilization || 0;
+    document.getElementById('statUtil').textContent = u + '%';
+    document.getElementById('statUtilBar').style.width = Math.max(0, Math.min(100, u)) + '%';
+  }
+
+  // Given header + rows (from a single team's log), filter by role selections.
+  // Returns matched rows.
+  function filterRowsForTeam(team, header, rows) {
+    var cfg = ROLE_CATALOG[team] || {};
+    var sels = readRoleSelections();
+    function colIdx(colName) {
+      for (var i = 0; i < header.length; i++) {
+        if (String(header[i]).trim().toLowerCase() === String(colName).trim().toLowerCase()) return i;
+      }
+      return -1;
+    }
+    var checks = [];
+    ROLES.forEach(function (role) {
+      var want = sels[role];
+      if (!want) return;
+      var roleCfg = cfg[role];
+      if (!roleCfg) return;
+      var idx = colIdx(roleCfg.col);
+      if (idx < 0) return;
+      checks.push({ idx: idx, want: String(want).toLowerCase() });
+    });
+    if (!checks.length) return rows;
+    return rows.filter(function (r) {
+      for (var i = 0; i < checks.length; i++) {
+        var cell = String(r[checks[i].idx] || '').toLowerCase();
+        if (cell !== checks[i].want) return false;
+      }
+      return true;
+    });
+  }
+
+  function readRoleSelections() {
+    return {
+      productivity: document.getElementById('fRoleProd').value,
+      task:         document.getElementById('fRoleTask').value,
+      subtask:      document.getElementById('fRoleSub').value,
+      status:       document.getElementById('fRoleStatus').value
+    };
+  }
+
+  // Show only the role dropdowns the active team uses; populate options
+  function updateRoleDropdownsForTeam(team) {
+    var cfg = ROLE_CATALOG[team] || {};
+    ROLES.forEach(function (role) {
+      var lbl = ({productivity:'roleProdLabel', task:'roleTaskLabel',
+                  subtask:'roleSubLabel', status:'roleStatusLabel'})[role];
+      var sel = ({productivity:'fRoleProd', task:'fRoleTask',
+                  subtask:'fRoleSub', status:'fRoleStatus'})[role];
+      var el = document.getElementById(lbl);
+      var seEl = document.getElementById(sel);
+      if (!cfg[role]) {
+        el.style.display = 'none';
+        seEl.innerHTML = '<option value="">All</option>';
+        seEl.value = '';
+        return;
+      }
+      el.style.display = '';
+      var prev = seEl.value;
+      var opts = cfg[role].options || [];
+      var html = '<option value="">All</option>' +
+        opts.map(function (o) { return '<option value="'+escapeAttr(o)+'">'+escapeHtml(o)+'</option>'; }).join('');
+      seEl.innerHTML = html;
+      if (opts.indexOf(prev) >= 0) seEl.value = prev;
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function escapeAttr(s) { return escapeHtml(s); }
+
+  // Build task-wise and status-wise count tables from filtered rows
+  function renderBreakdowns(team, header, rows) {
+    var cfg = ROLE_CATALOG[team] || {};
+    // Task column
+    var taskCol = (cfg.task && cfg.task.col) || null;
+    var taskIdx = -1;
+    if (taskCol) {
+      for (var i=0;i<header.length;i++) {
+        if (String(header[i]).trim().toLowerCase() === taskCol.toLowerCase()) { taskIdx = i; break; }
+      }
+    }
+    var statusCol = (cfg.status && cfg.status.col) || null;
+    var statusIdx = -1;
+    if (statusCol) {
+      for (var j=0;j<header.length;j++) {
+        if (String(header[j]).trim().toLowerCase() === statusCol.toLowerCase()) { statusIdx = j; break; }
+      }
+    }
+
+    document.getElementById('taskTableWrap').innerHTML =
+      taskIdx >= 0 ? buildCountTable(rows, taskIdx, taskCol)
+                   : '<div class="empty">This team doesn\'t use a Task column — see Productivity/Sub Task instead.</div>';
+
+    document.getElementById('statusTableWrap').innerHTML =
+      statusIdx >= 0 ? buildCountTable(rows, statusIdx, statusCol)
+                     : '<div class="empty">This team doesn\'t track Status.</div>';
+  }
+
+  function buildCountTable(rows, colIdx, colLabel) {
+    var counts = {};
+    for (var i=0;i<rows.length;i++) {
+      var k = String(rows[i][colIdx] || '(blank)').trim() || '(blank)';
+      counts[k] = (counts[k] || 0) + 1;
+    }
+    var arr = Object.keys(counts).map(function (k) { return [k, counts[k]]; })
+      .sort(function (a,b) { return b[1] - a[1]; });
+    if (!arr.length) return '<div class="empty">No tasks match the current filters.</div>';
+    var total = rows.length;
+    var html = '<table><thead><tr><th>' + escapeHtml(colLabel) + '</th><th style="text-align:right">Count</th><th style="text-align:right">%</th></tr></thead><tbody>';
+    arr.forEach(function (r) {
+      var pct = total > 0 ? Math.round(r[1]/total*100) : 0;
+      html += '<tr><td>' + escapeHtml(r[0]) + '</td><td class="num">' + r[1] + '</td><td class="num">' + pct + '%</td></tr>';
+    });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  // Active-filter breakdown block
+  function renderRoleBreakdown(team, header, rows) {
+    var cfg = ROLE_CATALOG[team] || {};
+    var sels = readRoleSelections();
+    // Pick a role to break down by: prefer the LAST one the user set to a specific value,
+    // otherwise default to whichever role the team has that isn't a hard filter.
+    var active = null;
+    var activeVal = null;
+    ROLES.slice().reverse().forEach(function (r) {
+      if (!active && sels[r]) { active = r; activeVal = sels[r]; }
+    });
+    var label = document.getElementById('bkLabel');
+    var body  = document.getElementById('bkBody');
+
+    if (!active) {
+      // If no filter set, show Productivity breakdown if team has one, else Task, else Subtask
+      var fall = cfg.productivity ? 'productivity'
+               : cfg.task ? 'task'
+               : cfg.subtask ? 'subtask'
+               : cfg.status ? 'status' : null;
+      if (!fall) { label.textContent = ''; body.className = 'empty'; body.innerHTML = 'No breakdown columns for this team.'; return; }
+      active = fall;
+    }
+    var roleCfg = cfg[active];
+    if (!roleCfg) { label.textContent = ''; body.className = 'empty'; body.innerHTML = 'No ' + ROLE_LABELS[active] + ' column for this team.'; return; }
+    var idx = -1;
+    for (var i=0;i<header.length;i++) {
+      if (String(header[i]).trim().toLowerCase() === roleCfg.col.toLowerCase()) { idx = i; break; }
+    }
+    if (idx < 0) { label.textContent = ''; body.className = 'empty'; body.innerHTML = 'Could not find ' + roleCfg.col + ' in the log.'; return; }
+
+    label.textContent = 'breaking down by ' + roleCfg.col + (activeVal ? ' · filter applied' : '');
+    body.className = '';
+    body.innerHTML = buildCountTable(rows, idx, roleCfg.col);
+  }
+
+  // Recent tasks — last 200 rows across the filtered set
+  function renderRecent(team, header, rows) {
+    var w = document.getElementById('recentWrap');
+    if (!rows.length) { w.className = 'empty'; w.innerHTML = 'No tasks in the selected range.'; return; }
+    w.className = '';
+    // Show up to 15 columns so the table stays readable
+    var maxCols = Math.min(header.length, 15);
+    var showRows = rows.slice(-200).reverse();
+    var html = '<table><thead><tr>';
+    for (var i=0;i<maxCols;i++) html += '<th>' + escapeHtml(header[i]) + '</th>';
+    html += '</tr></thead><tbody>';
+    for (var r=0;r<showRows.length;r++) {
+      html += '<tr>';
+      for (var c=0;c<maxCols;c++) {
+        var v = showRows[r][c];
+        if (v instanceof Date) v = v.toISOString().replace('T',' ').slice(0,19);
+        html += '<td>' + escapeHtml(v == null ? '' : String(v)) + '</td>';
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    w.innerHTML = html;
+  }
+
+  function updateTeamPicker(teams, currentTeam) {
+    var lbl = document.getElementById('teamPickerLabel');
+    var sel = document.getElementById('fTeam');
+    if (!teams || teams.length <= 1) {
+      // Still show the picker if exactly 1 team so user sees context
+      if (teams && teams.length === 1) {
+        lbl.style.display = '';
+        sel.innerHTML = '<option value="' + escapeAttr(teams[0]) + '">' + escapeHtml(teams[0]) + '</option>';
+        sel.value = teams[0];
+      } else {
+        lbl.style.display = 'none';
+        sel.innerHTML = '<option value="">All my teams</option>';
+      }
+      return;
+    }
+    lbl.style.display = '';
+    var html = '<option value="">All my teams</option>' +
+      teams.map(function (t) { return '<option value="'+escapeAttr(t)+'">'+escapeHtml(t)+'</option>'; }).join('');
+    sel.innerHTML = html;
+    sel.value = currentTeam || '';
+  }
+
+  // ============================================================
+  // LOAD — orchestrates one API call + full re-render
+  // ============================================================
+  var loading = false;
+  async function loadAndRender() {
+    if (!TOKEN) return;
+    if (loading) return;
+    loading = true;
+    try {
+      var period = document.getElementById('fPeriod').value;
+      var range;
+      if (period === 'custom') {
+        range = { from: document.getElementById('fFrom').value, to: document.getElementById('fTo').value };
+        if (!range.from || !range.to) { loading = false; return; }
+      } else {
+        range = computeRange(period);
+      }
+      var team = document.getElementById('fTeam').value || '';
+      var resp = await callMyStats(range.from, range.to, team);
+      if (!resp || !resp.ok) {
+        showError('Could not load your data: ' + (resp && resp.error ? resp.error : 'unknown error'));
+        return;
+      }
+      clearError();
+      lastPayload = resp;
+
+      // Team picker — if user works in 2+ teams, show filter
+      updateTeamPicker(resp.teams || [], team || resp.selectedTeam || '');
+
+      // If user has exactly one team (or selected one), scope role dropdowns to it.
+      var activeTeam = team || resp.selectedTeam || (resp.teams && resp.teams.length === 1 ? resp.teams[0] : null);
+      lastTeam = activeTeam;
+      if (activeTeam) updateRoleDropdownsForTeam(activeTeam);
+      else {
+        // Multi-team, no selection — hide all role dropdowns; user picks a team first
+        ['roleProdLabel','roleTaskLabel','roleSubLabel','roleStatusLabel'].forEach(function(id){
+          document.getElementById(id).style.display = 'none';
+        });
+      }
+
+      // Aggregate totals come from Sessions (source of truth — same as Mac app)
+      renderHero(resp.totals || {});
+
+      // Rows: if activeTeam, use its log; else flatten all
+      var header = [], rows = [];
+      if (activeTeam && resp.logs && resp.logs[activeTeam]) {
+        header = resp.logs[activeTeam].header || [];
+        rows   = resp.logs[activeTeam].rows || [];
+        rows = filterRowsForTeam(activeTeam, header, rows);
+      } else {
+        // Multi-team: concatenate row counts per team but don't filter role-wise
+        // (roles differ across teams). Just show flat recent list.
+        var allRows = [];
+        var firstHeader = null;
+        if (resp.logs) Object.keys(resp.logs).forEach(function (t) {
+          var L = resp.logs[t];
+          if (!L) return;
+          if (!firstHeader) firstHeader = L.header;
+          (L.rows || []).forEach(function (r) { allRows.push(r); });
+        });
+        header = firstHeader || [];
+        rows   = allRows;
+      }
+
+      lastHeader = header;
+      lastRowsFiltered = rows;
+
+      // Task count = number of rows (each row = one logged task)
+      document.getElementById('statTasks').textContent = rows.length;
+
+      if (activeTeam) {
+        renderBreakdowns(activeTeam, header, rows);
+        renderRoleBreakdown(activeTeam, header, rows);
+      } else {
+        document.getElementById('taskTableWrap').innerHTML =
+          '<div class="empty">Pick a team above to see task-wise counts.</div>';
+        document.getElementById('statusTableWrap').innerHTML =
+          '<div class="empty">Pick a team above to see status-wise counts.</div>';
+        document.getElementById('bkBody').innerHTML =
+          'Pick a team to break down its tasks.';
+      }
+      renderRecent(activeTeam, header, rows);
+
+      markLive(true);
+    } catch (err) {
+      showError('Network error: ' + (err && err.message ? err.message : err));
+      markLive(false);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function markLive(ok) {
+    var dot = document.getElementById('liveDot');
+    var lbl = document.getElementById('syncLabel');
+    if (ok) { dot.classList.remove('stale'); lbl.textContent = 'Live · synced ' + new Date().toLocaleTimeString(); }
+    else    { dot.classList.add('stale');    lbl.textContent = 'Stale — retrying'; }
+  }
+
+  // ============================================================
+  // EVENTS
+  // ============================================================
+  document.getElementById('fPeriod').addEventListener('change', function () {
+    var custom = this.value === 'custom';
+    document.querySelectorAll('.customOnly').forEach(function (n) { n.style.display = custom ? '' : 'none'; });
+    if (!custom) loadAndRender();
+  });
+  // Hide custom inputs by default
+  document.querySelectorAll('.customOnly').forEach(function (n) { n.style.display = 'none'; });
+
+  document.getElementById('fFrom').addEventListener('change', loadAndRender);
+  document.getElementById('fTo').addEventListener('change', loadAndRender);
+  document.getElementById('fTeam').addEventListener('change', loadAndRender);
+
+  // Role filters — on change, re-filter client-side without hitting backend
+  function rerenderWithCurrentPayload() {
+    if (!lastPayload) return;
+    var team = lastTeam;
+    if (!team) return;
+    var resp = lastPayload;
+    var header = (resp.logs && resp.logs[team]) ? (resp.logs[team].header || []) : [];
+    var rows   = (resp.logs && resp.logs[team]) ? (resp.logs[team].rows || []) : [];
+    rows = filterRowsForTeam(team, header, rows);
+    lastHeader = header;
+    lastRowsFiltered = rows;
+    document.getElementById('statTasks').textContent = rows.length;
+    renderBreakdowns(team, header, rows);
+    renderRoleBreakdown(team, header, rows);
+    renderRecent(team, header, rows);
+  }
+  ['fRoleProd','fRoleTask','fRoleSub','fRoleStatus'].forEach(function (id) {
+    document.getElementById(id).addEventListener('change', rerenderWithCurrentPayload);
+  });
+
+  // Auto-refresh
+  var POLL_MS = 30000;
+  setInterval(function () {
+    if (document.hidden) return;
+    loadAndRender();
+  }, POLL_MS);
+
+  // On tab-focus — immediate refresh
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) loadAndRender();
+  });
+  window.addEventListener('focus', loadAndRender);
+
+  // Task-save signal: Swift app can open ttk-refresh:// or post a message.
+  // For now, expose a global hook so any wrapper can trigger refresh.
+  window.ttkRefresh = loadAndRender;
+
+  // BroadcastChannel — if a future Mac-app tab also posts refresh events
+  try {
+    var bc = new BroadcastChannel('ttk-my-dash');
+    bc.onmessage = function () { loadAndRender(); };
+  } catch (e) {}
+
+  // Initial load
+  loadAndRender();
+</script>
+</body>
+</html>

@@ -111,6 +111,7 @@ function doPost(e) {
       case 'shiftStart':      return json_(shiftStart_(ss, data));
       case 'idleAlert':       return json_({ ok: true });
       case 'logError':        return json_(handleLogError_(ss, data));
+      case 'myDashboardToken': return json_(myDashboardToken_(ss, data));
       default:                return json_({ ok: false, error: 'unknown action: ' + data.action });
     }
   } catch (err) {
@@ -144,6 +145,7 @@ function doGet(e) {
       // Email-OTP auth (browser flow)
       case 'requestOtp':      return json_(requestOtp_(ss, p.email));
       case 'verifyOtp':       return json_(verifyOtp_(ss, p.email, p.code));
+      case 'myStats':         return json_(myStats_(ss, p));
       default:                return json_({ ok: false, error: 'unknown action: ' + p.action });
     }
   } catch (err) {
@@ -1626,4 +1628,248 @@ function _resolveCaller_(p) {
   }
   if (p && p.email) return { ok: true, email: String(p.email).toLowerCase(), viaToken: false };
   return { ok: false, error: 'no_auth' };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MY DASHBOARD — personal, per-user, opened from inside the Mac app.
+// The Swift app POSTs {action:'myDashboardToken', user:'<NSFullUserName>'}
+// and opens /my/index.html#token=<t>&user=<u>. Frontend then hits
+// GET ?action=myStats&token=<t>&fromDate=...&toDate=...&team=(optional)
+// and computes per-filter breakdowns client-side.
+// ═══════════════════════════════════════════════════════════════════════
+
+var MY_TOKEN_TTL_SEC = 8 * 3600; // 8 hours — long enough to cover a shift
+
+function myDashboardToken_(ss, b) {
+  var user = String((b && b.user) || '').trim();
+  if (!user) return { ok: false, error: 'user required' };
+  // Best-effort: the user must have been seen in the system at least once
+  // (either Attendance, Sessions, or a team log). Skip the check if the
+  // sheet is empty during first-run testing.
+  var token = _signToken_({
+    user: user,
+    kind: 'my',
+    exp:  Math.floor(Date.now() / 1000) + MY_TOKEN_TTL_SEC
+  });
+  return { ok: true, token: token, user: user, ttlSec: MY_TOKEN_TTL_SEC };
+}
+
+function _verifyMyToken_(token) {
+  if (!token) return { ok: false, error: 'no_token' };
+  var parts = String(token).split('.');
+  if (parts.length !== 2) return { ok: false, error: 'bad_token' };
+  try {
+    var padded = parts[0] + '==='.slice((parts[0].length + 3) % 4);
+    var payloadBytes = Utilities.base64DecodeWebSafe(padded);
+    var payloadStr = Utilities.newBlob(payloadBytes).getDataAsString();
+    var secret = _getHmacSecret_();
+    var expectedSig = Utilities.computeHmacSha256Signature(payloadStr, secret);
+    var expectedB64 = _b64url_(expectedSig);
+    if (expectedB64 !== parts[1]) return { ok: false, error: 'bad_signature' };
+    var payload = JSON.parse(payloadStr);
+    if (payload.kind !== 'my')   return { ok: false, error: 'wrong_kind' };
+    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) {
+      return { ok: false, error: 'expired' };
+    }
+    return { ok: true, user: String(payload.user || '').trim() };
+  } catch (err) {
+    return { ok: false, error: 'parse_error: ' + err };
+  }
+}
+
+// Iterate dates inclusive [fromDate, toDate] as 'YYYY-MM-DD' strings.
+function _dateRange_(fromDate, toDate) {
+  var out = [];
+  if (!fromDate) return out;
+  if (!toDate) toDate = fromDate;
+  // Parse as UTC midnight for stable date math
+  var a = new Date(fromDate + 'T00:00:00Z');
+  var b = new Date(toDate   + 'T00:00:00Z');
+  if (isNaN(a) || isNaN(b) || a > b) return out;
+  var cursor = a;
+  var safety = 0;
+  while (cursor <= b && safety < 400) {
+    out.push(Utilities.formatDate(cursor, 'UTC', 'yyyy-MM-dd'));
+    cursor = new Date(cursor.getTime() + 86400000);
+    safety++;
+  }
+  return out;
+}
+
+// Read all rows from a team log for a given user across a date range.
+// Uses the same bottom-up block scan pattern as readLog_ for speed.
+function _readUserTeamLogRange_(ss, team, user, fromDate, toDate) {
+  var tab = TEAM_TO_TAB[team];
+  if (!tab) return { header: [], rows: [] };
+  var sh = ss.getSheetByName(tab);
+  if (!sh) return { header: [], rows: [] };
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return { header: [], rows: [] };
+  var lastCol = sh.getLastColumn();
+  var header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+
+  var userLc = String(user || '').toLowerCase().trim();
+  var BLOCK = 500;
+  var matched = [];
+  var end = lastRow;
+  var passed = false;
+  while (end >= 2 && !passed) {
+    var start = Math.max(2, end - BLOCK + 1);
+    var block = sh.getRange(start, 1, end - start + 1, lastCol).getValues();
+    for (var i = block.length - 1; i >= 0; i--) {
+      var rowDate = String(block[i][0]).slice(0, 10);
+      if (rowDate < fromDate) { passed = true; break; }
+      if (rowDate > toDate) continue;
+      var rowUser = String(block[i][1] || '').toLowerCase().trim();
+      if (rowUser === userLc) matched.unshift(block[i]);
+    }
+    end = start - 1;
+  }
+
+  // If the range includes past days, also pull from Drive archive
+  // (active sheet is trimmed daily to today only).
+  var today = todayPST_();
+  if (fromDate < today) {
+    var days = _dateRange_(fromDate, toDate);
+    var months = {};
+    days.forEach(function (d) {
+      if (d >= today) return;
+      months[d.slice(0, 7)] = true;
+    });
+    // Archive is organized by month; readArchiveLog_ caches by (team,date)
+    // but it's cheaper to loop per-day for small ranges.
+    days.forEach(function (d) {
+      if (d >= today) return;
+      var arch = readArchiveLog_(team, d);
+      if (arch && arch.ok && arch.rows && arch.rows.length) {
+        for (var j = 0; j < arch.rows.length; j++) {
+          var ru = String(arch.rows[j][1] || '').toLowerCase().trim();
+          if (ru === userLc) matched.push(arch.rows[j]);
+        }
+      }
+    });
+  }
+
+  return { header: header, rows: matched };
+}
+
+// Read Sessions rows for user in date range. Sessions col A=Name, B=Date.
+function _readUserSessionsRange_(ss, user, fromDate, toDate) {
+  var sh = ss.getSheetByName('Sessions');
+  if (!sh) return { header: [], rows: [] };
+  var vals = sh.getDataRange().getValues();
+  var header = vals.shift() || [];
+  var userLc = String(user || '').toLowerCase().trim();
+  var rows = vals.filter(function (r) {
+    var n = String(r[0] || '').toLowerCase().trim();
+    if (n !== userLc) return false;
+    var d = String(r[1] || '').slice(0, 10);
+    return d >= fromDate && d <= toDate;
+  });
+  return { header: header, rows: rows };
+}
+
+// Read Attendance for user in date range. Cols A=Date, B=User, C=Team, D=Status.
+function _readUserAttendanceRange_(ss, user, fromDate, toDate) {
+  var sh = ss.getSheetByName('Attendance');
+  if (!sh) return { header: [], rows: [] };
+  var vals = sh.getDataRange().getValues();
+  var header = vals.shift() || [];
+  var userLc = String(user || '').toLowerCase().trim();
+  var rows = vals.filter(function (r) {
+    var n = String(r[1] || '').toLowerCase().trim();
+    if (n !== userLc) return false;
+    var d = String(r[0] || '').slice(0, 10);
+    return d >= fromDate && d <= toDate;
+  });
+  return { header: header, rows: rows };
+}
+
+// Main endpoint. Returns everything the personal dashboard needs to render.
+function myStats_(ss, p) {
+  var v = _verifyMyToken_(p.token);
+  if (!v.ok) return { ok: false, error: v.error === 'expired' ? 'session_expired' : 'forbidden' };
+  var user = v.user;
+
+  var today = todayPST_();
+  var fromDate = String(p.fromDate || today).slice(0, 10);
+  var toDate   = String(p.toDate   || today).slice(0, 10);
+  if (fromDate > toDate) { var tmp = fromDate; fromDate = toDate; toDate = tmp; }
+
+  // Sessions — source of truth for shift totals & utilization
+  var sess = _readUserSessionsRange_(ss, user, fromDate, toDate);
+  // Schema: A=Name B=Date C=Start D=End E=Production F=Break G=Dinner
+  //         H=Meeting I=Training J=Idle K=BreakExceeded
+  var totals = { production: 0, break_: 0, dinner: 0, meeting: 0, training: 0, idle: 0, shifts: 0 };
+  for (var i = 0; i < sess.rows.length; i++) {
+    var r = sess.rows[i];
+    totals.shifts += 1;
+    totals.production += Number(r[4]) || 0;
+    totals.break_     += Number(r[5]) || 0;
+    totals.dinner     += Number(r[6]) || 0;
+    totals.meeting    += Number(r[7]) || 0;
+    totals.training   += Number(r[8]) || 0;
+    totals.idle       += Number(r[9]) || 0;
+  }
+  var productiveMin = totals.production + totals.meeting + totals.training;
+  var denomMin      = productiveMin + totals.break_ + totals.dinner + totals.idle;
+  var utilization   = denomMin > 0 ? Math.round((productiveMin / denomMin) * 100) : 0;
+
+  // Attendance — build set of teams the user touched in range
+  var att = _readUserAttendanceRange_(ss, user, fromDate, toDate);
+  var teamSet = {};
+  for (var j = 0; j < att.rows.length; j++) {
+    var t = String(att.rows[j][2] || '').trim();
+    var canon = resolveTeam_(t) || t;
+    if (canon && TEAM_TO_TAB[canon]) teamSet[canon] = true;
+  }
+  var teams = Object.keys(teamSet);
+
+  // If client passed a team filter, restrict to it (resolve aliases)
+  var requestedTeam = null;
+  if (p.team) {
+    requestedTeam = resolveTeam_(String(p.team).trim());
+    if (requestedTeam && teams.indexOf(requestedTeam) < 0) {
+      // User asking for a team they never worked in — return empty logs
+      teams = [];
+    } else if (requestedTeam) {
+      teams = [requestedTeam];
+    }
+  }
+
+  // Pull team log rows for the user across range, one bucket per team
+  var logs = {};
+  for (var k = 0; k < teams.length; k++) {
+    var team = teams[k];
+    var r2 = _readUserTeamLogRange_(ss, team, user, fromDate, toDate);
+    logs[team] = { header: r2.header, rows: r2.rows, tab: TEAM_TO_TAB[team] };
+  }
+
+  // Also surface ALL teams the user worked in across the range
+  // (for the team-toggle UI even when requestedTeam restricts logs).
+  var allTeams = [];
+  for (var tName in teamSet) if (teamSet.hasOwnProperty(tName)) allTeams.push(tName);
+
+  return {
+    ok: true,
+    user: user,
+    fromDate: fromDate,
+    toDate: toDate,
+    totals: {
+      shifts: totals.shifts,
+      productionMin: totals.production,
+      breakMin:      totals.break_,
+      dinnerMin:     totals.dinner,
+      meetingMin:    totals.meeting,
+      trainingMin:   totals.training,
+      idleMin:       totals.idle,
+      productiveMin: productiveMin,
+      denomMin:      denomMin,
+      utilization:   utilization
+    },
+    teams:    allTeams,
+    selectedTeam: requestedTeam || null,
+    logs:     logs,
+    sessions: { header: sess.header, rows: sess.rows }
+  };
 }
