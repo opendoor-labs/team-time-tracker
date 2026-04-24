@@ -325,28 +325,30 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
     var vals = sh.getDataRange().getValues();
     var addMin = Math.round((Number(durSec) || 0) / 60);
     var tsInc  = isSystem ? 0 : 1;   // system-auto tasks don't bump user's count
+    // New schema (col 1-based):
+    //   A=ShiftStartAt B=User C=HomeTeam D=Team E=Activity F=TasksDone
+    //   G=ProdMin H=BreakMin I=IdleMin J=TaskStartedAt K=TaskEndedAt L=UpdatedAt
     for (var i = 1; i < vals.length; i++) {
-      if (String(vals[i][0]).toLowerCase() === String(user).toLowerCase()) {
+      if (String(vals[i][1]).toLowerCase() === String(user).toLowerCase()) {
         var rowIdx = i + 1;
-        var tasksDone = Number(vals[i][4] || 0) + tsInc;
-        var prodMin   = Number(vals[i][5] || 0) + addMin;
-        // Only touch the cells we know changed — leave ShiftStartAt alone.
-        sh.getRange(rowIdx, 3).setValue(canonTeam);            // C Team
-        sh.getRange(rowIdx, 4).setValue('production');         // D Activity
-        sh.getRange(rowIdx, 5).setValue(tasksDone);            // E TasksDone
-        sh.getRange(rowIdx, 6).setValue(prodMin);              // F ProdMin
-        sh.getRange(rowIdx, 9).setValue('');                   // I TaskStartedAt — task done, no active task
-        sh.getRange(rowIdx, 10).setValue(nowPSTdateISTtime_()); // J UpdatedAt
-        sh.getRange(rowIdx, 12).setValue(istNow_());            // L TaskEndedAt (IST wall-clock of completion)
+        var tasksDone = Number(vals[i][5] || 0) + tsInc;
+        var prodMin   = Number(vals[i][6] || 0) + addMin;
+        // Only touch the cells we know changed — leave ShiftStartAt (A) alone.
+        sh.getRange(rowIdx, 4).setValue(canonTeam);             // D Team
+        sh.getRange(rowIdx, 5).setValue('production');          // E Activity
+        sh.getRange(rowIdx, 6).setValue(tasksDone);             // F TasksDone
+        sh.getRange(rowIdx, 7).setValue(prodMin);               // G ProdMin
+        sh.getRange(rowIdx, 10).setValue('');                   // J TaskStartedAt — task done
+        sh.getRange(rowIdx, 11).setValue(istNow_());            // K TaskEndedAt
+        sh.getRange(rowIdx, 12).setValue(nowPSTdateISTtime_()); // L UpdatedAt
         return { ok: true, rowIdx: rowIdx };
       }
     }
     // No existing row → seed one so Live starts reflecting activity even
     // if the app missed firing shiftStart for some reason.
     sh.appendRow([
-      user, canonHomeTeam, canonTeam, 'production',
-      tsInc, addMin, 0, 0, '',
-      nowPSTdateISTtime_(), istNow_(), istNow_()
+      istNow_(), user, canonHomeTeam, canonTeam, 'production',
+      tsInc, addMin, 0, 0, '', istNow_(), nowPSTdateISTtime_()
     ]);
     return { ok: true, rowIdx: sh.getLastRow(), seeded: true };
   });
@@ -449,7 +451,7 @@ function fixSessionsFormat() {
   return { ok: true, reformattedCols: 'E:K', rowsScanned: vals.length, cellsCleaned: cleaned };
 }
 
-// Companion cleanup for the Live tab. Sets col I (TaskStartedAt) format to
+// Companion cleanup for the Live tab. Sets col J (TaskStartedAt) format to
 // plain text and rewrites any rows currently holding the Sheets epoch value
 // "1899-12-30 0:00:00" back to empty string. Run once from the editor.
 function fixLiveTaskStartedAt() {
@@ -457,7 +459,7 @@ function fixLiveTaskStartedAt() {
   if (!sh) return { ok: false, error: 'Live sheet missing' };
   var lastRow = sh.getLastRow();
   if (lastRow < 2) return { ok: true, cleared: 0 };
-  var rng = sh.getRange(2, 9, lastRow - 1, 1);   // col I only
+  var rng = sh.getRange(2, 10, lastRow - 1, 1);  // col J (TaskStartedAt) only
   rng.setNumberFormat('@');                       // plain text
   var vals = rng.getValues();
   var cleaned = 0;
@@ -485,31 +487,38 @@ function clearForceReset_(ss, b) {
 }
 
 // ─── Heartbeat: upsert current activity into "Live" sheet (keyed by user) ─
-// Schema (12 cols): User | HomeTeam | Team | Activity | TasksDone | ProdMin |
-//   BreakMin | IdleMin | TaskStartedAt | UpdatedAt (PST date + IST time) |
-//   ShiftStartAt | TaskEndedAt
-// Ensure Live sheet exists and has the 12-column schema (adds cols if missing).
+// Schema (12 cols, in column order):
+//   A=ShiftStartAt | B=User | C=HomeTeam | D=Team | E=Activity | F=TasksDone
+//   G=ProdMin | H=BreakMin | I=IdleMin | J=TaskStartedAt | K=TaskEndedAt
+//   L=UpdatedAt (PST date + IST time)
+// Ensure Live sheet exists with the canonical header row.
 function ensureLiveSheet_(ss) {
+  var HEADER = ['ShiftStartAt','User','HomeTeam','Team','Activity','TasksDone',
+                'ProdMin','BreakMin','IdleMin','TaskStartedAt','TaskEndedAt','UpdatedAt'];
   var sh = ss.getSheetByName('Live');
   if (!sh) {
     sh = ss.insertSheet('Live');
-    sh.appendRow(['User','HomeTeam','Team','Activity','TasksDone',
-                  'ProdMin','BreakMin','IdleMin','TaskStartedAt','UpdatedAt','ShiftStartAt','TaskEndedAt']);
+    sh.appendRow(HEADER);
     sh.setFrozenRows(1);
-    // Prevent Sheets from auto-typing cols I (TaskStartedAt) + L (TaskEndedAt) as dates.
-    sh.getRange('I:I').setNumberFormat('@');
-    sh.getRange('L:L').setNumberFormat('@');
+    // Plain text for every time-string column so Sheets doesn't auto-date.
+    sh.getRange('A:A').setNumberFormat('@');   // ShiftStartAt
+    sh.getRange('J:J').setNumberFormat('@');   // TaskStartedAt
+    sh.getRange('K:K').setNumberFormat('@');   // TaskEndedAt
+    sh.getRange('L:L').setNumberFormat('@');   // UpdatedAt
     return sh;
   }
-  // Migrate: add columns if missing (idempotent).
-  var header = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0];
-  if (header.indexOf('ShiftStartAt') === -1) {
-    sh.getRange(1, header.length + 1).setValue('ShiftStartAt');
-    header.push('ShiftStartAt');
+  // Normalize header if it drifted (idempotent — only overwrites row 1).
+  var current = sh.getRange(1, 1, 1, Math.max(HEADER.length, sh.getLastColumn())).getValues()[0];
+  var needsFix = false;
+  for (var i = 0; i < HEADER.length; i++) {
+    if (current[i] !== HEADER[i]) { needsFix = true; break; }
   }
-  if (header.indexOf('TaskEndedAt') === -1) {
-    sh.getRange(1, header.length + 1).setValue('TaskEndedAt');
-    sh.getRange(1, header.length + 1, sh.getMaxRows(), 1).setNumberFormat('@');
+  if (needsFix) {
+    sh.getRange(1, 1, 1, HEADER.length).setValues([HEADER]);
+    sh.getRange('A:A').setNumberFormat('@');
+    sh.getRange('J:J').setNumberFormat('@');
+    sh.getRange('K:K').setNumberFormat('@');
+    sh.getRange('L:L').setNumberFormat('@');
   }
   return sh;
 }
@@ -526,15 +535,16 @@ function heartbeat_(ss, b) {
     if (!user) return { ok: false, error: 'no user' };
 
     // Preserve existing ShiftStartAt + TaskEndedAt unless client supplied them (avoid blanking).
+    // Column map: A=ShiftStartAt(0) B=User(1) ... K=TaskEndedAt(10) L=UpdatedAt(11)
     var existingShiftStart = '';
     var existingTaskEndedAt = '';
     var vals = sh.getDataRange().getValues();
     var matchedRow = -1;
     for (var i = 1; i < vals.length; i++) {
-      if (String(vals[i][0]).toLowerCase() === user.toLowerCase()) {
+      if (String(vals[i][1]).toLowerCase() === user.toLowerCase()) {
         matchedRow = i + 1;
-        existingShiftStart = String(vals[i][10] || '');
-        existingTaskEndedAt = String(vals[i][11] || '');
+        existingShiftStart  = String(vals[i][0]  || '');
+        existingTaskEndedAt = String(vals[i][10] || '');
         break;
       }
     }
@@ -547,19 +557,22 @@ function heartbeat_(ss, b) {
     var canonTeam     = resolveTeam_(b.team)     || String(b.team || '');
     var canonHomeTeam = resolveTeam_(b.homeTeam) || String(b.homeTeam || '');
 
+    // Row order MUST match HEADER in ensureLiveSheet_.
     var row = [
-      user,
-      canonHomeTeam,
-      canonTeam,
-      String(b.activity || ''),
-      Number(b.tasksDone || 0),
-      Number(b.productionMin || 0),
-      Number(b.breakMin || 0),
-      Number(b.idleMin || 0),
-      b.taskStartedAt ? Utilities.formatDate(new Date(Number(b.taskStartedAt)), TZ, 'yyyy-MM-dd HH:mm:ss') : '',
-      nowPSTdateISTtime_(),
-      shiftStartAt,
-      existingTaskEndedAt   // preserve TaskEndedAt — only _bumpLiveAfterTask_ writes it
+      shiftStartAt,                                           // A ShiftStartAt
+      user,                                                   // B User
+      canonHomeTeam,                                          // C HomeTeam
+      canonTeam,                                              // D Team
+      String(b.activity || ''),                               // E Activity
+      Number(b.tasksDone || 0),                               // F TasksDone
+      Number(b.productionMin || 0),                           // G ProdMin
+      Number(b.breakMin || 0),                                // H BreakMin
+      Number(b.idleMin || 0),                                 // I IdleMin
+      b.taskStartedAt                                         // J TaskStartedAt
+        ? Utilities.formatDate(new Date(Number(b.taskStartedAt)), TZ, 'yyyy-MM-dd HH:mm:ss')
+        : '',
+      existingTaskEndedAt,                                    // K TaskEndedAt (preserved; only _bumpLiveAfterTask_ writes it)
+      nowPSTdateISTtime_()                                    // L UpdatedAt
     ];
     if (matchedRow > 0) {
       sh.getRange(matchedRow, 1, 1, row.length).setValues([row]);
@@ -581,23 +594,29 @@ function shiftStart_(ss, b) {
     // Canonicalize for Live.Team/HomeTeam — see heartbeat_ comment.
     var canonTeam     = resolveTeam_(b.team)     || String(b.team || '');
     var canonHomeTeam = resolveTeam_(b.homeTeam) || String(b.homeTeam || '');
+    // Column map: A=ShiftStartAt B=User C=HomeTeam D=Team ... L=UpdatedAt
     var vals = sh.getDataRange().getValues();
     for (var i = 1; i < vals.length; i++) {
-      if (String(vals[i][0]).toLowerCase() === user.toLowerCase()) {
-        sh.getRange(i + 1, 11).setValue(shiftStartAt);       // ShiftStartAt (col K)
-        sh.getRange(i + 1, 10).setValue(nowPSTdateISTtime_()); // UpdatedAt
-        if (b.homeTeam) sh.getRange(i + 1, 2).setValue(canonHomeTeam);
-        if (b.team)     sh.getRange(i + 1, 3).setValue(canonTeam);
+      if (String(vals[i][1]).toLowerCase() === user.toLowerCase()) {
+        sh.getRange(i + 1, 1).setValue(shiftStartAt);           // A ShiftStartAt
+        sh.getRange(i + 1, 12).setValue(nowPSTdateISTtime_());  // L UpdatedAt
+        if (b.homeTeam) sh.getRange(i + 1, 3).setValue(canonHomeTeam); // C HomeTeam
+        if (b.team)     sh.getRange(i + 1, 4).setValue(canonTeam);     // D Team
         return { ok: true, upsert: 'update', row: i + 1, shiftStartAt: shiftStartAt };
       }
     }
-    // IMPORTANT: col I (TaskStartedAt) = '' not 0.  Writing 0 makes Sheets
-    // render the cell as the epoch "1899-12-30 0:00:00" because col I is
-    // date-formatted. Empty string stays genuinely empty.
+    // IMPORTANT: TaskStartedAt/TaskEndedAt = '' not 0. Writing 0 into a
+    // date-formatted cell renders as the epoch "1899-12-30 0:00:00".
     sh.appendRow([
-      user, canonHomeTeam, canonTeam,
-      'production', 0, 0, 0, 0, '',
-      nowPSTdateISTtime_(), shiftStartAt, ''
+      shiftStartAt,                    // A ShiftStartAt
+      user,                            // B User
+      canonHomeTeam,                   // C HomeTeam
+      canonTeam,                       // D Team
+      'production',                    // E Activity
+      0, 0, 0, 0,                      // F-I TasksDone/ProdMin/BreakMin/IdleMin
+      '',                              // J TaskStartedAt
+      '',                              // K TaskEndedAt
+      nowPSTdateISTtime_()             // L UpdatedAt
     ]);
     return { ok: true, upsert: 'insert', row: sh.getLastRow(), shiftStartAt: shiftStartAt };
   });
@@ -668,8 +687,11 @@ function liveActivity_(ss, p) {
   var header = vals.shift() || [];
   var users = [];
   var byTeam = {};
+  // Column map: A=ShiftStartAt(0) B=User(1) C=HomeTeam(2) D=Team(3)
+  //   E=Activity(4) F=TasksDone(5) G=ProdMin(6) H=BreakMin(7) I=IdleMin(8)
+  //   J=TaskStartedAt(9) K=TaskEndedAt(10) L=UpdatedAt(11)
   vals.forEach(function (r) {
-    var updatedAtStr = String(r[9] || '');
+    var updatedAtStr = String(r[11] || '');
     var parts = updatedAtStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
     if (!parts) return;
     var istNowStr = Utilities.formatDate(now, TZ, 'yyyy-MM-dd HH:mm:ss');
@@ -680,23 +702,23 @@ function liveActivity_(ss, p) {
     };
     var ageMin = (toMs(istNowParts) - toMs(parts)) / 60000;
     if (ageMin > staleMin) return;
-    var homeTeam = String(r[1] || '');
-    var team     = String(r[2] || '');
+    var homeTeam = String(r[2] || '');
+    var team     = String(r[3] || '');
     // TL filter: show user only if their active team OR home team is allowed
     if (allowed && !allowed[team] && !allowed[homeTeam]) return;
     var u = {
-      user:       String(r[0] || ''),
+      user:       String(r[1] || ''),
       homeTeam:   homeTeam,
       team:       team,
-      activity:   String(r[3] || ''),
-      tasksDone:  Number(r[4] || 0),
-      prodMin:    Number(r[5] || 0),
-      breakMin:   Number(r[6] || 0),
-      idleMin:    Number(r[7] || 0),
-      taskStartedAt: parseTaskStartedAt_(r[8]),
+      activity:   String(r[4] || ''),
+      tasksDone:  Number(r[5] || 0),
+      prodMin:    Number(r[6] || 0),
+      breakMin:   Number(r[7] || 0),
+      idleMin:    Number(r[8] || 0),
+      taskStartedAt: parseTaskStartedAt_(r[9]),
+      taskEndedAt: String(r[10] || ''),
       updatedAt:  updatedAtStr,
-      shiftStartAt: String(r[10] || ''),
-      taskEndedAt: String(r[11] || ''),
+      shiftStartAt: String(r[0] || ''),
       ageMin:     Math.round(ageMin * 10) / 10
     };
     users.push(u);
