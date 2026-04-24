@@ -1843,7 +1843,14 @@ function _readUserTeamLogRange_(ss, team, user, fromDate, toDate) {
       if (rowDate < fromDate) { passed = true; break; }
       if (rowDate > toDate) continue;
       var rowUser = String(block[i][1] || '').toLowerCase().trim();
-      if (rowUser === userLc) matched.unshift(block[i]);
+      if (rowUser === userLc) {
+        // Replace col A (Timestamp) with the display string so the
+        // dashboard renders "2026-04-24 20:52:36" instead of
+        // "2026-04-24T21:32:09.000Z" (ISO UTC) that a Date object would
+        // serialize to over JSON.
+        block[i][0] = String(disp[i][0] || '');
+        matched.unshift(block[i]);
+      }
     }
     end = start - 1;
   }
@@ -1915,6 +1922,33 @@ function _readUserAttendanceRange_(ss, user, fromDate, toDate) {
   return { header: header, rows: rows };
 }
 
+// Pull the caller's in-progress shift data from the Live tab.
+// Returns null if no row exists. This is how "Today" numbers populate
+// before the user actually ends their shift (Sessions writes on close only).
+// Live schema: A=ShiftStartAt B=User C=HomeTeam D=Team E=Activity F=TasksDone
+//              G=ProdMin H=BreakMin I=IdleMin ...
+function _readUserLiveRow_(ss, user) {
+  var sh = ss.getSheetByName('Live');
+  if (!sh) return null;
+  var userLc = String(user || '').toLowerCase().trim();
+  var vals = sh.getDataRange().getValues();
+  for (var i = 1; i < vals.length; i++) {
+    var n = String(vals[i][1] || '').toLowerCase().trim();
+    if (n === userLc) {
+      return {
+        shiftStartAt: String(vals[i][0] || ''),
+        team:         String(vals[i][3] || ''),
+        activity:     String(vals[i][4] || ''),
+        tasksDone:    Number(vals[i][5]) || 0,
+        prodMin:      Number(vals[i][6]) || 0,
+        breakMin:     Number(vals[i][7]) || 0,
+        idleMin:      Number(vals[i][8]) || 0
+      };
+    }
+  }
+  return null;
+}
+
 // Main endpoint. Returns everything the personal dashboard needs to render.
 function myStats_(ss, p) {
   var v = _verifyMyToken_(p.token);
@@ -1926,7 +1960,7 @@ function myStats_(ss, p) {
   var toDate   = String(p.toDate   || today).slice(0, 10);
   if (fromDate > toDate) { var tmp = fromDate; fromDate = toDate; toDate = tmp; }
 
-  // Sessions — source of truth for shift totals & utilization
+  // Sessions — source of truth for CLOSED shift totals & utilization
   var sess = _readUserSessionsRange_(ss, user, fromDate, toDate);
   // Schema: A=Name B=Date C=Start D=End E=Production F=Break G=Dinner
   //         H=Meeting I=Training J=Idle K=BreakExceeded
@@ -1941,6 +1975,32 @@ function myStats_(ss, p) {
     totals.training   += Number(r[8]) || 0;
     totals.idle       += Number(r[9]) || 0;
   }
+
+  // If the selected range INCLUDES today and the user has an active Live
+  // row whose shift isn't yet in Sessions, merge its in-progress minutes
+  // in so the dashboard shows real-time Production/Utilization mid-shift.
+  // (Sessions for today only appears after user clicks End-Shift.)
+  var liveMerged = false;
+  if (fromDate <= today && today <= toDate) {
+    var live = _readUserLiveRow_(ss, user);
+    if (live && live.shiftStartAt) {
+      // Only merge if there's NO Sessions row already for today (avoids
+      // double-counting after shift closes while Live row still lingers).
+      var hasTodaySession = false;
+      for (var si = 0; si < sess.rows.length; si++) {
+        var d = _toYMD_(sess.rows[si][1]);
+        if (d === today) { hasTodaySession = true; break; }
+      }
+      if (!hasTodaySession) {
+        totals.shifts     += 1;
+        totals.production += live.prodMin;
+        totals.break_     += live.breakMin;
+        totals.idle       += live.idleMin;
+        liveMerged = true;
+      }
+    }
+  }
+
   var productiveMin = totals.production + totals.meeting + totals.training;
   var denomMin      = productiveMin + totals.break_ + totals.dinner + totals.idle;
   var utilization   = denomMin > 0 ? Math.round((productiveMin / denomMin) * 100) : 0;

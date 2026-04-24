@@ -234,9 +234,9 @@
       <div class="sub" id="statUtilSub">matches your Mac app formula</div>
     </div>
     <div class="card">
-      <div class="k">Shifts</div>
-      <div class="v" id="statShifts">—</div>
-      <div class="sub" id="statShiftsSub">days you clocked in</div>
+      <div class="k">Avg Task Time</div>
+      <div class="v" id="statAvgTask">—</div>
+      <div class="sub" id="statAvgTaskSub">production ÷ tasks</div>
     </div>
   </div>
 
@@ -549,8 +549,32 @@
     return h + 'h ' + mm + 'm';
   }
 
+  // "PST date + IST time" formatter — matches backend nowPSTdateISTtime_().
+  // Used as a fallback if any timestamp sneaks through as a Date/UTC ISO.
+  function fmtPstDateIstTime(d) {
+    if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+    function parts(tz) {
+      var f = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit',
+        hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+      }).formatToParts(d);
+      var o = {};
+      f.forEach(function(p){ if (p.type !== 'literal') o[p.type] = p.value; });
+      return o;
+    }
+    try {
+      var pst = parts('America/Los_Angeles');
+      var ist = parts('Asia/Kolkata');
+      // en-CA hour value '24' is emitted at midnight in some browsers — normalise.
+      var hh = ist.hour === '24' ? '00' : ist.hour;
+      return pst.year + '-' + pst.month + '-' + pst.day + ' ' +
+             hh + ':' + ist.minute + ':' + ist.second;
+    } catch (e) {
+      return d.toISOString().replace('T',' ').slice(0,19);
+    }
+  }
+
   function renderHero(totals) {
-    document.getElementById('statShifts').textContent = totals.shifts || 0;
     document.getElementById('statProd').textContent   = minToHM(totals.productiveMin || 0);
     document.getElementById('statProdSub').textContent =
       'Prod: ' + minToHM(totals.productionMin||0) + ' · Meeting: ' + minToHM(totals.meetingMin||0)
@@ -558,6 +582,31 @@
     var u = totals.utilization || 0;
     document.getElementById('statUtil').textContent = u + '%';
     document.getElementById('statUtilBar').style.width = Math.max(0, Math.min(100, u)) + '%';
+  }
+
+  // Avg Task Time = production minutes ÷ tasks completed. Displayed as "Xm Ys"
+  // or "Xh Ym". Shown as "—" if either number is zero.
+  function renderAvgTaskTime(totals, taskCount) {
+    var el = document.getElementById('statAvgTask');
+    var sub = document.getElementById('statAvgTaskSub');
+    var prod = Number((totals && totals.productionMin) || 0);
+    var n = Number(taskCount || 0);
+    if (!prod || !n) { el.textContent = '—'; sub.textContent = 'production ÷ tasks'; return; }
+    var minPerTask = prod / n;
+    var label;
+    if (minPerTask >= 60) {
+      var h = Math.floor(minPerTask / 60);
+      var m = Math.round(minPerTask - h*60);
+      label = h + 'h ' + m + 'm';
+    } else if (minPerTask >= 1) {
+      var mm = Math.floor(minPerTask);
+      var ss = Math.round((minPerTask - mm) * 60);
+      label = mm + 'm ' + ss + 's';
+    } else {
+      label = Math.round(minPerTask * 60) + 's';
+    }
+    el.textContent = label;
+    sub.textContent = minToHM(prod) + ' ÷ ' + n + ' tasks';
   }
 
   // Given header + rows (from a single team's log), filter by role selections.
@@ -731,7 +780,13 @@
       html += '<tr>';
       for (var c=0;c<maxCols;c++) {
         var v = showRows[r][c];
-        if (v instanceof Date) v = v.toISOString().replace('T',' ').slice(0,19);
+        if (v instanceof Date) v = fmtPstDateIstTime(v);
+        else if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v)) {
+          // JSON-serialised Date that slipped through — convert from UTC ISO
+          // back to PST-date + IST-time so the Time column is readable.
+          var d = new Date(v);
+          if (!isNaN(d.getTime())) v = fmtPstDateIstTime(d);
+        }
         html += '<td>' + escapeHtml(v == null ? '' : String(v)) + '</td>';
       }
       html += '</tr>';
@@ -831,6 +886,7 @@
 
       // Task count = number of rows (each row = one logged task)
       document.getElementById('statTasks').textContent = rows.length;
+      renderAvgTaskTime(resp.totals || {}, rows.length);
 
       if (activeTeam) {
         renderBreakdowns(activeTeam, header, rows);
@@ -888,6 +944,7 @@
     lastHeader = header;
     lastRowsFiltered = rows;
     document.getElementById('statTasks').textContent = rows.length;
+    renderAvgTaskTime(resp.totals || {}, rows.length);
     renderBreakdowns(team, header, rows);
     renderRoleBreakdown(team, header, rows);
     renderRecent(team, header, rows);
