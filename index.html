@@ -2504,6 +2504,7 @@ function startWorking(skipIntro) {
     hour12: false
   }).replace(/(\d{2})\/(\d{2})\/(\d{4}),?\s*/, '$3-$2-$1 ');
   state.shiftStartedAt = istNow;
+  state.shiftStartMs = Date.now();
   nativeFire('shiftStart', {
     user: state.user,
     homeTeam: state.homeTeam,
@@ -3397,15 +3398,36 @@ function fmtHM(ms) {
   return `${h}h ${String(m).padStart(2,'0')}m`;
 }
 
+// Total utilization = productive time / total shift time.
+// Productive time = production + meeting + training (work-related buckets).
+// Total shift time prefers wall-clock (start→now); falls back to sum of
+// all buckets when shiftStartMs is missing (older snapshots).
+function computeUtilization(endMs) {
+  const t = state.totals || {};
+  const productiveMs = (t.production || 0) + (t.meeting || 0) + (t.training || 0);
+  let totalMs = 0;
+  const end = endMs || state.shiftEndTime || Date.now();
+  if (state.shiftStartMs && end > state.shiftStartMs) {
+    totalMs = end - state.shiftStartMs;
+  } else {
+    totalMs = (t.production || 0) + (t.break || 0) + (t.auto_break || 0) +
+              (t.meeting || 0) + (t.dinner || 0) + (t.training || 0);
+  }
+  const pct = totalMs > 0 ? Math.round((productiveMs / totalMs) * 100) : 0;
+  return { productiveMs, totalMs, pct };
+}
+
 function confirmEndShift() {
   // Build summary from state.totals
   const t = state.totals || {};
+  const u = computeUtilization();
   const summary = `
     <b>Production:</b> ${fmtHM(t.production)}<br>
     <b>Break:</b> ${fmtHM(t.break)} · <b>Meeting:</b> ${fmtHM(t.meeting)}<br>
     <b>Dinner:</b> ${fmtHM(t.dinner || 0)} · <b>Training:</b> ${fmtHM(t.training)}<br>
     <b>Idle (after 5m):</b> ${fmtHM(state.idleTotalMs)}<br>
-    <b>Tasks logged:</b> ${state.tasksDone || 0}
+    <b>Tasks logged:</b> ${state.tasksDone || 0}<br>
+    <b>Total shift:</b> ${fmtHM(u.totalMs)} · <b>Utilization:</b> ${u.pct}%
   `;
   document.getElementById('endShiftSummary').innerHTML = summary;
   document.getElementById('endShiftConfirmModal').classList.add('show');
@@ -3442,12 +3464,19 @@ async function confirmEndShiftFinal() {
   const firstName = (state.user || '').split(/\s+/)[0] || 'you';
   document.getElementById('endOfDayGreet').textContent = `Nice work today, ${firstName}!`;
   document.getElementById('endOfDayDate').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  const u = computeUtilization(state.shiftEndTime);
+  // Color-code utilization: green ≥75%, amber 50-74%, red <50%
+  const utilColor = u.pct >= 75 ? '#1a8f3c' : (u.pct >= 50 ? '#c27b00' : '#b33a3a');
   document.getElementById('endOfDaySummary').innerHTML = `
     ✅ <b>${state.tasksDone || 0}</b> tasks logged<br>
     🎯 <b>${fmtHM(t.production)}</b> of production<br>
     ☕ <b>${fmtHM(t.break)}</b> on breaks · 👥 <b>${fmtHM(t.meeting)}</b> in meetings<br>
     🍽️ <b>${fmtHM(t.dinner || 0)}</b> dinner · 📚 <b>${fmtHM(t.training)}</b> training<br>
-    💤 <b>${fmtHM(state.idleTotalMs)}</b> idle time detected
+    💤 <b>${fmtHM(state.idleTotalMs)}</b> idle time detected<br>
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb">
+      ⏱ <b>${fmtHM(u.totalMs)}</b> total shift ·
+      📊 <b style="color:${utilColor}">${u.pct}%</b> utilization
+    </div>
   `;
 
   // Swap to end-of-day screen
