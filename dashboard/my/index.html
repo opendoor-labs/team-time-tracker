@@ -148,7 +148,29 @@
 <body>
 
 <header>
-  <div class="brand">⏱ TTK — My Dashboard <small id="subBrand">your personal productivity view</small></div>
+  <div class="brand">
+    <svg width="22" height="22" viewBox="0 0 24 24" style="vertical-align:-5px;margin-right:6px" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="sunCore" cx="50%" cy="50%" r="50%">
+          <stop offset="0%"   stop-color="#c4a8ff"/>
+          <stop offset="60%"  stop-color="#8b5cf6"/>
+          <stop offset="100%" stop-color="#6d28d9"/>
+        </radialGradient>
+      </defs>
+      <g stroke="#a78bfa" stroke-width="1.8" stroke-linecap="round">
+        <line x1="12" y1="1.5"  x2="12" y2="4.5"/>
+        <line x1="12" y1="19.5" x2="12" y2="22.5"/>
+        <line x1="1.5"  y1="12" x2="4.5"  y2="12"/>
+        <line x1="19.5" y1="12" x2="22.5" y2="12"/>
+        <line x1="4.2"  y1="4.2"  x2="6.4"  y2="6.4"/>
+        <line x1="17.6" y1="17.6" x2="19.8" y2="19.8"/>
+        <line x1="4.2"  y1="19.8" x2="6.4"  y2="17.6"/>
+        <line x1="17.6" y1="6.4"  x2="19.8" y2="4.2"/>
+      </g>
+      <circle cx="12" cy="12" r="5.2" fill="url(#sunCore)"/>
+    </svg>
+    TTK — My Dashboard <small id="subBrand">your personal productivity view</small>
+  </div>
   <div class="user">
     <span id="userLabel">—</span>
     <span class="dot" id="liveDot" title="Live sync on"></span>
