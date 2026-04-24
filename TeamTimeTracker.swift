@@ -46,6 +46,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
 
     // ── Launch ─────────────────────────────────────────────────────────
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // ── Singleton guard ─────────────────────────────────────────────
+        // Defense in depth: even if LaunchServices + LaunchAgent race and
+        // spawn two processes, only one stays alive. Count every process
+        // with our bundle identifier; if we're not the first, exit quietly.
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        let myID = Bundle.main.bundleIdentifier ?? "com.opendoor.teamtimetracker"
+        let twins = NSRunningApplication.runningApplications(withBundleIdentifier: myID)
+            .filter { $0.processIdentifier != myPID && $0.processIdentifier > 0 }
+        if !twins.isEmpty {
+            NSLog("Team Tracker: another instance (PID \(twins.map{$0.processIdentifier})) already running; exiting.")
+            exit(0)
+        }
+
         NSApp.setActivationPolicy(.regular)
         setDockIcon()
         ensureInstallDir()
