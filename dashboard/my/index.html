@@ -228,10 +228,9 @@
       <div class="sub" id="statProdSub">includes Meeting + Training</div>
     </div>
     <div class="card warn">
-      <div class="k">Utilization</div>
-      <div class="v" id="statUtil">—</div>
-      <div class="bar-wrap"><div class="bar" id="statUtilBar" style="width:0%"></div></div>
-      <div class="sub" id="statUtilSub">matches your Mac app formula</div>
+      <div class="k">Break Time</div>
+      <div class="v" id="statBreak">—</div>
+      <div class="sub" id="statBreakSub">includes dinner</div>
     </div>
     <div class="card">
       <div class="k">Avg Task Time</div>
@@ -579,9 +578,15 @@
     document.getElementById('statProdSub').textContent =
       'Prod: ' + minToHM(totals.productionMin||0) + ' · Meeting: ' + minToHM(totals.meetingMin||0)
       + ' · Training: ' + minToHM(totals.trainingMin||0);
-    var u = totals.utilization || 0;
-    document.getElementById('statUtil').textContent = u + '%';
-    document.getElementById('statUtilBar').style.width = Math.max(0, Math.min(100, u)) + '%';
+    // Break Time = break + dinner (dinner is effectively a meal break)
+    var breakMin  = Number(totals.breakMin  || 0);
+    var dinnerMin = Number(totals.dinnerMin || 0);
+    var totalBreak = breakMin + dinnerMin;
+    document.getElementById('statBreak').textContent = minToHM(totalBreak);
+    document.getElementById('statBreakSub').textContent =
+      dinnerMin > 0
+        ? 'Break: ' + minToHM(breakMin) + ' · Dinner: ' + minToHM(dinnerMin)
+        : 'includes dinner';
   }
 
   // Avg Task Time = production minutes ÷ tasks completed. Displayed as "Xm Ys"
