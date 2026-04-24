@@ -56,6 +56,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         NSApp.setActivationPolicy(.regular)     // show in Dock with our custom icon
         setDockIcon()
         ensureInstallDir()
+        buildMainMenu()             // Edit menu → enables Cmd+C/V/X/A in WKWebView
         buildStatusItem()
         buildWindow()
         loadHTML()
@@ -64,6 +65,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         postUpdateHousekeeping()    // detect post-update boot, heartbeat, resume state
         checkForUpdate()
         pollConfig()
+    }
+
+    // ── Main menu — enables Cmd+C/V/X/A inside the WKWebView ──────────
+    // The app is LSUIElement=true (no Dock menu by default). WKWebView
+    // requires a standard Edit menu in the main menu bar to route
+    // keyboard shortcuts (Copy, Paste, Cut, Select All, Undo, Redo).
+    // Without this, typing ⌘V into a form field does nothing.
+    func buildMainMenu() {
+        let mainMenu = NSMenu()
+
+        // App menu (first item in the menu bar — title is ignored by macOS)
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "Quit Team Tracker",
+                                   action: #selector(NSApplication.terminate(_:)),
+                                   keyEquivalent: "q"))
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
+
+        // Edit menu — the important one
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(NSMenuItem(title: "Undo",       action: Selector(("undo:")),       keyEquivalent: "z"))
+        let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(redo)
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(NSMenuItem(title: "Cut",        action: #selector(NSText.cut(_:)),       keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy",       action: #selector(NSText.copy(_:)),      keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste",      action: #selector(NSText.paste(_:)),     keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+
+        NSApp.mainMenu = mainMenu
     }
 
     // Detect if this launch came from an update install. If so, emit a
