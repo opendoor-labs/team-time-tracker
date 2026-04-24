@@ -2029,12 +2029,17 @@ function _readUserLiveRow_(ss, user) {
   var sh = ss.getSheetByName('Live');
   if (!sh) return null;
   var userLc = String(user || '').toLowerCase().trim();
-  var vals = sh.getDataRange().getValues();
+  var rng  = sh.getDataRange();
+  var vals = rng.getValues();
+  // Display values so shiftStartAt comes back as "YYYY-MM-DD HH:mm:ss" even
+  // when Sheets coerced the cell into a Date object (format-drift from
+  // earlier versions before col A was locked to plain text).
+  var disp = rng.getDisplayValues();
   for (var i = 1; i < vals.length; i++) {
     var n = String(vals[i][1] || '').toLowerCase().trim();
     if (n === userLc) {
       return {
-        shiftStartAt: String(vals[i][0] || ''),
+        shiftStartAt: String(disp[i][0] || vals[i][0] || ''),
         team:         String(vals[i][3] || ''),
         activity:     String(vals[i][4] || ''),
         tasksDone:    Number(vals[i][5]) || 0,
@@ -2104,9 +2109,11 @@ function myStats_(ss, p) {
         totals.production += live.prodMin;
         totals.break_     += live.breakMin;
         totals.idle       += live.idleMin;
-        // live.shiftStartAt format: "YYYY-MM-DD HH:mm:ss" (IST wall clock)
-        var startTimePart = String(live.shiftStartAt).slice(11, 19);
-        var stSec = startTimePart.match(/^(\d{2}):(\d{2}):(\d{2})/);
+        // live.shiftStartAt normally "YYYY-MM-DD HH:mm:ss" (IST wall clock)
+        // but may be "Sat Apr 25 2026 04:45:31 GMT+0530" if Sheets coerced
+        // the cell into a Date object before col A was locked to plain
+        // text. Match the FIRST HH:mm:ss pattern anywhere in the string.
+        var stSec = String(live.shiftStartAt).match(/(\d{1,2}):(\d{2}):(\d{2})/);
         if (stSec) {
           var startSec = (+stSec[1]) * 3600 + (+stSec[2]) * 60 + (+stSec[3]);
           var nowSec   = _nowIstSec_();
