@@ -335,6 +335,7 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
         sh.getRange(rowIdx, 4).setValue('production');         // D Activity
         sh.getRange(rowIdx, 5).setValue(tasksDone);            // E TasksDone
         sh.getRange(rowIdx, 6).setValue(prodMin);              // F ProdMin
+        sh.getRange(rowIdx, 9).setValue('');                   // I TaskStartedAt — task done, no active task
         sh.getRange(rowIdx, 10).setValue(nowPSTdateISTtime_()); // J UpdatedAt
         return { ok: true, rowIdx: rowIdx };
       }
