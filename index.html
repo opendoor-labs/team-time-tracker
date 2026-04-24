@@ -3104,6 +3104,11 @@ function clearForm() {
     if (el.tagName === 'SELECT') el.selectedIndex = 0;
     else el.value = '';
   });
+  // Clear attached files (Listings team) and wipe their chip strips so the
+  // next task starts with a clean attachment field.
+  const attLabels = Object.keys(window._taskAttachments || {});
+  window._taskAttachments = {};
+  attLabels.forEach(label => { try { _renderAttachChips_(label); } catch (_) {} });
   state.taskStartedAt = null;
   document.getElementById('formSub').textContent = 'Timer starts when you fill the first field';
   document.getElementById('timerDisplay').textContent = '00:00:00';
