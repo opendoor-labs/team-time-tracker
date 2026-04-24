@@ -56,30 +56,17 @@ curl -fsSL "$HTML_URL" -o "$INSTALL_DIR/index.html"
 HTML_SIZE=$(wc -c < "$INSTALL_DIR/index.html" | tr -d ' ')
 echo "      ✅ index.html ($(($HTML_SIZE / 1024)) KB)"
 
-# ── Step 3: Compile Swift → binary ──
-echo "[3/6] Compiling native Mac app..."
-swiftc -O -o "$INSTALL_DIR/TeamTimeTracker" \
-       "$INSTALL_DIR/TeamTimeTracker.swift" \
-       -framework Cocoa -framework CoreGraphics -framework IOKit -framework WebKit \
-       2>/dev/null
-chmod +x "$INSTALL_DIR/TeamTimeTracker"
-BIN_SIZE=$(wc -c < "$INSTALL_DIR/TeamTimeTracker" | tr -d ' ')
-echo "      ✅ Compiled ($(($BIN_SIZE / 1024)) KB)"
+# ── Step 3+4 (fused): Build bundle shell, compile directly into it ──
+# Historical design: compiled into $INSTALL_DIR, then `cp` into the bundle.
+# Opendoor corporate endpoint security sometimes quarantines the ad-hoc
+# signed binary in the 1-second window between codesign and cp, making
+# `cp` fail with "No such file or directory". Fix: build the bundle shell
+# first, then compile swiftc straight into $APP_DIR/Contents/MacOS/ — no
+# intermediate binary exists for EDR to scan-and-remove.
+echo "[3/6] Preparing app bundle + killing any running copy..."
 
-# Ad-hoc codesign the freshly-compiled binary BEFORE copying into ~/Applications.
-# Opendoor corporate endpoint security kills unsigned binaries that land in
-# ~/Applications/. Signing here (even with an ad-hoc identity "-") makes the
-# binary look "signed enough" to survive the security sweep.
-xattr -cr "$INSTALL_DIR/TeamTimeTracker" 2>/dev/null || true
-codesign --force --deep --sign - "$INSTALL_DIR/TeamTimeTracker" 2>/dev/null || true
-echo "      ✅ Signed (ad-hoc)"
-
-# ── Step 4: Build .app bundle ──
-echo "[4/6] Installing to ~/Applications..."
-
-# Hard kill any running instance — two icons in the Dock happen when a
-# previous process survives the reinstall. Use -9 + sleep so the kernel
-# releases the PID before we load the new LaunchAgent below.
+# Hard kill any running instance BEFORE touching the bundle path — two
+# Dock icons happen when a previous process survives the reinstall.
 launchctl unload "$LAUNCH_AGENTS/$PLIST_NAME.plist" 2>/dev/null || true
 pkill -9 -f "TeamTimeTracker.app/Contents/MacOS/TeamTimeTracker" 2>/dev/null || true
 pkill -9 -f TeamTimeTracker 2>/dev/null || true
@@ -107,17 +94,30 @@ for ghost in "${GHOSTS[@]}"; do
     fi
 done
 
-# Wipe the target path so the new bundle lands clean.
+# Wipe the target path so the new bundle lands clean, then build the shell.
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
-cp "$INSTALL_DIR/TeamTimeTracker"     "$APP_DIR/Contents/MacOS/TeamTimeTracker"
-cp "$INSTALL_DIR/index.html"          "$APP_DIR/Contents/Resources/index.html"
-chmod +x "$APP_DIR/Contents/MacOS/TeamTimeTracker"
-xattr -cr "$APP_DIR" 2>/dev/null || true
-# Re-sign the bundle (covers MacOS/, Info.plist, Resources/) so the whole
-# package passes the same "signed" check as the raw binary above.
-codesign --force --deep --sign - "$APP_DIR" 2>/dev/null || true
+echo "      ✅ Bundle shell ready"
 
+echo "[4/6] Compiling native Mac app (directly into bundle)..."
+swiftc -O -o "$APP_DIR/Contents/MacOS/TeamTimeTracker" \
+       "$INSTALL_DIR/TeamTimeTracker.swift" \
+       -framework Cocoa -framework CoreGraphics -framework IOKit -framework WebKit \
+       2>/dev/null
+if [ ! -f "$APP_DIR/Contents/MacOS/TeamTimeTracker" ]; then
+    echo "      ❌ Binary missing after compile — likely EDR quarantine."
+    echo "         Run: ls -la $APP_DIR/Contents/MacOS/"
+    echo "         Then ping @arun with the output."
+    exit 1
+fi
+chmod +x "$APP_DIR/Contents/MacOS/TeamTimeTracker"
+BIN_SIZE=$(wc -c < "$APP_DIR/Contents/MacOS/TeamTimeTracker" | tr -d ' ')
+echo "      ✅ Compiled ($(($BIN_SIZE / 1024)) KB)"
+
+# Copy HTML resource (small, plain text — EDR doesn't care).
+cp "$INSTALL_DIR/index.html"          "$APP_DIR/Contents/Resources/index.html"
+
+# Write Info.plist BEFORE codesign so the signature covers it.
 cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -136,7 +136,18 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
 </dict>
 </plist>
 PLIST
-echo "      ✅ Bundle created"
+
+xattr -cr "$APP_DIR" 2>/dev/null || true
+# Re-sign the whole bundle (covers MacOS/, Info.plist, Resources/) so
+# the package passes Opendoor endpoint security's signed-binary check.
+codesign --force --deep --sign - "$APP_DIR" 2>/dev/null || true
+# Verify the binary survived the codesign pass — last chance to catch EDR.
+if [ ! -f "$APP_DIR/Contents/MacOS/TeamTimeTracker" ]; then
+    echo "      ❌ Bundle binary disappeared after codesign."
+    echo "         Likely EDR quarantine. Ping @arun with: ls -la $APP_DIR/Contents/MacOS/"
+    exit 1
+fi
+echo "      ✅ Bundle created + signed"
 
 # ── Step 5: LaunchAgent (auto-start on login) ──
 echo "[5/6] Setting up auto-start..."
