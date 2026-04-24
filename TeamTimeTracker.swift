@@ -1,16 +1,20 @@
 // ═══════════════════════════════════════════════════════════════════════
-//  Team Time Tracker v2.7 — WKWebView shell
+//  Team Time Tracker v2.7.5 — WKWebView shell (fully manual, HTML-OTA)
 //  Opendoor · Photo Review QC Team
 //
-//  Architecture:
-//    - Swift wraps the HTML UI (app-premium-demo.html → index.html)
-//    - JS calls native via window.webkit.messageHandlers.native.postMessage({...})
-//    - Native calls JS via webView.evaluateJavaScript("window.onNative(...)")
-//
-//  Keep backwards compatibility with v2.6.1 auto-update:
-//    Config!B1 = version     (if > APP_VERSION → update)
-//    Config!B2 = sourceUrl   (where to download new .swift)
-//    Config!B3 = forceReset  (comma-sep Mac full names → clear local state)
+//  Design:
+//    • Swift binary is a stable shell. All UI/logic lives in index.html.
+//    • On launch, Swift loads cached index.html for fast paint, then
+//      fetches the latest from Render in the background. Next launch
+//      (or a Reload UI click / silent forceReset) picks up the new HTML.
+//    • No update popups. No Start Your Day popup. Fully manual:
+//      user clicks the menu-bar ⏱ icon → Open Tracker.
+//    • Window close (✕) minimizes to menu bar — app keeps running.
+//    • Mac unlock / wake always auto-shows the tracker window.
+//    • Idle detection: JS receives 5-second ticks and decides break logic.
+//    • Config!B3 (forceReset) supports two modes:
+//        "name"        → silent UI reload (pull fresh HTML)
+//        "RESET:name"  → clear state + fresh Start Your Day in the HTML
 // ═══════════════════════════════════════════════════════════════════════
 
 import Cocoa
@@ -19,63 +23,46 @@ import IOKit
 import CoreGraphics
 
 // ── Constants ──────────────────────────────────────────────────────────
-let APP_VERSION = "2.7.4"
+let APP_VERSION = "2.7.5"
 let SHEET_URL = "https://script.google.com/macros/s/AKfycbxkBAtowwxWuKkaga-aR93ssyxuygFZC-zYXsdm22aVKhXWB45E4YKMKVmc0Ty_ByFk/exec"
+let HTML_URL = "https://team-time-tracker-osoe.onrender.com/index.html"
 let INSTALL_DIR = NSHomeDirectory() + "/Library/TeamTracker"
 let HTML_PATH = INSTALL_DIR + "/index.html"
-let STATE_PATH = INSTALL_DIR + "/state.json"
 
-let IDLE_THRESHOLD_SEC: TimeInterval = 300   // 5 min
-let LOCK_BREAK_SEC: TimeInterval = 900       // 15 min
-let MANUAL_BREAK_WELCOME_SEC: TimeInterval = 300
-let UPDATE_CHECK_INTERVAL: TimeInterval = 7200   // 2 hrs
-let CONFIG_POLL_INTERVAL: TimeInterval = 300     // 5 min
-
-// ── Update safety constants ────────────────────────────────────────────
-let UPDATE_SNOOZE_KEY  = "ttk.updateSnoozeUntil"
-let UPDATE_ATTEMPT_KEY = "ttk.updateAttempts"       // [TimeInterval]
-let UPDATE_LAST_VER_KEY = "ttk.lastKnownVersion"
-let UPDATE_SNOOZE_SEC: TimeInterval = 4 * 3600     // 4 hours
-let UPDATE_LOOP_WINDOW: TimeInterval = 300         // 5 min
-let UPDATE_LOOP_MAX = 2                            // >2 attempts in window = loop
+let HTML_REFRESH_TIMEOUT: TimeInterval = 5.0
+let CONFIG_POLL_INTERVAL: TimeInterval = 300   // 5 min
+let IDLE_TICK_INTERVAL: TimeInterval = 5
 
 // ── App Delegate ───────────────────────────────────────────────────────
-class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
+                   WKNavigationDelegate, NSWindowDelegate {
     var window: NSWindow!
     var webView: WKWebView!
     var statusItem: NSStatusItem!
     var idleTimer: Timer?
-    var updateTimer: Timer?
     var configTimer: Timer?
     var lockStart: Date?
     var isLocked = false
-    var lastIdleSent: TimeInterval = 0
 
     // ── Launch ─────────────────────────────────────────────────────────
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)     // show in Dock with our custom icon
+        NSApp.setActivationPolicy(.regular)
         setDockIcon()
         ensureInstallDir()
-        buildMainMenu()             // Edit menu → enables Cmd+C/V/X/A in WKWebView
+        buildMainMenu()
         buildStatusItem()
         buildWindow()
-        loadHTML()
+        loadHTML()                     // paint the cached UI fast
+        refreshHTMLFromRender()        // fetch fresh HTML for next open
         registerSystemHooks()
         startTimers()
-        postUpdateHousekeeping()    // detect post-update boot, heartbeat, resume state
-        checkForUpdate()
         pollConfig()
     }
 
     // ── Main menu — enables Cmd+C/V/X/A inside the WKWebView ──────────
-    // The app is LSUIElement=true (no Dock menu by default). WKWebView
-    // requires a standard Edit menu in the main menu bar to route
-    // keyboard shortcuts (Copy, Paste, Cut, Select All, Undo, Redo).
-    // Without this, typing ⌘V into a form field does nothing.
     func buildMainMenu() {
         let mainMenu = NSMenu()
 
-        // App menu (first item in the menu bar — title is ignored by macOS)
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(NSMenuItem(title: "Quit Team Tracker",
@@ -84,10 +71,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
 
-        // Edit menu — the important one
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
-        editMenu.addItem(NSMenuItem(title: "Undo",       action: Selector(("undo:")),       keyEquivalent: "z"))
+        editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
         let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
         redo.keyEquivalentModifierMask = [.command, .shift]
         editMenu.addItem(redo)
@@ -102,36 +88,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         NSApp.mainMenu = mainMenu
     }
 
-    // Detect if this launch came from an update install. If so, emit a
-    // post-update heartbeat and tell JS to resume the in-progress session
-    // (JS reads session state from the backend, so no local replay needed).
-    func postUpdateHousekeeping() {
-        let defaults = UserDefaults.standard
-        let last = defaults.string(forKey: UPDATE_LAST_VER_KEY) ?? ""
-        if !last.isEmpty && last != APP_VERSION {
-            // Just updated from `last` → `APP_VERSION`
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                guard let self = self else { return }
-                self.postToApi(action: "heartbeat", payload: [
-                    "phase": "post_update",
-                    "fromVersion": last,
-                    "toVersion": APP_VERSION,
-                    "user": NSFullUserName()
-                ]) { _ in }
-                self.sendToJS("onPostUpdate", payload: [
-                    "fromVersion": last,
-                    "toVersion": APP_VERSION
-                ])
-            }
-        }
-        defaults.set(APP_VERSION, forKey: UPDATE_LAST_VER_KEY)
-    }
-
-    // ── Dock icon — draw a branded icon at runtime ─────────────────────
-    // Avoids shipping a separate .icns file. Renders a rounded-square
-    // purple→blue gradient with a sun emoji, so the app shows up with
-    // its own identity in the Dock + Cmd-Tab switcher instead of the
-    // generic terminal/Swift icon.
+    // ── Dock icon ──────────────────────────────────────────────────────
     func setDockIcon() {
         let size = NSSize(width: 512, height: 512)
         let img = NSImage(size: size)
@@ -146,9 +103,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
             g.draw(in: rect, angle: -45)
         }
         let emoji = "☀️" as NSString
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 280)
-        ]
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 280)]
         let strSize = emoji.size(withAttributes: attrs)
         let origin = NSPoint(
             x: (size.width  - strSize.width)  / 2,
@@ -171,12 +126,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
             btn.toolTip = "Team Time Tracker v\(APP_VERSION)"
         }
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Open Tracker", action: #selector(showWindow), keyEquivalent: "o"))
+        menu.addItem(NSMenuItem(title: "Open Tracker",
+                                action: #selector(showWindow), keyEquivalent: "o"))
+        menu.addItem(NSMenuItem(title: "Reload UI (pull latest)",
+                                action: #selector(reloadFromRender), keyEquivalent: "r"))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Check for Updates", action: #selector(manualUpdateCheck), keyEquivalent: "u"))
-        menu.addItem(NSMenuItem(title: "Force Refresh Config", action: #selector(manualConfigRefresh), keyEquivalent: "r"))
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit",
+                                action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
     }
 
@@ -192,45 +148,116 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         window.title = "Team Time Tracker"
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
+        window.delegate = self      // intercept ✕ → hide (not close)
         window.center()
 
         let cfg = WKWebViewConfiguration()
         let ucc = WKUserContentController()
         ucc.add(self, name: "native")
         cfg.userContentController = ucc
-        cfg.preferences.setValue(true, forKey: "developerExtrasEnabled")   // enable Inspector
+        cfg.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
         webView = WKWebView(frame: window.contentView!.bounds, configuration: cfg)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
-        webView.setValue(false, forKey: "drawsBackground")   // transparent (let HTML gradient show)
+        webView.setValue(false, forKey: "drawsBackground")
         window.contentView?.addSubview(webView)
     }
 
+    // ── NSWindowDelegate: close button → hide, don't quit ──────────────
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
+
+    // ── HTML loading (local cache + Render fetch) ──────────────────────
     func loadHTML() {
-        let url = URL(fileURLWithPath: HTML_PATH)
+        let fileURL = URL(fileURLWithPath: HTML_PATH)
         if FileManager.default.fileExists(atPath: HTML_PATH) {
-            webView.loadFileURL(url, allowingReadAccessTo: URL(fileURLWithPath: INSTALL_DIR))
+            webView.loadFileURL(fileURL, allowingReadAccessTo: URL(fileURLWithPath: INSTALL_DIR))
+            return
+        }
+        // No cache — fetch blocking so the app has something to show
+        fetchHTMLBlocking()
+        if FileManager.default.fileExists(atPath: HTML_PATH) {
+            webView.loadFileURL(fileURL, allowingReadAccessTo: URL(fileURLWithPath: INSTALL_DIR))
         } else {
-            let html = "<html><body style='background:#0a0e1b;color:#e8ecff;font-family:-apple-system;padding:40px'><h2>⚠️ index.html not found</h2><p>Expected at: \(HTML_PATH)</p><p>Re-run the installer:</p><code>curl -fsSL https://team-tracker.onrender.com/install.sh | bash</code></body></html>"
+            let html = """
+            <html><body style='background:#0a0e1b;color:#e8ecff;font-family:-apple-system;padding:40px'>
+            <h2>⚠️ Tracker couldn't load</h2>
+            <p>Offline or Render unreachable. Reconnect and click menu bar ⏱ → Reload UI.</p>
+            </body></html>
+            """
             webView.loadHTMLString(html, baseURL: nil)
         }
     }
 
+    // Background refresh — writes new HTML to disk for next launch.
+    // Does NOT reload the running webview (avoids mid-session disruption).
+    func refreshHTMLFromRender() {
+        guard let url = URL(string: HTML_URL) else { return }
+        var req = URLRequest(url: url, timeoutInterval: HTML_REFRESH_TIMEOUT)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            guard let d = data, d.count > 10_000 else { return }
+            try? d.write(to: URL(fileURLWithPath: HTML_PATH))
+        }.resume()
+    }
+
+    // Synchronous fetch used only when there's no cached HTML yet.
+    func fetchHTMLBlocking() {
+        guard let url = URL(string: HTML_URL) else { return }
+        let sema = DispatchSemaphore(value: 0)
+        var req = URLRequest(url: url, timeoutInterval: HTML_REFRESH_TIMEOUT)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            if let d = data, d.count > 10_000 {
+                try? d.write(to: URL(fileURLWithPath: HTML_PATH))
+            }
+            sema.signal()
+        }.resume()
+        _ = sema.wait(timeout: .now() + HTML_REFRESH_TIMEOUT + 1)
+    }
+
+    // Manual reload: pulls fresh HTML, then reloads the webview.
+    // State survives because index.html owns it in localStorage and
+    // rehydrates on load via restoreSnapshot().
+    @objc func reloadFromRender() {
+        guard let url = URL(string: HTML_URL) else { return }
+        var req = URLRequest(url: url, timeoutInterval: HTML_REFRESH_TIMEOUT)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            guard let self = self else { return }
+            if let d = data, d.count > 10_000 {
+                try? d.write(to: URL(fileURLWithPath: HTML_PATH))
+            }
+            DispatchQueue.main.async { self.loadHTML() }
+        }.resume()
+    }
+
     @objc func showWindow() {
         NSApp.activate(ignoringOtherApps: true)
+        if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
     }
 
     // ── System hooks (lock/unlock/sleep/wake) ──────────────────────────
     func registerSystemHooks() {
         let nc = NSWorkspace.shared.notificationCenter
-        nc.addObserver(self, selector: #selector(screenLocked), name: NSWorkspace.screensDidSleepNotification, object: nil)
-        nc.addObserver(self, selector: #selector(screenUnlocked), name: NSWorkspace.screensDidWakeNotification, object: nil)
-        // Fallback: CGSession lock/unlock via Darwin notify
+        nc.addObserver(self, selector: #selector(screenLocked),
+                       name: NSWorkspace.screensDidSleepNotification, object: nil)
+        nc.addObserver(self, selector: #selector(screenUnlocked),
+                       name: NSWorkspace.screensDidWakeNotification, object: nil)
+        nc.addObserver(self, selector: #selector(screenUnlocked),
+                       name: NSWorkspace.didWakeNotification, object: nil)
+        nc.addObserver(self, selector: #selector(screenUnlocked),
+                       name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+        // Distributed notification fallback (CGSession lock/unlock)
         let dnc = DistributedNotificationCenter.default()
-        dnc.addObserver(self, selector: #selector(screenLocked), name: NSNotification.Name("com.apple.screenIsLocked"), object: nil)
-        dnc.addObserver(self, selector: #selector(screenUnlocked), name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
+        dnc.addObserver(self, selector: #selector(screenLocked),
+                        name: NSNotification.Name("com.apple.screenIsLocked"), object: nil)
+        dnc.addObserver(self, selector: #selector(screenUnlocked),
+                        name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
     }
 
     @objc func screenLocked() {
@@ -241,20 +268,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     }
 
     @objc func screenUnlocked() {
-        guard isLocked else { return }
-        isLocked = false
+        let wasLocked = isLocked
         let dur = lockStart.map { Date().timeIntervalSince($0) } ?? 0
+        isLocked = false
         lockStart = nil
-        sendToJS("onUnlock", payload: ["duration": dur])
+        if wasLocked {
+            sendToJS("onUnlock", payload: ["duration": dur])
+        }
+        // Always auto-show the tracker on wake/unlock, even if it was minimized.
+        DispatchQueue.main.async { self.showWindow() }
     }
 
-    // ── Idle detection ─────────────────────────────────────────────────
+    // ── Timers ──────────────────────────────────────────────────────────
     func startTimers() {
-        idleTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        idleTimer = Timer.scheduledTimer(withTimeInterval: IDLE_TICK_INTERVAL, repeats: true) { [weak self] _ in
             self?.tickIdle()
-        }
-        updateTimer = Timer.scheduledTimer(withTimeInterval: UPDATE_CHECK_INTERVAL, repeats: true) { [weak self] _ in
-            self?.checkForUpdate()
         }
         configTimer = Timer.scheduledTimer(withTimeInterval: CONFIG_POLL_INTERVAL, repeats: true) { [weak self] _ in
             self?.pollConfig()
@@ -262,12 +290,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     }
 
     func tickIdle() {
-        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState,
+                                                           eventType: CGEventType(rawValue: ~0)!)
         sendToJS("onIdleTick", payload: ["seconds": idle])
     }
 
     // ── JS bridge ──────────────────────────────────────────────────────
-    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+    func userContentController(_ controller: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any],
               let op = body["op"] as? String else { return }
         let payload = body["payload"] as? [String: Any] ?? [:]
@@ -277,17 +307,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         case "getUser":
             reply(requestId, data: ["fullName": NSFullUserName(), "version": APP_VERSION])
         case "logTask":
-            postToApi(action: "logTask", payload: payload) { result in
-                self.reply(requestId, data: result)
-            }
+            postToApi(action: "logTask", payload: payload) { self.reply(requestId, data: $0) }
         case "markAttendance":
-            postToApi(action: "markAttendance", payload: payload) { result in
-                self.reply(requestId, data: result)
-            }
+            postToApi(action: "markAttendance", payload: payload) { self.reply(requestId, data: $0) }
         case "closeSession":
-            postToApi(action: "closeSession", payload: payload) { result in
-                self.reply(requestId, data: result)
-            }
+            postToApi(action: "closeSession", payload: payload) { self.reply(requestId, data: $0) }
         case "heartbeat":
             postToApi(action: "heartbeat", payload: payload) { _ in }
         case "shiftStart":
@@ -302,6 +326,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
             if let s = payload["url"] as? String, let url = URL(string: s) {
                 NSWorkspace.shared.open(url)
             }
+        case "minimize":
+            DispatchQueue.main.async { self.window.orderOut(nil) }
+        case "reloadUI":
+            DispatchQueue.main.async { self.reloadFromRender() }
         case "quit":
             NSApp.terminate(nil)
         default:
@@ -325,7 +353,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     }
 
     // ── Apps Script API ────────────────────────────────────────────────
-    func postToApi(action: String, payload: [String: Any], done: @escaping ([String: Any]) -> Void) {
+    func postToApi(action: String, payload: [String: Any],
+                   done: @escaping ([String: Any]) -> Void) {
         var body = payload
         body["action"] = action
         body["user"] = NSFullUserName()
@@ -340,7 +369,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
         req.httpBody = data
         URLSession.shared.dataTask(with: req) { data, _, err in
             if let err = err { done(["ok": false, "error": err.localizedDescription]); return }
-            if let d = data, let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            if let d = data,
+               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
                 done(obj)
             } else {
                 done(["ok": true])
@@ -351,283 +381,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNa
     func fetchConfig(done: @escaping ([String: Any]) -> Void) {
         guard let url = URL(string: SHEET_URL + "?action=getConfig") else { done([:]); return }
         URLSession.shared.dataTask(with: url) { data, _, _ in
-            if let d = data, let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            if let d = data,
+               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
                 done(obj)
             } else { done([:]) }
         }.resume()
     }
 
-    // ── Config poll (force-reset + maintenance) ────────────────────────
+    // ── Config poll (forceReset + maintenance banner) ──────────────────
+    //
+    // Config!B3 = forceReset. Comma-separated entries. Two modes:
+    //   "Arun Mohan"        → silent UI reload (pull fresh HTML)
+    //   "RESET:Arun Mohan"  → clear localStorage + start fresh
+    // Both clear the user's entry on success.
     func pollConfig() {
         fetchConfig { [weak self] cfg in
             guard let self = self else { return }
-            // Force reset
             if let fr = cfg["forceReset"] as? String, !fr.isEmpty {
                 let myName = NSFullUserName().lowercased()
-                let names = fr.lowercased().split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                if names.contains(myName) {
-                    self.sendToJS("onForceReset", payload: [:])
-                    self.postToApi(action: "clearForceReset", payload: ["user": NSFullUserName()]) { _ in }
+                let entries = fr.split(separator: ",").map {
+                    $0.trimmingCharacters(in: .whitespaces)
                 }
-            }
-            // Maintenance banner
-            self.sendToJS("onConfig", payload: cfg)
-        }
-    }
-
-    @objc func manualConfigRefresh() { pollConfig() }
-
-    // ── Auto-update (safe flow) ────────────────────────────────────────
-    //
-    // Flow:
-    //   1. checkForUpdate() — polls Config!B1, bails if no newer version
-    //   2. Loop guard — if >2 attempts in 5 min, stop (prevents flicker)
-    //   3. Snooze guard — if user clicked "Later" recently, skip auto-check
-    //      (manual "Check for Updates" always overrides snooze)
-    //   4. Confirmation dialog — user chooses Update Now / Later
-    //   5. Update Now → snapshot state → download → compile → relaunch
-    //
-    // Session continuity:
-    //   - Backend (Apps Script) owns session truth
-    //   - Pre-update heartbeat marks the pause; post-update (on relaunch)
-    //     marks the resume. Current task / elapsed time resume seamlessly.
-    //
-    var isManualUpdateCheck = false
-
-    func checkForUpdate() {
-        fetchConfig { [weak self] cfg in
-            guard let self = self else { return }
-            guard let v = cfg["version"] as? String,
-                  let src = cfg["sourceUrl"] as? String else { return }
-
-            if !self.isNewer(v) {
-                if self.isManualUpdateCheck {
-                    self.isManualUpdateCheck = false
-                    DispatchQueue.main.async { self.showUpToDateDialog() }
-                }
-                return
-            }
-
-            // Loop guard: abort if we've attempted too many times recently
-            if self.isInUpdateLoop() {
-                NSLog("Team Tracker: update loop detected (\(UPDATE_LOOP_MAX)+ attempts in \(Int(UPDATE_LOOP_WINDOW))s). Skipping.")
-                if self.isManualUpdateCheck {
-                    self.isManualUpdateCheck = false
-                    DispatchQueue.main.async { self.showLoopGuardDialog() }
-                }
-                return
-            }
-
-            // Snooze guard: respect user's "Later" choice (skipped for manual)
-            if !self.isManualUpdateCheck,
-               let snooze = UserDefaults.standard.object(forKey: UPDATE_SNOOZE_KEY) as? Date,
-               Date() < snooze {
-                return
-            }
-
-            DispatchQueue.main.async {
-                self.isManualUpdateCheck = false
-                self.promptForUpdate(version: v, sourceUrl: src)
-            }
-        }
-    }
-
-    @objc func manualUpdateCheck() {
-        isManualUpdateCheck = true
-        checkForUpdate()
-    }
-
-    func isNewer(_ remote: String) -> Bool {
-        let r = remote.split(separator: ".").compactMap { Int($0) }
-        let l = APP_VERSION.split(separator: ".").compactMap { Int($0) }
-        for i in 0..<max(r.count, l.count) {
-            let a = i < r.count ? r[i] : 0
-            let b = i < l.count ? l[i] : 0
-            if a > b { return true }
-            if a < b { return false }
-        }
-        return false
-    }
-
-    // ── Loop guard helpers ─────────────────────────────────────────────
-    func recordUpdateAttempt() {
-        let now = Date().timeIntervalSince1970
-        var attempts = UserDefaults.standard.array(forKey: UPDATE_ATTEMPT_KEY) as? [TimeInterval] ?? []
-        let cutoff = now - UPDATE_LOOP_WINDOW
-        attempts = attempts.filter { $0 > cutoff }
-        attempts.append(now)
-        UserDefaults.standard.set(attempts, forKey: UPDATE_ATTEMPT_KEY)
-    }
-
-    func isInUpdateLoop() -> Bool {
-        let now = Date().timeIntervalSince1970
-        let attempts = UserDefaults.standard.array(forKey: UPDATE_ATTEMPT_KEY) as? [TimeInterval] ?? []
-        let cutoff = now - UPDATE_LOOP_WINDOW
-        return attempts.filter { $0 > cutoff }.count >= UPDATE_LOOP_MAX
-    }
-
-    // ── Confirmation dialogs ───────────────────────────────────────────
-    func promptForUpdate(version: String, sourceUrl: String) {
-        let alert = NSAlert()
-        alert.messageText = "Team Tracker Update Available"
-        alert.informativeText = """
-        Version \(version) is ready to install.
-        (You're currently on \(APP_VERSION).)
-
-        ✓ Your current task will resume
-        ✓ Your timer keeps running
-        ✓ No data will be lost
-
-        App will restart briefly (~10 seconds).
-        """
-        alert.addButton(withTitle: "Update Now")
-        alert.addButton(withTitle: "Later")
-        alert.alertStyle = .informational
-        alert.icon = NSApp.applicationIconImage
-
-        NSApp.activate(ignoringOtherApps: true)
-        let resp = alert.runModal()
-
-        if resp == .alertFirstButtonReturn {
-            // User chose Update Now
-            snapshotStateBeforeUpdate(targetVersion: version)
-            recordUpdateAttempt()
-            performUpdate(version: version, sourceUrl: sourceUrl)
-        } else {
-            // User chose Later — snooze 4 hours
-            let snoozeUntil = Date().addingTimeInterval(UPDATE_SNOOZE_SEC)
-            UserDefaults.standard.set(snoozeUntil, forKey: UPDATE_SNOOZE_KEY)
-            NSLog("Team Tracker: update snoozed until \(snoozeUntil)")
-        }
-    }
-
-    func showUpToDateDialog() {
-        let alert = NSAlert()
-        alert.messageText = "You're up to date"
-        alert.informativeText = "Team Tracker is running the latest version (\(APP_VERSION))."
-        alert.addButton(withTitle: "OK")
-        alert.alertStyle = .informational
-        alert.icon = NSApp.applicationIconImage
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
-    }
-
-    func showLoopGuardDialog() {
-        let alert = NSAlert()
-        alert.messageText = "Update paused"
-        alert.informativeText = "Too many update attempts recently. Please try again in a few minutes, or message @arun if the issue persists."
-        alert.addButton(withTitle: "OK")
-        alert.alertStyle = .warning
-        alert.icon = NSApp.applicationIconImage
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
-    }
-
-    // ── State snapshot before update ───────────────────────────────────
-    // Tell JS to flush its in-memory state to localStorage FIRST (so the
-    // new binary can restore task, form, shift-start on relaunch). Then
-    // send the pre-update heartbeat synchronously so backend sees the
-    // pause marker before the process dies.
-    //
-    // Order matters:
-    //   1. sendToJS('onPreUpdate')   → JS saves snapshot to localStorage
-    //   2. Sleep 1.2s                → let WKWebView flush localStorage to disk
-    //   3. Synchronous heartbeat     → backend pause marker (no fire-and-forget)
-    //
-    func snapshotStateBeforeUpdate(targetVersion: String) {
-        sendToJS("onPreUpdate", payload: [
-            "fromVersion": APP_VERSION,
-            "toVersion": targetVersion
-        ])
-        // Give JS 1.2s to serialize state → localStorage and for WebKit to
-        // flush it to disk. localStorage writes are synchronous in JS but
-        // WebKit's disk flush is async; 1.2s covers both.
-        Thread.sleep(forTimeInterval: 1.2)
-
-        // Synchronous heartbeat — don't return until backend confirms (or times out).
-        let sema = DispatchSemaphore(value: 0)
-        postToApi(action: "heartbeat", payload: [
-            "phase": "pre_update",
-            "fromVersion": APP_VERSION,
-            "toVersion": targetVersion,
-            "user": NSFullUserName()
-        ]) { _ in sema.signal() }
-        _ = sema.wait(timeout: .now() + 3.0)   // 3s cap so a stalled network can't block update
-    }
-
-    // ── Perform update (download + compile + relaunch) ─────────────────
-    //
-    // IMPORTANT: swiftc detects input type by file extension. If we pass
-    // `TeamTimeTracker.swift.new` it tries to link it as an object and
-    // fails with "ld: unknown file type". So we stage the new source into
-    // a .swift file BEFORE invoking swiftc. The script below:
-    //   1. Back up current .swift as .swift.bak (rollback point)
-    //   2. Install downloaded source to .swift.incoming
-    //   3. Rename .swift.incoming → TeamTimeTracker_v<ver>.swift
-    //   4. Compile that file (real .swift extension)
-    //   5. On compile success: swap binary + relaunch
-    //   6. On compile failure: restore .swift from .bak so we don't loop
-    //
-    func performUpdate(version: String, sourceUrl: String) {
-        guard let url = URL(string: sourceUrl) else { return }
-        URLSession.shared.dataTask(with: url) { data, _, _ in
-            guard let d = data, d.count > 10_000 else { return }
-            let incoming = INSTALL_DIR + "/TeamTimeTracker.swift.incoming"
-            try? d.write(to: URL(fileURLWithPath: incoming))
-            // Sanitize version for filename (no dots issues): keep simple
-            let safeVer = version.replacingOccurrences(of: ".", with: "_")
-            let script = """
-            set -e
-            cd \(INSTALL_DIR)
-            # Preserve rollback point
-            cp -f TeamTimeTracker.swift TeamTimeTracker.swift.bak 2>/dev/null || true
-            # Stage the new source with a proper .swift extension
-            mv -f TeamTimeTracker.swift.incoming TeamTimeTracker_\(safeVer).swift
-            # Compile (real .swift extension so swiftc recognizes it)
-            if swiftc -O -o TeamTimeTracker.new TeamTimeTracker_\(safeVer).swift \
-                 -framework Cocoa -framework CoreGraphics -framework IOKit -framework WebKit 2>/tmp/teamtracker-build.log; then
-                # Compile OK — install the new source as the canonical file
-                mv -f TeamTimeTracker_\(safeVer).swift TeamTimeTracker.swift
-                mv -f TeamTimeTracker.new TeamTimeTracker
-                chmod +x TeamTimeTracker
-                cp -f TeamTimeTracker ~/Applications/TeamTimeTracker.app/Contents/MacOS/TeamTimeTracker
-                # Launch the updated bundle; LaunchAgent will also restart us
-                open ~/Applications/TeamTimeTracker.app || true
-                echo "UPDATE_OK version=\(version)" >> /tmp/teamtracker.log
-            else
-                # Compile failed — restore rollback, log, bail out (do NOT loop)
-                mv -f TeamTimeTracker.swift.bak TeamTimeTracker.swift 2>/dev/null || true
-                rm -f TeamTimeTracker_\(safeVer).swift TeamTimeTracker.new
-                echo "UPDATE_FAIL version=\(version) see /tmp/teamtracker-build.log" >> /tmp/teamtracker.log
-                exit 2
-            fi
-            """
-            let task = Process()
-            task.launchPath = "/bin/bash"
-            task.arguments = ["-c", script]
-            task.terminationHandler = { process in
-                DispatchQueue.main.async {
-                    if process.terminationStatus == 0 {
-                        NSApp.terminate(nil)
-                    } else {
-                        // Compile failed — stay up, let user know
-                        self.showUpdateFailedDialog(version: version)
+                for entry in entries {
+                    var raw = entry
+                    var resetMode = false
+                    if raw.lowercased().hasPrefix("reset:") {
+                        raw = String(raw.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                        resetMode = true
+                    }
+                    if raw.lowercased() == myName {
+                        if resetMode {
+                            self.sendToJS("onForceReset", payload: ["mode": "reset"])
+                        } else {
+                            DispatchQueue.main.async { self.reloadFromRender() }
+                        }
+                        self.postToApi(action: "clearForceReset",
+                                       payload: ["user": NSFullUserName()]) { _ in }
+                        break
                     }
                 }
             }
-            try? task.run()
-        }.resume()
-    }
-
-    func showUpdateFailedDialog(version: String) {
-        let alert = NSAlert()
-        alert.messageText = "Update failed"
-        alert.informativeText = "Could not install v\(version). The app will keep running on v\(APP_VERSION).\n\nDetails: /tmp/teamtracker-build.log"
-        alert.addButton(withTitle: "OK")
-        alert.alertStyle = .warning
-        alert.icon = NSApp.applicationIconImage
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+            self.sendToJS("onConfig", payload: cfg)
+        }
     }
 }
 

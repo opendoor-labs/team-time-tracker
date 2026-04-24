@@ -3314,13 +3314,71 @@ function handleNativeUnlock(_durationSec) {
 function handleNativeIdleTick(seconds) {
   // Drive the 5-min idle metric from real input idle (CGEventSource)
   if (typeof seconds !== 'number') return;
-  state.idleStreakSec = Math.floor(seconds);
+  const prevIdle = state.idleStreakSec || 0;
+  const curIdle  = Math.floor(seconds);
+  state.idleStreakSec = curIdle;
   if (typeof updateIdleBanner === 'function') updateIdleBanner();
+
+  // ── Idle-triggered Auto-Break ─────────────────────────────────────────
+  // If the user has been idle (no keyboard/mouse) for ≥ MAC_LOCK_BREAK_SEC
+  // while in Production AND Mac isn't already reporting locked, auto-mark
+  // them as Auto-Break. Mirrors the Mac-lock path but for "user walked away
+  // without locking the Mac" (happens a lot at lunch).
+  const THRESH = RULES.MAC_LOCK_BREAK_SEC || 900;
+  if (!state.macLocked &&
+      state.activity === 'production' &&
+      curIdle >= THRESH) {
+    // Mark the auto-break with reason=idle so we can show the right
+    // welcome-back message when the user returns
+    state._autoBreakIdleStart = state._autoBreakIdleStart || (Date.now() - curIdle * 1000);
+    state.breakStartedAt = state._autoBreakIdleStart;
+    state.autoBreakReason = 'idle';
+    if (typeof triggerAutoBreak === 'function') triggerAutoBreak();
+  }
+
+  // ── Return from idle auto-break → Welcome Back ─────────────────────────
+  // User was on auto-break (from idle), came back and moved mouse/keyboard.
+  // Detect the transition: previously far-idle, now essentially active.
+  if (state.activity === 'break' &&
+      state.autoBreak &&
+      state.autoBreakReason === 'idle' &&
+      prevIdle >= THRESH &&
+      curIdle < 30) {
+    const awayMs = (state._autoBreakIdleStart ? Date.now() - state._autoBreakIdleStart : curIdle * 1000);
+    state._autoBreakIdleStart = null;
+    if (typeof showIdleAutoBreakWelcome === 'function') {
+      showIdleAutoBreakWelcome(awayMs);
+    } else if (typeof showUnlockWelcome === 'function') {
+      showUnlockWelcome(awayMs);
+    }
+  }
 }
-function handleForceReset() {
-  try { localStorage.clear(); } catch(e){}
-  toast('🔄', 'Reset by Team Lead — please Start Your Day');
-  setTimeout(() => { location.reload(); }, 1200);
+
+// Welcome modal for idle-triggered auto-break (user walked away without
+// locking the Mac). Same modal, different copy so the user knows why.
+function showIdleAutoBreakWelcome(awayMs) {
+  const el = document.getElementById('welcomeModal'); if (!el) return;
+  const firstName = (state.user || '').split(' ')[0] || 'there';
+  document.getElementById('welcomeTitle').textContent = `Welcome back, ${firstName}!`;
+  document.getElementById('welcomeKind').textContent = '💤 Auto-break ended';
+  document.getElementById('welcomeSub').innerHTML =
+    `You were away for <b>${fmtDurationShort(awayMs)}</b>, so we marked an <b>Auto-Break</b>. ` +
+    `Ready to resume Production?`;
+  el.classList.add('show');
+}
+
+// Config!B3 force-reset. Swift sends { mode: 'reset' } for RESET:name
+// entries and nothing (or mode:'silent') for plain-name entries. Plain
+// name = silent reload of the HTML (handled in Swift, nothing to do here).
+// RESET: prefix = clear localStorage + reload so user starts fresh.
+function handleForceReset(data) {
+  const mode = (data && data.mode) || 'reset';
+  if (mode === 'reset') {
+    try { localStorage.clear(); } catch(e){}
+    toast('🔄', 'Reset by Team Lead — please Start Your Day');
+    setTimeout(() => { location.reload(); }, 1200);
+  }
+  // mode === 'silent' → Swift handles the HTML reload, no-op here.
 }
 function handleConfig(cfg) {
   // cfg: { version, sourceUrl, forceReset, maintenance, globalEnabled }
