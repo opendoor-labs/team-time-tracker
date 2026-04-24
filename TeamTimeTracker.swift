@@ -36,7 +36,7 @@ let IDLE_TICK_INTERVAL: TimeInterval = 5
 
 // ── App Delegate ───────────────────────────────────────────────────────
 class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
-                   WKNavigationDelegate, NSWindowDelegate {
+                   WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     var window: NSWindow!
     var webView: WKWebView!
     var statusItem: NSStatusItem!
@@ -176,6 +176,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
         webView = WKWebView(frame: window.contentView!.bounds, configuration: cfg)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
         window.contentView?.addSubview(webView)
     }
@@ -184,6 +185,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
         return false
+    }
+
+    // ── WKUIDelegate: <input type="file"> → native macOS file picker ────
+    // WKWebView on macOS does NOT show a file picker by default. Without
+    // this delegate method, clicking <input type="file"> silently does
+    // nothing. The Listings team's "📎 Attach Screenshots" button needs
+    // this to spawn an NSOpenPanel.
+    func webView(_ webView: WKWebView,
+                 runOpenPanel parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.allowedFileTypes = ["png", "jpg", "jpeg"]
+        // Bring the app forward so the panel doesn't appear behind the window.
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { result in
+            completionHandler(result == .OK ? panel.urls : nil)
+        }
     }
 
     // ── HTML loading (local cache + Render fetch) ──────────────────────
