@@ -3737,12 +3737,19 @@ async function confirmEndShiftFinal() {
           }
         }
       } catch(e) { console.warn('[eod] restore failed', e); }
-      // Fallback greet if no persisted summary was found
+      // No saved summary (e.g. End Shift happened on an older build):
+      // hide the empty stats card so we never show blank dashes.
       if (!restored) {
         const greetEl = document.getElementById('endOfDayGreet');
         if (greetEl) {
           const firstName = (state.user || '').split(/\s+/)[0] || 'you';
           greetEl.textContent = `Shift ended — see you tomorrow, ${firstName}!`;
+        }
+        // Find the "Your day at a glance" card inside endOfDayScreen and hide it
+        const eodScreen = document.getElementById('endOfDayScreen');
+        if (eodScreen) {
+          const card = eodScreen.querySelector('.quote-card');
+          if (card) card.style.display = 'none';
         }
       }
       return;  // skip the restoreSnapshot path entirely
