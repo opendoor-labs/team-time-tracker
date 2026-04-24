@@ -1951,23 +1951,53 @@ function _readUserArchiveRange_(team, user, fromDate, toDate) {
 }
 
 // Read Sessions rows for user in date range. Sessions col A=Name, B=Date.
+// Returns rows AND a parallel display array for col C (Start) + col D (End)
+// so the caller can compute wall-clock shift duration (Mac-app util formula).
 function _readUserSessionsRange_(ss, user, fromDate, toDate) {
   var sh = ss.getSheetByName('Sessions');
-  if (!sh) return { header: [], rows: [] };
+  if (!sh) return { header: [], rows: [], startEnd: [] };
   var rng = sh.getDataRange();
   var vals = rng.getValues();
-  var disp = rng.getDisplayValues();  // col B date as displayed ("2026-04-24")
+  var disp = rng.getDisplayValues();
   var header = vals.shift() || [];
-  disp.shift();                       // drop header from display array too
+  disp.shift();
   var userLc = String(user || '').toLowerCase().trim();
   var rows = [];
+  var startEnd = [];
   for (var i = 0; i < vals.length; i++) {
     var n = String(vals[i][0] || '').toLowerCase().trim();
     if (n !== userLc) continue;
     var d = String(disp[i][1] || '').slice(0, 10);
-    if (d >= fromDate && d <= toDate) rows.push(vals[i]);
+    if (d >= fromDate && d <= toDate) {
+      rows.push(vals[i]);
+      startEnd.push([ String(disp[i][2] || ''), String(disp[i][3] || '') ]);
+    }
   }
-  return { header: header, rows: rows };
+  return { header: header, rows: rows, startEnd: startEnd };
+}
+
+// Compute wall-clock minutes between two IST "HH:mm:ss" strings.
+// If end < start, assumes the shift crossed IST midnight and adds 24h.
+// Returns 0 if either is missing/unparseable.
+function _shiftDurationMin_(startStr, endStr) {
+  function toSec(s) {
+    var m = String(s || '').match(/^(\d{1,2}):(\d{2}):(\d{2})/);
+    if (!m) return -1;
+    return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+  }
+  var st = toSec(startStr);
+  var en = toSec(endStr);
+  if (st < 0 || en < 0) return 0;
+  var diff = en - st;
+  if (diff < 0) diff += 86400; // overnight
+  return Math.round(diff / 60);
+}
+
+// Current IST time as seconds-since-midnight.
+function _nowIstSec_() {
+  var t = Utilities.formatDate(new Date(), TZ, 'HH:mm:ss');
+  var m = t.match(/^(\d{2}):(\d{2}):(\d{2})/);
+  return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : 0;
 }
 
 // Read Attendance for user in date range. Cols A=Date, B=User, C=Team, D=Status.
@@ -2032,7 +2062,13 @@ function myStats_(ss, p) {
   var sess = _readUserSessionsRange_(ss, user, fromDate, toDate);
   // Schema: A=Name B=Date C=Start D=End E=Production F=Break G=Dinner
   //         H=Meeting I=Training J=Idle K=BreakExceeded
-  var totals = { production: 0, break_: 0, dinner: 0, meeting: 0, training: 0, idle: 0, shifts: 0 };
+  //
+  // shiftMin = wall-clock minutes between Start and End per row. Summed
+  // across all shifts, it forms the Mac-app utilisation denominator
+  // (Utilization = Productive ÷ logged-in time). Falls back to activity-
+  // sum only if wall-clock duration can't be computed for any row.
+  var totals = { production: 0, break_: 0, dinner: 0, meeting: 0, training: 0, idle: 0, shifts: 0, shiftMin: 0 };
+  var missedAnyShiftMin = false;
   for (var i = 0; i < sess.rows.length; i++) {
     var r = sess.rows[i];
     totals.shifts += 1;
@@ -2042,6 +2078,10 @@ function myStats_(ss, p) {
     totals.meeting    += Number(r[7]) || 0;
     totals.training   += Number(r[8]) || 0;
     totals.idle       += Number(r[9]) || 0;
+    var se = sess.startEnd && sess.startEnd[i];
+    var dur = se ? _shiftDurationMin_(se[0], se[1]) : 0;
+    if (dur > 0) totals.shiftMin += dur;
+    else         missedAnyShiftMin = true;
   }
 
   // If the selected range INCLUDES today and the user has an active Live
@@ -2064,13 +2104,29 @@ function myStats_(ss, p) {
         totals.production += live.prodMin;
         totals.break_     += live.breakMin;
         totals.idle       += live.idleMin;
+        // live.shiftStartAt format: "YYYY-MM-DD HH:mm:ss" (IST wall clock)
+        var startTimePart = String(live.shiftStartAt).slice(11, 19);
+        var stSec = startTimePart.match(/^(\d{2}):(\d{2}):(\d{2})/);
+        if (stSec) {
+          var startSec = (+stSec[1]) * 3600 + (+stSec[2]) * 60 + (+stSec[3]);
+          var nowSec   = _nowIstSec_();
+          var diff     = nowSec - startSec;
+          if (diff < 0) diff += 86400;
+          totals.shiftMin += Math.round(diff / 60);
+        } else {
+          missedAnyShiftMin = true;
+        }
         liveMerged = true;
       }
     }
   }
 
   var productiveMin = totals.production + totals.meeting + totals.training;
-  var denomMin      = productiveMin + totals.break_ + totals.dinner + totals.idle;
+  // Prefer Mac-app formula (productive ÷ wall-clock shift time). Fall back
+  // to activity-sum denominator only if we couldn't compute shift duration
+  // for ALL rows (corrupt/empty Start or End cells).
+  var activitySum   = productiveMin + totals.break_ + totals.dinner + totals.idle;
+  var denomMin      = (totals.shiftMin > 0 && !missedAnyShiftMin) ? totals.shiftMin : activitySum;
   var utilization   = denomMin > 0 ? Math.round((productiveMin / denomMin) * 100) : 0;
 
   // Attendance — build set of teams the user touched in range
