@@ -1948,12 +1948,59 @@
     const start = new Date(d.getFullYear(), 0, 0);
     return Math.floor((d - start) / 86400000);
   }
-  function renderDailyQuote() {
-    const q = LEADERSHIP_QUOTES[dayOfYear(new Date()) % LEADERSHIP_QUOTES.length];
+  // Leadership quote — pulls a fresh one from ZenQuotes / Quotable (thousands
+  // of quotes, won't repeat for months). Cached per-date so it's stable
+  // throughout the day and rotates at midnight. Falls back to LEADERSHIP_QUOTES[]
+  // if the network is down.
+  async function renderDailyQuote() {
     const qt = $('quoteText');
     const qa = $('quoteAuthor');
-    if (qt) qt.textContent = `"${q.q}"`;
-    if (qa) qa.textContent = `— ${q.a}`;
+    if (!qt || !qa) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const cacheKey = 'tlQuoteOfDay_' + today;
+
+    // 1) Cached for today?
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const q = JSON.parse(cached);
+        qt.textContent = `"${q.q}"`;
+        qa.textContent = `— ${q.a}`;
+        return;
+      }
+    } catch (_) {}
+
+    // 2) Try ZenQuotes → Quotable.
+    const sources = [
+      { url: 'https://zenquotes.io/api/today',
+        parse: (j) => Array.isArray(j) && j[0] ? { q: j[0].q, a: j[0].a } : null },
+      { url: 'https://api.quotable.io/random?tags=leadership|business|success|wisdom|famous-quotes&maxLength=180',
+        parse: (j) => j && j.content ? { q: j.content, a: j.author } : null },
+    ];
+    for (const src of sources) {
+      try {
+        const res = await fetch(src.url, { cache: 'no-store' });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const parsed = src.parse(data);
+        if (!parsed || !parsed.q) continue;
+        localStorage.setItem(cacheKey, JSON.stringify(parsed));
+        // Sweep old keys so localStorage doesn't grow forever.
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('tlQuoteOfDay_') && k !== cacheKey) localStorage.removeItem(k);
+        }
+        qt.textContent = `"${parsed.q}"`;
+        qa.textContent = `— ${parsed.a}`;
+        return;
+      } catch (_) { /* try next */ }
+    }
+
+    // 3) Offline / all APIs failed → bundled fallback.
+    const q = LEADERSHIP_QUOTES[dayOfYear(new Date()) % LEADERSHIP_QUOTES.length];
+    qt.textContent = `"${q.q}"`;
+    qa.textContent = `— ${q.a}`;
   }
   function renderGreeting() {
     const hr = new Date().getHours();
