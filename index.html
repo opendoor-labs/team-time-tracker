@@ -739,11 +739,18 @@
     transition: background 0.12s ease, border-color 0.12s ease;
   }
   .attach-btn:hover { background: rgba(10,132,255,0.12); border-color: rgba(91,140,255,0.85); }
-  /* Hide the actual <input type="file"> off-screen — the <label> above is the
-     click target. Don't use display:none / visibility:hidden — those cause
-     WKWebView to ignore the click. Position-off-screen keeps it accessible. */
-  .attach-input-hidden {
-    position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0;
+  /* The <label> is positioned relative; the <input> overlays it, fully
+     transparent + cursor pointer, so every click on the styled label is
+     a direct gesture on the real <input type="file">. This is the only
+     pattern WKWebView's runOpenPanel reliably honors. */
+  .attach-btn { position: relative; overflow: hidden; }
+  .attach-input-overlay {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    opacity: 0; cursor: pointer;
+    /* The button's emoji/text sits in a <span> below this in z-order;
+       the input is on top so it catches clicks. */
+    z-index: 2;
   }
   .attach-hint { font-size: 11px; color: rgba(255,255,255,0.4); line-height: 1.4; }
   .attach-list {
@@ -2812,16 +2819,20 @@ function renderForm(teamKey) {
     } else if (f.type === 'attachments') {
       const accept = f.accept || 'image/*';
       const hint = f.hint || 'Attach files for this task';
-      // WKWebView quirk: programmatic .click() on a hidden file input is
-      // unreliable for triggering runOpenPanel. Wrapping the input in a
-      // <label> makes the label itself the click target — macOS treats this
-      // as a direct user gesture on the input and reliably opens the panel.
+      // WKWebView quirk: runOpenPanel only fires reliably when the click
+      // lands DIRECTLY on the <input type="file">. Programmatic .click()
+      // and even <label for="..."> with off-screen input can fail silently.
+      // Most reliable: nest the input INSIDE the label, make the input
+      // cover the label area but be invisible — every click on the
+      // pretty-styled label hits the real input.
       html += `
         <div class="attach-wrap">
-          <label class="attach-btn" for="attachInput_${i}">📎 Attach Screenshots</label>
-          <input type="file" data-field="${f.label}" multiple accept="${accept}"
-                 id="attachInput_${i}" class="attach-input-hidden"
-                 onchange="handleAttachChange(this, '${f.label}')" />
+          <label class="attach-btn">
+            <span>📎 Attach Screenshots</span>
+            <input type="file" data-field="${f.label}" multiple accept="${accept}"
+                   id="attachInput_${i}" class="attach-input-overlay"
+                   onchange="handleAttachChange(this, '${f.label}')" />
+          </label>
           <div class="attach-hint">${hint}</div>
           <div class="attach-list" id="attachList_${f.label.replace(/[^a-zA-Z0-9]/g,'_')}"></div>
         </div>
