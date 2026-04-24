@@ -167,6 +167,11 @@ function logTask_(ss, b) {
   var sh = ss.getSheetByName(tab);
   if (!sh) return { ok: false, error: 'tab missing: ' + tab };
 
+  // Force col A (Timestamp) to plain text so Sheets stops coercing
+  // "2026-04-24 20:52:21" into a Date object that serializes as
+  // "Sat Apr 25 2026 02:22:21 GMT+0530" on read.
+  try { sh.getRange('A:A').setNumberFormat('@'); } catch (e) {}
+
   var data   = b.data || {};
   var durSec = Math.round((b.durationMs || 0) / 1000);
   var durStr = fmtDur_(durSec);
@@ -334,8 +339,9 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
     // interval (so heartbeat_ never had a chance to write J).
     var endMs   = Date.now();
     var startMs = endMs - (Number(durSec) || 0) * 1000;
-    var taskStartedStr = Utilities.formatDate(new Date(startMs), TZ, 'yyyy-MM-dd HH:mm:ss');
-    var taskEndedStr   = Utilities.formatDate(new Date(endMs),   TZ, 'yyyy-MM-dd HH:mm:ss');
+    // PST calendar date + IST clock time (consistent with UpdatedAt format).
+    var taskStartedStr = pstDateIstTimeFromMs_(startMs);
+    var taskEndedStr   = pstDateIstTimeFromMs_(endMs);
     // New schema (col 1-based):
     //   A=ShiftStartAt B=User C=HomeTeam D=Team E=Activity F=TasksDone
     //   G=ProdMin H=BreakMin I=IdleMin J=TaskStartedAt K=TaskEndedAt L=UpdatedAt
@@ -371,6 +377,10 @@ function markAttendance_(ss, b) {
   return _withLock_(function () {
     var sh = ss.getSheetByName('Attendance');
     if (!sh) return { ok: false, error: 'Attendance missing' };
+    // Force col A (Date) + col E (MarkedAt) to plain text so Sheets stops
+    // auto-converting "2026-04-24" and "20:52:21" into Date/time objects.
+    // Idempotent — setting the format each call is cheap and self-healing.
+    try { sh.getRange('A:A').setNumberFormat('@'); sh.getRange('E:E').setNumberFormat('@'); } catch (e) {}
     // Date = PST (stable across midnight IST); Timestamp = IST clock time
     var today = todayPST_();
     var stamp = timeIST_();
@@ -399,6 +409,14 @@ function closeSession_(ss, b) {
   return _withLock_(function () {
     var sh = ss.getSheetByName('Sessions');
     if (!sh) return { ok: false, error: 'Sessions missing' };
+    // Force Date (B) + Start (C) + End (D) cols to plain text so Sheets
+    // stops auto-converting the strings into Date/time objects that
+    // serialize as "Sat Apr 25 2026 02:22:21 GMT+0530" on read.
+    try {
+      sh.getRange('B:B').setNumberFormat('@');
+      sh.getRange('C:C').setNumberFormat('@');
+      sh.getRange('D:D').setNumberFormat('@');
+    } catch (e) {}
     // Date in PST (so a late-night IST shift stays on one date row)
     // Times in IST (so the team reads start/end in their own clock)
     var today = todayPST_();
@@ -462,6 +480,77 @@ function fixSessionsFormat() {
   }
   rng.setValues(vals);
   return { ok: true, reformattedCols: 'E:K', rowsScanned: vals.length, cellsCleaned: cleaned };
+}
+
+// One-shot cleanup: converts every existing date cell in Attendance,
+// Sessions, and all team logs from Date objects back to plain "YYYY-MM-DD"
+// (or "YYYY-MM-DD HH:mm:ss") strings, and locks those columns to plain
+// text so Sheets stops re-coercing them. Run ONCE from the editor after
+// deploying the format fixes.
+function fixAllDateColumnsToText() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var report = { attendance: 0, sessions: 0, teamLogs: {}, errors: [] };
+  var SS_TZ = ss.getSpreadsheetTimeZone() || 'Asia/Calcutta';
+
+  function rewriteCol(sh, colIdx1Based, withTime) {
+    if (!sh) return 0;
+    var lr = sh.getLastRow();
+    if (lr < 2) return 0;
+    var rng = sh.getRange(2, colIdx1Based, lr - 1, 1);
+    rng.setNumberFormat('@');
+    var vals = rng.getValues();
+    var disp = rng.getDisplayValues();  // pre-coerce display as fallback
+    var cleaned = 0;
+    for (var i = 0; i < vals.length; i++) {
+      var v = vals[i][0];
+      if (v instanceof Date) {
+        // Write the PST-date + (optionally IST-time) string based on the date's PST moment
+        var s = withTime
+          ? (Utilities.formatDate(v, 'America/Los_Angeles', 'yyyy-MM-dd') + ' ' +
+             Utilities.formatDate(v, TZ,                    'HH:mm:ss'))
+          :  Utilities.formatDate(v, 'America/Los_Angeles', 'yyyy-MM-dd');
+        vals[i][0] = s;
+        cleaned++;
+      } else if (typeof v === 'string') {
+        // Trim/trust existing strings
+        vals[i][0] = v;
+      } else if (v === '' || v == null) {
+        vals[i][0] = '';
+      } else {
+        // Fall back to whatever Sheets shows
+        vals[i][0] = String(disp[i][0] || '');
+        cleaned++;
+      }
+    }
+    rng.setValues(vals);
+    return cleaned;
+  }
+
+  try {
+    var att = ss.getSheetByName('Attendance');
+    if (att) report.attendance = rewriteCol(att, 1, false);  // col A = Date
+
+    var sess = ss.getSheetByName('Sessions');
+    if (sess) {
+      // Sessions col B = Date (no time), C = Start, D = End
+      report.sessions = rewriteCol(sess, 2, false) +
+                        rewriteCol(sess, 3, false) +
+                        rewriteCol(sess, 4, false);
+    }
+
+    // All team logs: col A = Timestamp (PST date + IST time)
+    Object.keys(TEAM_TO_TAB).forEach(function (team) {
+      var sh = ss.getSheetByName(TEAM_TO_TAB[team]);
+      if (!sh) return;
+      try { report.teamLogs[team] = rewriteCol(sh, 1, true); }
+      catch (e) { report.errors.push(team + ': ' + e); }
+    });
+  } catch (err) {
+    report.errors.push(String(err));
+  }
+
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
 }
 
 // Companion cleanup for the Live tab. Sets col J (TaskStartedAt) format to
@@ -588,7 +677,7 @@ function heartbeat_(ss, b) {
       // If omitted, preserve the existing value so TLs keep seeing the
       // LAST task's start time (paired with TaskEndedAt for span reading).
       b.taskStartedAt
-        ? Utilities.formatDate(new Date(Number(b.taskStartedAt)), TZ, 'yyyy-MM-dd HH:mm:ss')
+        ? pstDateIstTimeFromMs_(Number(b.taskStartedAt))
         : existingTaskStarted,
       existingTaskEndedAt,                                    // K TaskEndedAt (preserved; only _bumpLiveAfterTask_ writes it)
       nowPSTdateISTtime_()                                    // L UpdatedAt
@@ -1002,6 +1091,13 @@ function timeIST_()  { return Utilities.formatDate(new Date(), TZ, 'HH:mm:ss'); 
 function todayPST_() { return Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd'); }
 // Hybrid: PST calendar date + IST clock time, e.g. "2026-04-22 19:30:45"
 function nowPSTdateISTtime_() { return todayPST_() + ' ' + timeIST_(); }
+// Same hybrid but for any arbitrary epoch-ms (used for TaskStartedAt/TaskEndedAt).
+function pstDateIstTimeFromMs_(ms) {
+  var d = new Date(Number(ms));
+  if (isNaN(d.getTime())) return '';
+  return Utilities.formatDate(d, 'America/Los_Angeles', 'yyyy-MM-dd') + ' ' +
+         Utilities.formatDate(d, TZ,                     'HH:mm:ss');
+}
 
 // Coerce a Sheets cell value to a "yyyy-MM-dd" string.
 // Google Sheets auto-converts date-like strings (e.g. "2026-04-24") written via
