@@ -544,38 +544,45 @@
 
   /* Admin broadcast banner — driven by Config!B6 in the Google Sheet.
      Whatever text the admin types in B6 shows up at the very top of the
-     tracker window for all 115 users within one config-poll cycle (~2 min). */
+     tracker window for all 115 users within one config-poll cycle (~2 min).
+     Padded top 38px so the content sits below the native macOS title bar
+     (Swift uses titlebarAppearsTransparent + fullSizeContentView, which
+     otherwise overlaps the top ~28 px of the webview). */
   .admin-banner {
     display: none;
+    position: relative;
+    z-index: 9000;
     margin: 0;
-    padding: 10px 18px;
-    background: linear-gradient(135deg, #3a2a0b, #5c3d0f);
-    border-bottom: 1px solid #c49a3a;
-    color: #ffd88a;
-    font-size: 13px;
-    line-height: 1.35;
+    padding: 38px 20px 12px;
+    background: linear-gradient(135deg, #c49a3a, #e0b456);
+    border-bottom: 2px solid #8a6a1f;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    color: #1a1a1a;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
   }
   .admin-banner.show { display: flex; }
   .admin-banner .admin-icon {
-    font-size: 16px;
+    font-size: 18px;
     line-height: 1;
   }
-  .admin-banner .admin-text { flex: 1; }
-  .admin-banner .admin-text b { color: #ffe9b0; }
+  .admin-banner .admin-text { flex: 1; color: #1a1a1a; }
+  .admin-banner .admin-text b { color: #000; }
   .admin-banner .admin-dismiss {
-    background: transparent;
-    color: #ffd88a;
-    border: 1px solid rgba(255,216,138,0.4);
+    background: rgba(0,0,0,0.15);
+    color: #1a1a1a;
+    border: 1px solid rgba(0,0,0,0.3);
     border-radius: 6px;
-    padding: 3px 10px;
-    font-size: 11px;
-    font-weight: 600;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 700;
     cursor: pointer;
   }
   .admin-banner .admin-dismiss:hover {
-    background: rgba(255,216,138,0.15);
+    background: rgba(0,0,0,0.25);
   }
 
   /* Task picker */
@@ -2103,6 +2110,17 @@ function restoreSnapshot(reason) {
   // Only restore if the user was actively working (not on start/leave/weekoff)
   if (snap.screen !== 'trackerScreen') { clearSnapshot(); return false; }
 
+  // Defense-in-depth: if this shift is already marked ended for today,
+  // don't resurrect the timer no matter what the snapshot says. This
+  // protects against any stale snapshot that slipped through before
+  // stopClock() kicked in during End Shift.
+  try {
+    const endedFor = localStorage.getItem('ttk_shiftEnded') || '';
+    const today = new Date().toISOString().slice(0, 10);
+    if (endedFor === today) { clearSnapshot(); return false; }
+  } catch(e){}
+  if (snap.state && snap.state.shiftEnded) { clearSnapshot(); return false; }
+
   try {
     // 1. Re-hydrate state (merge so new fields added in newer version aren't lost)
     Object.assign(state, snap.state);
@@ -3568,7 +3586,12 @@ function confirmEndShift() {
 
 async function confirmEndShiftFinal() {
   closeModal('endShiftConfirmModal');
-  // Stop all timers
+  // Stop all timers — including the per-200ms clock tick whose only job
+  // is to update counters + save snapshots. If we don't stop it here, it
+  // keeps running and re-writes the snapshot (with shiftEnded=true but
+  // screen='trackerScreen') AFTER clearSnapshot() below, which is what
+  // caused the "Timer resumed…" ghost on next launch.
+  if (typeof stopClock === 'function') stopClock();
   stopIdle();
   if (typeof stopTaskTimer === 'function') stopTaskTimer();
   state.shiftActive = false;
@@ -3612,9 +3635,17 @@ async function confirmEndShiftFinal() {
     </div>
   `;
 
-  // Swap to end-of-day screen
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
-  document.getElementById('endOfDayScreen').classList.add('show');
+  // Swap to end-of-day screen. IMPORTANT: use showScreen() (not raw DOM)
+  // so state.screen updates to 'endOfDayScreen'. If any stray save happens
+  // after this point, restoreSnapshot() will correctly refuse to revive
+  // because the saved screen is no longer 'trackerScreen'.
+  if (typeof showScreen === 'function') {
+    showScreen('endOfDayScreen');
+  } else {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
+    document.getElementById('endOfDayScreen').classList.add('show');
+    state.screen = 'endOfDayScreen';
+  }
 
   // Persist so app won't re-prompt Start Your Day until tomorrow
   try {
@@ -3662,13 +3693,27 @@ async function confirmEndShiftFinal() {
   if (sd) sd.style.display = 'none';
 
   // ── Auto-restore on launch ─────────────────────────────────────────
-  // If a fresh snapshot exists and the user was on the tracker screen
-  // when it saved, resume them seamlessly. Covers: force-quit, crash,
-  // laptop-closed-reopened, normal relaunch. Post-update relaunch is
-  // covered separately by onPostUpdate (fires ~2s after load), but
-  // calling restoreSnapshot here first means the user never sees the
-  // "Start Your Day" screen flash at all.
+  // Priority 1: if today's shift already ended, go straight to the
+  //             end-of-day screen — don't show Start Your Day OR
+  //             resume the tracker.
+  // Priority 2: if a fresh snapshot exists and the user was on the
+  //             tracker screen when it saved, resume them seamlessly.
+  // Covers: force-quit, crash, laptop-closed-reopened, normal relaunch.
   try {
+    const endedFor = localStorage.getItem('ttk_shiftEnded') || '';
+    const today = new Date().toISOString().slice(0, 10);
+    if (endedFor === today) {
+      // Make sure no stale snapshot tries to override this later
+      if (typeof clearSnapshot === 'function') clearSnapshot();
+      if (typeof showScreen === 'function') showScreen('endOfDayScreen');
+      // If the screen needs a greet/date re-seed on relaunch:
+      const greetEl = document.getElementById('endOfDayGreet');
+      if (greetEl) {
+        const firstName = (state.user || '').split(/\s+/)[0] || 'you';
+        greetEl.textContent = `Shift ended — see you tomorrow, ${firstName}!`;
+      }
+      return;  // skip the restoreSnapshot path entirely
+    }
     if (typeof restoreSnapshot === 'function') restoreSnapshot('relaunch');
   } catch (e) { console.warn('[snapshot] boot-restore failed', e); }
 })();
