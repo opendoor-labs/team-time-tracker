@@ -1521,8 +1521,20 @@ function readArchiveLog_(team, date) {
     var lastCol = sh.getLastColumn();
     if (lastRow < 2) return { ok: true, header: [], rows: [] };
     var header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
-    var values = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
-    var rows = values.filter(function (r) { return String(r[0]).slice(0, 10) === date; });
+    var rng    = sh.getRange(2, 1, lastRow - 1, lastCol);
+    var values = rng.getValues();
+    // Archive sheets aren't format-locked, so col A often holds Date
+    // objects. Use getDisplayValues() for date filtering AND overwrite
+    // col A with the display string so JSON → dashboard gets a clean
+    // "2026-04-24 20:52:36" instead of an ISO-UTC Date serialisation.
+    var disp = rng.getDisplayValues();
+    var rows = [];
+    for (var i = 0; i < values.length; i++) {
+      var d = String(disp[i][0] || '').slice(0, 10);
+      if (d !== date) continue;
+      values[i][0] = String(disp[i][0] || '');
+      rows.push(values[i]);
+    }
     var result = { ok: true, header: header, rows: rows, source: 'archive', file: baseName };
     // Cache 10 min — plenty for multiple TL hits on same date
     cache.put(key, JSON.stringify(result), 600);
@@ -1856,30 +1868,86 @@ function _readUserTeamLogRange_(ss, team, user, fromDate, toDate) {
   }
 
   // If the range includes past days, also pull from Drive archive
-  // (active sheet is trimmed daily to today only).
+  // (active sheet is trimmed daily to today only). Use the batch reader
+  // so a 30-day range opens each monthly file ONCE, not 30 times.
   var today = todayPST_();
   if (fromDate < today) {
-    var days = _dateRange_(fromDate, toDate);
-    var months = {};
-    days.forEach(function (d) {
-      if (d >= today) return;
-      months[d.slice(0, 7)] = true;
-    });
-    // Archive is organized by month; readArchiveLog_ caches by (team,date)
-    // but it's cheaper to loop per-day for small ranges.
-    days.forEach(function (d) {
-      if (d >= today) return;
-      var arch = readArchiveLog_(team, d);
-      if (arch && arch.ok && arch.rows && arch.rows.length) {
-        for (var j = 0; j < arch.rows.length; j++) {
-          var ru = String(arch.rows[j][1] || '').toLowerCase().trim();
-          if (ru === userLc) matched.push(arch.rows[j]);
-        }
-      }
-    });
+    var pastTo = toDate < today ? toDate : _prevDayPST_(today);
+    var arch = _readUserArchiveRange_(team, user, fromDate, pastTo);
+    if (arch.rows && arch.rows.length) {
+      for (var j = 0; j < arch.rows.length; j++) matched.push(arch.rows[j]);
+    }
+    if (!header.length && arch.header && arch.header.length) header = arch.header;
   }
 
   return { header: header, rows: matched };
+}
+
+// Returns "yyyy-MM-dd" for (ymd - 1 day). Used to derive the upper bound
+// of the archive-only portion of a range that includes today.
+function _prevDayPST_(ymd) {
+  var d = new Date(ymd + 'T12:00:00Z'); // noon to dodge DST/TZ edge cases
+  d.setTime(d.getTime() - 86400000);
+  return Utilities.formatDate(d, 'America/Los_Angeles', 'yyyy-MM-dd');
+}
+
+// Read a user's rows from a team's monthly Drive archive files across a
+// date range. Opens each month's archive spreadsheet at most ONCE — much
+// cheaper than readArchiveLog_ in a loop for week/month queries.
+// Uses CacheService for the filtered per-user slice (5-min TTL).
+function _readUserArchiveRange_(team, user, fromDate, toDate) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var cacheKey = 'archU:' + team + ':' + user + ':' + fromDate + ':' + toDate;
+    var hit = cache.get(cacheKey);
+    if (hit) return JSON.parse(hit);
+
+    var rootId = _getArchiveRootId_();
+    if (!rootId) return { header: [], rows: [] };
+    var root = DriveApp.getFolderById(rootId);
+    var folder = _findOrCreateChild_(root, _folderNameForTeam_(team));
+
+    // Build unique set of yyyy_mm months touched by [fromDate, toDate]
+    var months = {};
+    var days = _dateRange_(fromDate, toDate);
+    days.forEach(function (d) { months[d.slice(0, 7).replace('-', '_')] = true; });
+
+    var userLc = String(user || '').toLowerCase().trim();
+    var header = [];
+    var out = [];
+
+    Object.keys(months).forEach(function (yyyymm) {
+      var baseName = TEAM_TO_TAB[team].replace(/_Log$/, '') + '_Log_' + yyyymm;
+      var file = _findFileInFolder_(folder, baseName);
+      if (!file) return;
+      var archSs = SpreadsheetApp.openById(file.getId());
+      var sh = archSs.getSheets()[0];
+      var lastRow = sh.getLastRow();
+      var lastCol = sh.getLastColumn();
+      if (lastRow < 2) return;
+      if (!header.length) header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+
+      var rng    = sh.getRange(2, 1, lastRow - 1, lastCol);
+      var values = rng.getValues();
+      var disp   = rng.getDisplayValues();
+      for (var i = 0; i < values.length; i++) {
+        var d = String(disp[i][0] || '').slice(0, 10);
+        if (d < fromDate || d > toDate) continue;
+        var u = String(values[i][1] || '').toLowerCase().trim();
+        if (u !== userLc) continue;
+        values[i][0] = String(disp[i][0] || ''); // clean col A for JSON
+        out.push(values[i]);
+      }
+    });
+
+    var result = { header: header, rows: out };
+    // 5-min cache — covers a user refreshing their dashboard a few times
+    try { cache.put(cacheKey, JSON.stringify(result), 300); } catch (e) {}
+    return result;
+  } catch (err) {
+    Logger.log('_readUserArchiveRange_ failed: ' + err);
+    return { header: [], rows: [] };
+  }
 }
 
 // Read Sessions rows for user in date range. Sessions col A=Name, B=Date.
