@@ -325,6 +325,13 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
     var vals = sh.getDataRange().getValues();
     var addMin = Math.round((Number(durSec) || 0) / 60);
     var tsInc  = isSystem ? 0 : 1;   // system-auto tasks don't bump user's count
+    // Derive TaskStartedAt from now - durSec so cols J + K always form a
+    // matched pair, even when the task is shorter than the heartbeat
+    // interval (so heartbeat_ never had a chance to write J).
+    var endMs   = Date.now();
+    var startMs = endMs - (Number(durSec) || 0) * 1000;
+    var taskStartedStr = Utilities.formatDate(new Date(startMs), TZ, 'yyyy-MM-dd HH:mm:ss');
+    var taskEndedStr   = Utilities.formatDate(new Date(endMs),   TZ, 'yyyy-MM-dd HH:mm:ss');
     // New schema (col 1-based):
     //   A=ShiftStartAt B=User C=HomeTeam D=Team E=Activity F=TasksDone
     //   G=ProdMin H=BreakMin I=IdleMin J=TaskStartedAt K=TaskEndedAt L=UpdatedAt
@@ -338,11 +345,8 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
         sh.getRange(rowIdx, 5).setValue('production');          // E Activity
         sh.getRange(rowIdx, 6).setValue(tasksDone);             // F TasksDone
         sh.getRange(rowIdx, 7).setValue(prodMin);               // G ProdMin
-        // NOTE: do NOT clear TaskStartedAt here. We leave it showing the
-        // LAST task's start time so TLs see a full start/end pair for
-        // every completion. When the user opens the next task, the next
-        // heartbeat will overwrite TaskStartedAt with the new start.
-        sh.getRange(rowIdx, 11).setValue(istNow_());            // K TaskEndedAt
+        sh.getRange(rowIdx, 10).setValue(taskStartedStr);       // J TaskStartedAt (derived)
+        sh.getRange(rowIdx, 11).setValue(taskEndedStr);         // K TaskEndedAt
         sh.getRange(rowIdx, 12).setValue(nowPSTdateISTtime_()); // L UpdatedAt
         return { ok: true, rowIdx: rowIdx };
       }
@@ -351,7 +355,9 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
     // if the app missed firing shiftStart for some reason.
     sh.appendRow([
       istNow_(), user, canonHomeTeam, canonTeam, 'production',
-      tsInc, addMin, 0, 0, '', istNow_(), nowPSTdateISTtime_()
+      tsInc, addMin, 0, 0,
+      taskStartedStr, taskEndedStr,
+      nowPSTdateISTtime_()
     ]);
     return { ok: true, rowIdx: sh.getLastRow(), seeded: true };
   });
