@@ -542,6 +542,42 @@
     white-space: nowrap;
   }
 
+  /* Admin broadcast banner — driven by Config!B6 in the Google Sheet.
+     Whatever text the admin types in B6 shows up at the very top of the
+     tracker window for all 115 users within one config-poll cycle (~2 min). */
+  .admin-banner {
+    display: none;
+    margin: 0;
+    padding: 10px 18px;
+    background: linear-gradient(135deg, #3a2a0b, #5c3d0f);
+    border-bottom: 1px solid #c49a3a;
+    color: #ffd88a;
+    font-size: 13px;
+    line-height: 1.35;
+    align-items: center;
+    gap: 10px;
+  }
+  .admin-banner.show { display: flex; }
+  .admin-banner .admin-icon {
+    font-size: 16px;
+    line-height: 1;
+  }
+  .admin-banner .admin-text { flex: 1; }
+  .admin-banner .admin-text b { color: #ffe9b0; }
+  .admin-banner .admin-dismiss {
+    background: transparent;
+    color: #ffd88a;
+    border: 1px solid rgba(255,216,138,0.4);
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .admin-banner .admin-dismiss:hover {
+    background: rgba(255,216,138,0.15);
+  }
+
   /* Task picker */
   .task-row {
     padding: 16px 22px;
@@ -1442,6 +1478,14 @@
 </head>
 <body>
 
+<!-- Admin broadcast banner — populated from Config!B6 by handleConfig().
+     Hidden by default; shows with slide-in when admin sets B6. -->
+<div class="admin-banner" id="adminBanner">
+  <span class="admin-icon">📢</span>
+  <span class="admin-text" id="adminBannerText"></span>
+  <button class="admin-dismiss" onclick="dismissAdminBanner()">Dismiss</button>
+</div>
+
 <!-- ═══ macOS menu bar ═══ -->
 <div class="menubar">
   <span class="spacer"></span>
@@ -1922,6 +1966,49 @@ function nativeFire(op, payload) {
   if (!IS_NATIVE) return;
   window.webkit.messageHandlers.native.postMessage({ op, payload: payload || {} });
 }
+
+// ── Error telemetry ──────────────────────────────────────────────────
+// Every uncaught JS error and unhandled promise rejection is forwarded
+// to Swift, which POSTs to Apps Script action=logError → Errors tab.
+// Rate-limited: at most 1 duplicate error every 60s, at most 20 errors
+// per session, so a render loop can't spam the sheet.
+const _errorBudget = { sent: 0, seen: {}, max: 20, cooldownMs: 60000 };
+function logErrorToSheet(kind, message, context, stack) {
+  try {
+    if (_errorBudget.sent >= _errorBudget.max) return;
+    const key = kind + '|' + (message || '').slice(0, 120);
+    const now = Date.now();
+    if (_errorBudget.seen[key] && now - _errorBudget.seen[key] < _errorBudget.cooldownMs) return;
+    _errorBudget.seen[key] = now;
+    _errorBudget.sent++;
+    nativeFire('logError', {
+      user:    state && state.user ? state.user : '',
+      kind:    String(kind || 'error').slice(0, 40),
+      message: String(message || '').slice(0, 500),
+      context: String(context || location.href || '').slice(0, 200),
+      stack:   String(stack || '').slice(0, 1500)
+    });
+  } catch(e) { /* never let telemetry itself throw */ }
+}
+window.addEventListener('error', (ev) => {
+  logErrorToSheet(
+    'js_error',
+    ev.message,
+    (ev.filename || '') + ':' + (ev.lineno || 0) + ':' + (ev.colno || 0),
+    ev.error && ev.error.stack
+  );
+});
+window.addEventListener('unhandledrejection', (ev) => {
+  const reason = ev.reason || {};
+  logErrorToSheet(
+    'promise_rejection',
+    reason.message || String(reason),
+    '',
+    reason.stack
+  );
+});
+// Expose for manual reporting from elsewhere in the code
+window.logErrorToSheet = logErrorToSheet;
 window.onNativeReply = (requestId, data) => {
   const cb = _pendingReplies[requestId];
   if (cb) { delete _pendingReplies[requestId]; cb(data); }
@@ -3382,10 +3469,51 @@ function handleForceReset(data) {
   // mode === 'silent' → Swift handles the HTML reload, no-op here.
 }
 function handleConfig(cfg) {
-  // cfg: { version, sourceUrl, forceReset, maintenance, globalEnabled }
+  // cfg: { version, sourceUrl, forceReset, banner, killSwitch, maintenance }
   if (cfg && cfg.maintenance) {
     toast('🛠', 'Maintenance mode: ' + cfg.maintenance);
   }
+  // Admin broadcast banner — whatever text admin puts in Config!B6 shows up.
+  // Dismissal is per-message (keyed by banner text): once dismissed, the same
+  // text won't re-show, but any NEW text from B6 appears immediately.
+  renderAdminBanner(cfg && cfg.banner);
+}
+
+function renderAdminBanner(text) {
+  const el = document.getElementById('adminBanner');
+  const txt = document.getElementById('adminBannerText');
+  if (!el || !txt) return;
+  const msg = (text || '').trim();
+  if (!msg) {
+    el.classList.remove('show');
+    txt.textContent = '';
+    return;
+  }
+  let dismissedKey = '';
+  try { dismissedKey = localStorage.getItem('ttk_banner_dismissed') || ''; } catch(e){}
+  if (dismissedKey === msg) {
+    // Same message the user already dismissed — stay hidden.
+    el.classList.remove('show');
+    return;
+  }
+  txt.innerHTML = escapeHTML(msg);
+  el.classList.add('show');
+}
+
+function dismissAdminBanner() {
+  const el = document.getElementById('adminBanner');
+  const txt = document.getElementById('adminBannerText');
+  if (el) el.classList.remove('show');
+  try {
+    if (txt) localStorage.setItem('ttk_banner_dismissed', txt.textContent || '');
+  } catch(e){}
+}
+
+// Minimal HTML-escape so banner text can't break out of the DOM.
+function escapeHTML(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // ═══════════════════════════════════════════════════════════════════

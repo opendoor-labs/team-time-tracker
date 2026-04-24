@@ -211,8 +211,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
         guard let url = URL(string: HTML_URL) else { return }
         var req = URLRequest(url: url, timeoutInterval: HTML_REFRESH_TIMEOUT)
         req.cachePolicy = .reloadIgnoringLocalCacheData
-        URLSession.shared.dataTask(with: req) { data, _, _ in
-            guard let d = data, d.count > 10_000 else { return }
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
+            if let err = err {
+                self?.logSwiftError(kind: "html_fetch_error",
+                                    message: err.localizedDescription,
+                                    context: HTML_URL)
+                return
+            }
+            guard let d = data, d.count > 10_000 else {
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                let bytes = data?.count ?? 0
+                self?.logSwiftError(kind: "html_fetch_bad",
+                                    message: "status=\(code) bytes=\(bytes)",
+                                    context: HTML_URL)
+                return
+            }
             try? d.write(to: URL(fileURLWithPath: HTML_PATH))
         }.resume()
     }
@@ -333,6 +346,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
             postToApi(action: "idleAlert", payload: payload) { _ in }
         case "clearForceReset":
             postToApi(action: "clearForceReset", payload: payload) { _ in }
+        case "logError":
+            // Forward JS runtime errors to the Errors tab so Arun sees them
+            // before users report "app is broken". Source=js so native-side
+            // (Swift) errors from logSwiftError() come through as source=swift.
+            var p = payload
+            p["source"] = "js"
+            postToApi(action: "logError", payload: p) { _ in }
         case "getConfig":
             fetchConfig { cfg in self.reply(requestId, data: cfg) }
         case "openUrl":
@@ -363,6 +383,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
               let json = String(data: d, encoding: .utf8) else { return }
         let js = "if(window.onNativeReply){window.onNativeReply('\(rid)', \(json))}"
         DispatchQueue.main.async { self.webView.evaluateJavaScript(js, completionHandler: nil) }
+    }
+
+    // Swift-side error reporter. Fire-and-forget — posts to Errors tab so
+    // Arun sees Swift failures (HTML fetch errors, config timeouts, etc.)
+    // without depending on users noticing and reporting.
+    func logSwiftError(kind: String, message: String, context: String = "") {
+        let payload: [String: Any] = [
+            "source": "swift",
+            "kind": kind,
+            "message": message,
+            "context": context
+        ]
+        postToApi(action: "logError", payload: payload) { _ in }
     }
 
     // ── Apps Script API ────────────────────────────────────────────────
