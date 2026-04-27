@@ -1497,27 +1497,38 @@
     }
 
     const list = Object.keys(users).map(u => {
-      const { tasks, prodSec, firstTs, lastTs } = users[u];
-      const prodHrs = prodSec / 3600;
-      const throughput = prodHrs >= 0.05 && tasks > 0 ? (tasks / prodHrs) : null;
+      const { tasks, prodSec } = users[u];
+      // Canonical Production Hours — prefer the heartbeat-tracked Live
+      // ProdMin (or Sessions ProdMin after shift end). Falls back to
+      // sum-of-task-durations only if neither is available, so newly
+      // appearing users still get a number.
+      let prodMin = Math.round(prodSec / 60);  // legacy fallback
       let util = null, utilSource = null;
+
       // 1. End-of-shift Sessions row — canonical truth.
       const sess = sessMap[u];
       if (sess && sess.wallMin > 0) {
+        prodMin = sess.prodMin;
         util = Math.min(100, Math.round((sess.prodMin / sess.wallMin) * 100));
         utilSource = 'session';
       } else {
-        // 2. Live fallback — Production ÷ (now - shiftStartAt).
+        // 2. Live fallback — heartbeat ProdMin and wall-clock since shift start.
         const live = liveByUser[u];
         if (live && live.shiftStartAt) {
           const wallMin = wallMinutesSinceIst_(live.shiftStartAt);
           const livePm  = Number(live.prodMin) || 0;
+          if (livePm > prodMin) prodMin = livePm;  // Live always wins if larger
           if (wallMin > 0 && livePm >= 0) {
             util = Math.min(100, Math.round((livePm / wallMin) * 100));
             utilSource = 'live';
           }
         }
       }
+
+      const prodHrs = prodMin / 60;
+      // Productivity Rate (tasks per hour of Production state) — uses
+      // the SAME prodMin as Utilization so the two metrics reconcile.
+      const throughput = prodHrs >= 0.05 && tasks > 0 ? (tasks / prodHrs) : null;
       return { user: u, tasks, prodHrs, throughput, util, utilSource };
     });
 
