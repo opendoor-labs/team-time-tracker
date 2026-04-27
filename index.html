@@ -2168,6 +2168,11 @@ function restoreSnapshot(reason) {
   try {
     // 1. Re-hydrate state (merge so new fields added in newer version aren't lost)
     Object.assign(state, snap.state);
+    // shiftActive may be missing from old snapshots written before the
+    // Apr 28 fix. If we're restoring to trackerScreen and the shift
+    // wasn't explicitly ended, treat it as still active so welcome-back
+    // / auto-break guards don't all bail out silently.
+    if (state.shiftEnded !== true) state.shiftActive = true;
 
     // 2. Re-hydrate recent-tasks list if present
     if (Array.isArray(snap.loggedTasks) && typeof loggedTasks !== 'undefined') {
