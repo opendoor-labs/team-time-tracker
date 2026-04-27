@@ -2601,12 +2601,26 @@
   }
 
   function removeChip(type, v) {
-    if (type === 'team')     filters.teams = (filters.teams || []).filter(x => x !== v);
+    if (type === 'team') {
+      filters.teams = (filters.teams || []).filter(x => x !== v);
+      // Removing the LAST team chip would silently filter to "no teams"
+      // and produce a confusingly-empty dashboard. Treat empty as "show
+      // all" so the user still sees data — the way they'd expect.
+      const allTeams = (state.data && state.data.teams) || [];
+      if (filters.teams.length === 0 && allTeams.length) {
+        filters.teams = [...allTeams];
+      }
+    }
     else if (type === 'user')     { filters.user = null; $('userInput').value = ''; }
     else if (type === 'activity') filters.activity = 'all';
     else if (type && type.startsWith('role:')) {
       const role = type.slice(5);
       filters[role] = (filters[role] || []).filter(x => x !== v);
+      // Same guard for role filters — empty = show all, not show none.
+      const allOpts = state.data ? getAllOptionsForRole(state.data, role) : [];
+      if (filters[role].length === 0 && allOpts.length) {
+        filters[role] = [...allOpts];
+      }
     }
     buildTeamPanel();
     ROLES.forEach(r => buildRolePanel(r));
