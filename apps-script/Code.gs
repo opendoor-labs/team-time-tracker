@@ -480,8 +480,32 @@ function closeSession_(ss, b) {
                   prodMin, breakMin, dinnerMin, meetingMin, trainingMin, idleMin, breakExceeded]);
     // Force minute cols to integer format (new row just appended at bottom)
     sh.getRange(sh.getLastRow(), 5, 1, 7).setNumberFormat('0');
+    // ── Drop the user's Live row when their shift closes ───────────
+    // Otherwise the row lingers with stale data and TLs see a 'ghost'
+    // on the Live Activity card (or Util computed from a Live row
+    // that's already been written to Sessions, double-counting).
+    try { _removeLiveRow_(ss, user); } catch (e) {
+      try { Logger.log('removeLive failed: ' + e); } catch (_) {}
+    }
     return { ok: true, inserted: true, breakExceeded: breakExceeded };
   });
+}
+
+// Delete the named user's row from the Live tab. Used by closeSession_
+// (after End Shift) and by the daily archive trigger (sweep at 8 AM IST).
+function _removeLiveRow_(ss, user) {
+  var sh = ss.getSheetByName('Live');
+  if (!sh) return false;
+  var u = String(user || '').toLowerCase().trim();
+  if (!u) return false;
+  var vals = sh.getDataRange().getValues();
+  for (var i = vals.length - 1; i >= 1; i--) {
+    if (String(vals[i][1] || '').toLowerCase().trim() === u) {
+      sh.deleteRow(i + 1);
+      return true;
+    }
+  }
+  return false;
 }
 
 // One-shot cleanup. Run from the Apps Script editor once to:
@@ -821,11 +845,11 @@ function liveActivity_(ss, p) {
 
   var sh = ss.getSheetByName('Live');
   if (!sh) return { ok: true, users: [], byTeam: {}, isAdmin: wl.isAdmin, teams: wl.teams };
-  // 30 min default — forgiving enough that a coffee break or laptop
-  // sleep doesn't make the user vanish from Live Activity, but still
-  // tight enough that genuinely-offline users (closed laptop, didn't
-  // end shift) don't pollute today's view. Override via &staleMin=N.
-  var staleMin = Number((p && p.staleMin) || 30);
+  // 8 hours default — covers a full overnight shift even if the user
+  // briefly disconnects. Live tab gets swept clean by dailyArchive() at
+  // 8 AM IST, so a long staleMin doesn't risk leaking yesterday's
+  // not-end-shifted users into today's view. Override via &staleMin=N.
+  var staleMin = Number((p && p.staleMin) || 480);
   var now = new Date();
   // Read both raw values AND display values. Display values are what
   // the user sees in the cell — bypasses all the Date-object/UTC-shift
@@ -1508,6 +1532,23 @@ function dailyArchive() {
     log.ok = false;
     log.errors.push('overall: ' + err);
     log.overall = { ok: false, error: String(err) };
+  }
+
+  // After archiving, sweep the Live tab — any rows still there at
+  // 8 AM IST belong to users who never clicked End Shift. Their
+  // Sessions row already has the canonical data (or doesn't, in
+  // which case the past-date approx fallback handles it). Either
+  // way, the Live row is no longer useful and just pollutes
+  // tomorrow's Live Activity view.
+  try {
+    var liveSh = ss.getSheetByName('Live');
+    if (liveSh && liveSh.getLastRow() > 1) {
+      var swept = liveSh.getLastRow() - 1;
+      liveSh.getRange(2, 1, swept, liveSh.getLastColumn()).clearContent();
+      log.liveSwept = swept;
+    }
+  } catch (err) {
+    log.errors.push('live sweep: ' + err);
   }
 
   log.finished = istNow_();
