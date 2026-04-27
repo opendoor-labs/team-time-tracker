@@ -1209,6 +1209,16 @@
     let utilSource = 'pending';
     const sessionUserKey = new Set();   // 'name|date' keys covered by Sessions
 
+    // User filter: when one user is selected in the dropdown, restrict
+    // ALL summary cards (Sessions + Live + task-span fallback) to just
+    // that user. Otherwise Productive Hours / Util / Break show team
+    // totals, mismatching the single-user task list shown below.
+    const filterUser = filters.user ? String(filters.user).toLowerCase().trim() : null;
+    const userMatches = (name) => {
+      if (!filterUser) return true;
+      return String(name || '').toLowerCase().trim() === filterUser;
+    };
+
     // 2a. Sessions — sum across rows (every closed shift contributes)
     if (data.sessions && data.sessions.header && data.sessions.rows && data.sessions.rows.length) {
       const sh = data.sessions.header.map(h => String(h).toLowerCase());
@@ -1220,6 +1230,7 @@
       const bIdx     = sh.findIndex(x => x.includes('break'));
       const dIdx     = sh.findIndex(x => x.includes('dinner'));
       data.sessions.rows.forEach(r => {
+        if (!userMatches(r[nameIdx])) return;
         const p = Number(r[pIdx]) || 0;
         const b = Number(r[bIdx]) || 0;
         const dn = dIdx >= 0 ? (Number(r[dIdx]) || 0) : 0;
@@ -1227,8 +1238,6 @@
         prodMin  += p;
         breakMin += b + dn;
         if (wall > 0) wallMin += wall;
-        // Track which (user, date) pairs Sessions covers so we don't
-        // double-count them from Live.
         const nm = String(r[nameIdx] || '').toLowerCase().trim();
         const dt = String(r[dateIdx] || '').slice(0, 10);
         if (nm && dt) sessionUserKey.add(nm + '|' + dt);
@@ -1236,14 +1245,13 @@
       if (prodMin > 0 || wallMin > 0) utilSource = 'sessions';
     }
 
-    // 2b. Live — for users currently active and NOT yet in Sessions for today
+    // 2b. Live — only users matching team filter AND user filter
     if (state && state.liveData && Array.isArray(state.liveData.users) &&
         state.liveData.users.length) {
       const today = (data.date || todayIsoLocal());
       state.liveData.users.forEach(u => {
         if (!teamInFilter(u.team) && !teamInFilter(u.homeTeam)) return;
-        // Skip users who already have a Sessions row for the displayed date
-        // (auto-close + dashboard view of the same day).
+        if (!userMatches(u.user)) return;
         const nm = String(u.user || '').toLowerCase().trim();
         if (sessionUserKey.has(nm + '|' + today)) return;
         prodMin  += Number(u.prodMin)  || 0;
