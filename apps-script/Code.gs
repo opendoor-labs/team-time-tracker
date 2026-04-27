@@ -821,7 +821,11 @@ function liveActivity_(ss, p) {
 
   var sh = ss.getSheetByName('Live');
   if (!sh) return { ok: true, users: [], byTeam: {}, isAdmin: wl.isAdmin, teams: wl.teams };
-  var staleMin = Number((p && p.staleMin) || 5);
+  // 30 min default — forgiving enough that a coffee break or laptop
+  // sleep doesn't make the user vanish from Live Activity, but still
+  // tight enough that genuinely-offline users (closed laptop, didn't
+  // end shift) don't pollute today's view. Override via &staleMin=N.
+  var staleMin = Number((p && p.staleMin) || 30);
   var now = new Date();
   // Read both raw values AND display values. Display values are what
   // the user sees in the cell — bypasses all the Date-object/UTC-shift
