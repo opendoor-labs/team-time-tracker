@@ -1268,11 +1268,19 @@
     // Past-date fallback — when neither Sessions nor Live has data
     // (e.g. user worked yesterday but never clicked End Shift), estimate
     // util from task-log span: sum of task durations ÷ (lastTaskEnd −
-    // firstTaskStart). This is approximate (won't see pre-task or
-    // post-last-task time) but it's the only data we have for past
-    // dates where the canonical sources are silent.
+    // firstTaskStart).
+    //
+    // Timestamps are 'PST-date + IST-time'. For overnight shifts, an
+    // early-morning IST task (e.g. 00:36) is recorded with the SAME PST
+    // date as the previous evening's tasks (e.g. 20:59), but it actually
+    // happened on the NEXT IST calendar day. Lexicographic sort makes
+    // 00:36 the 'first' task → fake 22h span → util reads as ~8%.
+    //
+    // Fix: parse every task to ms, then for any task with IST hour < 12
+    // bump it forward by 24h so chronological order is correct. Safe
+    // because QC shifts never start before noon IST.
     if (avgUtil === null && data.logs) {
-      let firstTs = null, lastTs = null;
+      const taskMs = [];
       Object.keys(data.logs).forEach(team => {
         if (!teamInFilter(team)) return;
         const entry = data.logs[team] || { header: [], rows: [] };
@@ -1280,13 +1288,20 @@
         rows.forEach(r => {
           const ts = String(r[0] || '').trim();
           if (!ts) return;
-          if (!firstTs || ts < firstTs) firstTs = ts;
-          if (!lastTs  || ts > lastTs)  lastTs  = ts;
+          let ms = parseIstToMs_(ts);
+          if (!ms) return;
+          // Detect overnight-cross: late-evening tasks have IST hour >= 12,
+          // early-morning tasks have IST hour < 12. Bump the latter +24h.
+          const hourMatch = ts.match(/\s(\d{1,2}):/);
+          const hr = hourMatch ? Number(hourMatch[1]) : 12;
+          if (hr < 12) ms += 24 * 3600 * 1000;
+          taskMs.push(ms);
         });
       });
-      if (firstTs && lastTs && firstTs !== lastTs) {
-        const spanMs = parseIstToMs_(lastTs) - parseIstToMs_(firstTs);
-        const spanMin = Math.round(spanMs / 60000);
+      if (taskMs.length >= 2) {
+        const firstMs = Math.min.apply(null, taskMs);
+        const lastMs  = Math.max.apply(null, taskMs);
+        const spanMin = Math.round((lastMs - firstMs) / 60000);
         if (spanMin > 0 && prodSec > 0) {
           avgUtil = Math.min(100, Math.round((prodSec / 60 / spanMin) * 100));
           utilSource = 'approx';
