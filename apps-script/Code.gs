@@ -836,10 +836,14 @@ function liveActivity_(ss, p) {
     // the cell got auto-typed before the column was set to text format.
     // Handle both → re-format Date objects to the canonical string before
     // regex parsing so the row never drops out silently.
+    // Use the spreadsheet's own timezone — NOT TZ (Asia/Calcutta) —
+    // to recover the original wall-clock string. See ShiftStartAt
+    // comment below for why this matters.
     var rawUpdated = r[11];
     var updatedAtStr;
     if (rawUpdated instanceof Date && !isNaN(rawUpdated.getTime())) {
-      updatedAtStr = Utilities.formatDate(rawUpdated, TZ, 'yyyy-MM-dd HH:mm:ss');
+      var ssTzU = ss.getSpreadsheetTimeZone() || TZ;
+      updatedAtStr = Utilities.formatDate(rawUpdated, ssTzU, 'yyyy-MM-dd HH:mm:ss');
     } else {
       updatedAtStr = String(rawUpdated || '').trim();
     }
@@ -858,13 +862,18 @@ function liveActivity_(ss, p) {
     // TL filter: show user only if their active team OR home team is allowed
     if (allowed && !allowed[team] && !allowed[homeTeam]) return;
     // Same Date-coercion guard for ShiftStartAt (col A) — if the cell
-    // got auto-typed to a Date, re-format to canonical YYYY-MM-DD HH:MM:SS
-    // so the dashboard's parser hits the strict regex path (no Date.parse
-    // edge cases with browser-specific timezone-name handling).
+    // got auto-typed to a Date, format the Date back to the original
+    // wall-clock string. CRITICAL: use the spreadsheet's own timezone,
+    // NOT TZ (Asia/Calcutta). When Sheets auto-coerced the cell, it
+    // interpreted the string in the spreadsheet's TZ. Reading it back
+    // in the same TZ recovers the original "20:39:52" wall clock. Read
+    // it back in a different TZ and you get a 5h30m-shifted timestamp
+    // (the bug that hid Util on the dashboard).
+    var ssTz = ss.getSpreadsheetTimeZone() || TZ;
     var rawShiftStart = r[0];
     var shiftStartStr;
     if (rawShiftStart instanceof Date && !isNaN(rawShiftStart.getTime())) {
-      shiftStartStr = Utilities.formatDate(rawShiftStart, TZ, 'yyyy-MM-dd HH:mm:ss');
+      shiftStartStr = Utilities.formatDate(rawShiftStart, ssTz, 'yyyy-MM-dd HH:mm:ss');
     } else {
       shiftStartStr = String(rawShiftStart || '').trim();
     }

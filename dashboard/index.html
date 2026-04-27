@@ -1260,20 +1260,9 @@
 
     const prodHrs = (prodSec / 3600).toFixed(1);
     const brkHrs  = (breakSec / 3600).toFixed(1);
-    // Debug: when util is unexpectedly null but we have live users, show
-    // why so we can see the failure mode without needing DevTools.
-    let utilSubtitle;
-    if (utilSource === 'sessions') utilSubtitle = 'From end-of-shift data';
-    else if (utilSource === 'live') utilSubtitle = 'Live (mid-shift)';
-    else if (state && state.liveData && state.liveData.users && state.liveData.users.length) {
-      const u0 = state.liveData.users[0] || {};
-      const raw = String(u0.shiftStartAt || '').slice(0, 28);
-      const parsed = parseIstToMs_(u0.shiftStartAt);
-      const wm = wallMinutesSinceIst_(u0.shiftStartAt);
-      utilSubtitle = `debug: raw="${raw}" parsed=${parsed} wallMin=${wm}`;
-    } else {
-      utilSubtitle = 'End-of-shift data pending';
-    }
+    const utilSubtitle = utilSource === 'sessions' ? 'From end-of-shift data'
+                       : utilSource === 'live'     ? 'Live (mid-shift)'
+                       : 'End-of-shift data pending';
     const brkSubtitle  = breakSourceLive ? 'Live (mid-shift)' : 'Break + dinner combined';
 
     cardsEl.classList.remove('hidden');
