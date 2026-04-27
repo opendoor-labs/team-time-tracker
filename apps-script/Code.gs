@@ -874,12 +874,15 @@ function liveActivity_(ss, p) {
     // UpdatedAt — same as ShiftStartAt: use the display value to bypass
     // any Date-object UTC-offset weirdness.
     var updatedAtStr = String(rDisp[11] || r[11] || '').trim();
-    // Accept single-digit hour too — Sheets sometimes displays Date
-    // cells as 'YYYY-MM-DD H:MM:SS' (one-digit hour). Strict 2-digit
-    // regex was silently dropping fresh rows like '2026-04-27 1:48:59'.
+    // Accept single-digit hour — Sheets sometimes renders Date cells
+    // without a leading zero on the hour ('2026-04-27 1:48:59').
     var parts = updatedAtStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
     if (!parts) return;
-    var istNowStr = Utilities.formatDate(now, TZ, 'yyyy-MM-dd HH:mm:ss');
+    // CRITICAL: 'now' must be in the SAME hybrid format as UpdatedAt
+    // (PST date + IST time), NOT 'IST date + IST time'. Otherwise after
+    // IST midnight the date components disagree by 1 day → fake 22-hour
+    // age → row dropped even though heartbeat is fresh.
+    var istNowStr = nowPSTdateISTtime_();
     var istNowParts = istNowStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
     if (!istNowParts) return;
     var toMs = function (m) {
