@@ -482,6 +482,18 @@
   function pad(n) { return n < 10 ? '0' + n : '' + n; }
   function fmtDate(d) { return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()); }
   function todayLocal() { return new Date(); }
+  // PST (America/Los_Angeles) date, formatted YYYY-MM-DD. The backend
+  // stores task timestamps with PST dates (so an overnight IST shift
+  // stays on one row), so 'Today' on this dashboard MUST match. If we
+  // used the browser's local IST date, an overnight worker viewing at
+  // 4 AM IST Apr 28 would query date 2026-04-28 but the backend has
+  // their tasks filed under PST 2026-04-27 → empty result.
+  function todayPST() {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date());  // 'en-CA' → YYYY-MM-DD
+  }
   function startOfWeek(d) { // Mon-start
     var x = new Date(d); var day = (x.getDay() + 6) % 7;
     x.setDate(x.getDate() - day); x.setHours(0,0,0,0); return x;
@@ -491,7 +503,9 @@
 
   function computeRange(period) {
     var now = todayLocal();
-    if (period === 'today') return { from: fmtDate(now), to: fmtDate(now) };
+    // 'today' uses PST date (matches backend storage). All other ranges
+    // are local-relative (week/month based on user's calendar feel).
+    if (period === 'today') { var t = todayPST(); return { from: t, to: t }; }
     if (period === 'week') {
       var s = startOfWeek(now); return { from: fmtDate(s), to: fmtDate(now) };
     }
