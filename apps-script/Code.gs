@@ -307,14 +307,19 @@ function logTask_(ss, b) {
         try { handleLogError_(ss, { source: 'apps-script', kind: 'listings-drive-upload',
               message: String(driveErr && driveErr.message || driveErr), user: user }); } catch (_) {}
       }
+      // Column order MUST match Listings_Log headers:
+      // A=Time B=User C=HomeTeam D=Team E=Activity F=Ticket Link
+      // G=Task H=Market I=Productivity Type J=Duration K=Comment L=Attachments
+      // (Earlier code had Comment/Attach/Duration in cols J/K/L which
+      // shifted everything one cell — fixed below to put Duration first.)
       row = [now, user, home, team, act,
              addr_(data),
              data['Task'] || '',
              data['Markets'] || data['Market'] || data['MARKETS'] || '',
              data['Productivity Type'] || '',
+             durStr,
              data['Comment'] || data['Comments'] || data['Notes'] || '',
-             listingsAttachUrls,
-             durStr];
+             listingsAttachUrls];
       break;
     }
     case 'SD':
