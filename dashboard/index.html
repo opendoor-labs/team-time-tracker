@@ -1140,6 +1140,7 @@
     let totalTasks = 0;
     let prodSec = 0;
     let breakSec = 0;
+    let prodSourceLive = false;
 
     Object.keys(data.logs).forEach(team => {
       if (!teamInFilter(team)) return;
@@ -1162,6 +1163,26 @@
         }
       });
     });
+
+    // Production hours: prefer Live's heartbeat-tracked ProdMin since
+    // it captures all time spent in Production activity (including
+    // think-time between tasks), not just the form-fill window of
+    // logged tasks. Sum of Duration cells under-counts mid-shift.
+    if (state && state.liveData && Array.isArray(state.liveData.users) &&
+        state.liveData.users.length) {
+      let liveProdMin = 0;
+      state.liveData.users.forEach(u => {
+        if (!teamInFilter(u.team) && !teamInFilter(u.homeTeam)) return;
+        liveProdMin += Number(u.prodMin) || 0;
+      });
+      // Use Live's value when it's larger than the task-duration sum
+      // (it almost always is) — the gap is the user's pre-task and
+      // between-task time spent in Production state.
+      if (liveProdMin * 60 > prodSec) {
+        prodSec = liveProdMin * 60;
+        prodSourceLive = true;
+      }
+    }
 
     // Avg utilization + Break Hours: prefer Sessions (end-of-shift truth);
     // fall back to Live (real-time mid-shift) so cards aren't stuck on '—'
@@ -1229,7 +1250,7 @@
       <div class="card" data-c="prod">
         <div class="k"><span class="icon">⚡</span>Productive Hours</div>
         <div class="v">${prodHrs}<span class="unit">hrs</span></div>
-        <div class="sub">Completed production time</div>
+        <div class="sub">${prodSourceLive ? 'Live (mid-shift)' : 'Completed production time'}</div>
       </div>
       <div class="card" data-c="break">
         <div class="k"><span class="icon">☕</span>Break Hours</div>
