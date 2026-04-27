@@ -823,30 +823,29 @@ function liveActivity_(ss, p) {
   if (!sh) return { ok: true, users: [], byTeam: {}, isAdmin: wl.isAdmin, teams: wl.teams };
   var staleMin = Number((p && p.staleMin) || 5);
   var now = new Date();
-  var vals = sh.getDataRange().getValues();
+  // Read both raw values AND display values. Display values are what
+  // the user sees in the cell — bypasses all the Date-object/UTC-shift
+  // headaches because Sheets has already done the formatting work.
+  var rng = sh.getDataRange();
+  var vals = rng.getValues();
+  var disp = rng.getDisplayValues();
   var header = vals.shift() || [];
+  disp.shift();
   var users = [];
   var byTeam = {};
   // Column map: A=ShiftStartAt(0) B=User(1) C=HomeTeam(2) D=Team(3)
   //   E=Activity(4) F=TasksDone(5) G=ProdMin(6) H=BreakMin(7) I=IdleMin(8)
   //   J=TaskStartedAt(9) K=TaskEndedAt(10) L=UpdatedAt(11)
-  vals.forEach(function (r) {
+  vals.forEach(function (r, idx) {
+    var rDisp = disp[idx] || [];
     // UpdatedAt can come back as either a String (preferred — written via
     // setValue with a 'PST date + IST time' literal) OR a Date object if
     // the cell got auto-typed before the column was set to text format.
     // Handle both → re-format Date objects to the canonical string before
     // regex parsing so the row never drops out silently.
-    // Use the spreadsheet's own timezone — NOT TZ (Asia/Calcutta) —
-    // to recover the original wall-clock string. See ShiftStartAt
-    // comment below for why this matters.
-    var rawUpdated = r[11];
-    var updatedAtStr;
-    if (rawUpdated instanceof Date && !isNaN(rawUpdated.getTime())) {
-      var ssTzU = ss.getSpreadsheetTimeZone() || TZ;
-      updatedAtStr = Utilities.formatDate(rawUpdated, ssTzU, 'yyyy-MM-dd HH:mm:ss');
-    } else {
-      updatedAtStr = String(rawUpdated || '').trim();
-    }
+    // UpdatedAt — same as ShiftStartAt: use the display value to bypass
+    // any Date-object UTC-offset weirdness.
+    var updatedAtStr = String(rDisp[11] || r[11] || '').trim();
     var parts = updatedAtStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
     if (!parts) return;
     var istNowStr = Utilities.formatDate(now, TZ, 'yyyy-MM-dd HH:mm:ss');
@@ -861,41 +860,23 @@ function liveActivity_(ss, p) {
     var team     = String(r[3] || '');
     // TL filter: show user only if their active team OR home team is allowed
     if (allowed && !allowed[team] && !allowed[homeTeam]) return;
-    // Same Date-coercion guard for ShiftStartAt (col A) — if the cell
-    // got auto-typed to a Date, format the Date back to the original
-    // wall-clock string. CRITICAL: use the spreadsheet's own timezone,
-    // NOT TZ (Asia/Calcutta). When Sheets auto-coerced the cell, it
-    // interpreted the string in the spreadsheet's TZ. Reading it back
-    // in the same TZ recovers the original "20:39:52" wall clock. Read
-    // it back in a different TZ and you get a 5h30m-shifted timestamp
-    // (the bug that hid Util on the dashboard).
-    var ssTz = ss.getSpreadsheetTimeZone() || TZ;
+    // ShiftStartAt — use the cell's DISPLAY value (what the user sees
+    // in the sheet UI). This bypasses every Date-object / UTC-offset
+    // bug because Sheets has already done the timezone work for us.
+    // Falls back to raw value only if display is empty.
+    var shiftStartStr = String(rDisp[0] || r[0] || '').trim();
     var rawShiftStart = r[0];
-    var shiftStartStr;
-    if (rawShiftStart instanceof Date && !isNaN(rawShiftStart.getTime())) {
-      shiftStartStr = Utilities.formatDate(rawShiftStart, ssTz, 'yyyy-MM-dd HH:mm:ss');
-    } else {
-      shiftStartStr = String(rawShiftStart || '').trim();
+    // Wall-clock minutes since shift start — server-computed using the
+    // CELL DISPLAY string (always 'YYYY-MM-DD HH:MM:SS' in IST wall-clock,
+    // since the spreadsheet TZ is IST). Parse it as IST → convert to UTC
+    // ms → subtract from now. Bypasses every Date-object UTC-offset
+    // weirdness because we never touch the underlying typed value.
+    var shiftMinutesElapsed = 0;
+    var sm = shiftStartStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+    if (sm) {
+      var shiftStartMs = Date.UTC(+sm[1], +sm[2]-1, +sm[3], +sm[4], +sm[5], +sm[6]) - 5.5 * 3600 * 1000;
+      shiftMinutesElapsed = Math.max(0, Math.round((now.getTime() - shiftStartMs) / 60000));
     }
-    // Wall-clock minutes since shift start — computed server-side so the
-    // dashboard doesn't have to parse mixed string/Date cell formats.
-    // For Date cells, getTime() is authoritative; for strings, parse the
-    // canonical 'YYYY-MM-DD HH:MM:SS' as IST wall-clock and convert to
-    // an absolute UTC ms before subtracting.
-    var shiftStartMs = 0;
-    if (rawShiftStart instanceof Date && !isNaN(rawShiftStart.getTime())) {
-      shiftStartMs = rawShiftStart.getTime();
-    } else {
-      var ssStr = String(rawShiftStart || '').trim();
-      var sm = ssStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
-      if (sm) {
-        // String represents IST wall-clock — convert to absolute UTC ms.
-        shiftStartMs = Date.UTC(+sm[1], +sm[2]-1, +sm[3], +sm[4], +sm[5], +sm[6]) - 5.5 * 3600 * 1000;
-      }
-    }
-    var shiftMinutesElapsed = shiftStartMs > 0
-      ? Math.max(0, Math.round((now.getTime() - shiftStartMs) / 60000))
-      : 0;
 
     var u = {
       user:       String(r[1] || ''),
