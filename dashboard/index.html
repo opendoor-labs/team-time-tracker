@@ -1817,10 +1817,35 @@
       return;
     }
 
-    const users = Array.isArray(live.users) ? live.users : [];
-    const byTeam = live.byTeam && typeof live.byTeam === 'object' ? live.byTeam : {};
+    const allUsers = Array.isArray(live.users) ? live.users : [];
+
+    // Apply the dashboard's TEAM, USER, and ACTIVITY filters to Live
+    // Activity too. Without this, a TL clicking 'Production' on the
+    // activity pills only filtered task logs — Live Activity kept showing
+    // every active user. Now Live respects all the same filters.
+    const filterUserLc = filters.user ? String(filters.user).toLowerCase().trim() : null;
+    const filterAct = filters.activity && filters.activity !== 'all'
+      ? String(filters.activity).toLowerCase().trim() : null;
+
+    const users = allUsers.filter(u => {
+      if (!teamInFilter(u.team) && !teamInFilter(u.homeTeam)) return false;
+      if (filterUserLc && String(u.user || '').toLowerCase().trim() !== filterUserLc) return false;
+      if (filterAct && String(u.activity || '').toLowerCase().trim() !== filterAct) return false;
+      return true;
+    });
+
+    // Re-bucket by team after filtering (server's byTeam is unfiltered).
+    const byTeam = {};
+    users.forEach(u => {
+      const key = u.team || u.homeTeam || 'Unassigned';
+      if (!byTeam[key]) byTeam[key] = [];
+      byTeam[key].push(u);
+    });
 
     if (users.length === 0) {
+      const filterNote = filterAct
+        ? ` matching activity "${filterAct}"`
+        : (filterUserLc ? ` matching user filter` : '');
       contentEl.innerHTML = `
         <div class="data-card">
           <div class="data-header">
@@ -1828,7 +1853,7 @@
             <div class="data-meta">Polling every 15s${err ? ' · last fetch failed' : ''}</div>
           </div>
           <div class="state">
-            <p>No one is active right now.</p>
+            <p>No one is active right now${escapeHtml(filterNote)}.</p>
           </div>
         </div>`;
       return;
