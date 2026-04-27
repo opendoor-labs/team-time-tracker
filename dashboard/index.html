@@ -1265,17 +1265,41 @@
       }
     }
 
+    // Past-date fallback — when neither Sessions nor Live has data
+    // (e.g. user worked yesterday but never clicked End Shift), estimate
+    // util from task-log span: sum of task durations ÷ (lastTaskEnd −
+    // firstTaskStart). This is approximate (won't see pre-task or
+    // post-last-task time) but it's the only data we have for past
+    // dates where the canonical sources are silent.
+    if (avgUtil === null && data.logs) {
+      let firstTs = null, lastTs = null;
+      Object.keys(data.logs).forEach(team => {
+        if (!teamInFilter(team)) return;
+        const entry = data.logs[team] || { header: [], rows: [] };
+        const rows = applyRowFilters(entry.header || [], entry.rows || [], team);
+        rows.forEach(r => {
+          const ts = String(r[0] || '').trim();
+          if (!ts) return;
+          if (!firstTs || ts < firstTs) firstTs = ts;
+          if (!lastTs  || ts > lastTs)  lastTs  = ts;
+        });
+      });
+      if (firstTs && lastTs && firstTs !== lastTs) {
+        const spanMs = parseIstToMs_(lastTs) - parseIstToMs_(firstTs);
+        const spanMin = Math.round(spanMs / 60000);
+        if (spanMin > 0 && prodSec > 0) {
+          avgUtil = Math.min(100, Math.round((prodSec / 60 / spanMin) * 100));
+          utilSource = 'approx';
+        }
+      }
+    }
+
     const prodHrs = (prodSec / 3600).toFixed(1);
     const brkHrs  = (breakSec / 3600).toFixed(1);
-    let utilSubtitle;
-    if (utilSource === 'sessions') utilSubtitle = 'From end-of-shift data';
-    else if (utilSource === 'live') utilSubtitle = 'Live (mid-shift)';
-    else if (state && state.liveData && state.liveData.users && state.liveData.users.length) {
-      const u0 = state.liveData.users[0] || {};
-      utilSubtitle = `dbg sme=${u0.shiftMinutesElapsed} pm=${u0.prodMin} ssa=${String(u0.shiftStartAt||'').slice(0,19)}`;
-    } else {
-      utilSubtitle = 'End-of-shift data pending';
-    }
+    const utilSubtitle = utilSource === 'sessions' ? 'From end-of-shift data'
+                       : utilSource === 'live'     ? 'Live (mid-shift)'
+                       : utilSource === 'approx'   ? 'Approx · shift not closed'
+                       : 'End-of-shift data pending';
     const brkSubtitle  = breakSourceLive ? 'Live (mid-shift)' : 'Break + dinner combined';
 
     cardsEl.classList.remove('hidden');
