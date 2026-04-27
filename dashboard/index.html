@@ -812,6 +812,9 @@
   }
 
   // Parse "YYYY-MM-DD HH:MM:SS" or "HH:MM:SS" as IST → epoch ms.
+  // Also accepts JS Date.toString() output ("Sun Apr 27 2026 20:39:52
+  // GMT+0530...") which is what we get when a sheet cell got
+  // auto-coerced to a Date object before the column was format-locked.
   // Returns 0 for unparseable input.
   function parseIstToMs_(s) {
     s = String(s || '').trim();
@@ -824,6 +827,11 @@
       const today = todayIsoLocal().split('-');
       return Date.UTC(+today[0], +today[1]-1, +today[2], +m[1], +m[2], +m[3]) - 5.5 * 3600 * 1000;
     }
+    // Last-resort: anything Date.parse can chew (covers Date.toString
+    // output like 'Sun Apr 27 2026 20:39:52 GMT+0530'). The parsed value
+    // is already an absolute epoch ms — no IST offset adjustment needed.
+    const t = Date.parse(s);
+    if (!isNaN(t)) return t;
     return 0;
   }
 
