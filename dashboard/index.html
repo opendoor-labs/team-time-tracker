@@ -1843,7 +1843,10 @@
         const prod = Math.round(Number(u.prodMin || 0));
         const brk = Math.round(Number(u.breakMin || 0));
         const age = Number(u.ageMin || 0);
-        const staleHtml = age > 2 ? `<div class="live-user-stale">⚠️ stale ${Math.round(age)}m ago</div>` : '';
+        // Heartbeat interval is 4 min, so any user is naturally 2-4 min
+        // 'stale' between heartbeats. Only flag when truly behind: 6+ min
+        // (4 min interval + 2 min grace). Below that = normal heartbeat gap.
+        const staleHtml = age > 6 ? `<div class="live-user-stale">⚠️ stale ${Math.round(age)}m ago</div>` : '';
         const shiftStart = String(u.shiftStartAt || '');
         const shiftStartHm = (shiftStart.match(/\s(\d{2}:\d{2})/) || [])[1] || '';
         const shiftHtml = shiftStartHm ? `<div class="live-user-shift">🟢 Shift: ${shiftStartHm} IST</div>` : '';
