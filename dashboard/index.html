@@ -2380,18 +2380,56 @@
   }
 
   function getAllUsers(data) {
-    const set = new Map(); // name → team
-    if (!data || !data.logs) return [];
-    Object.keys(data.logs).forEach(team => {
-      const entry = data.logs[team] || { header: [], rows: [] };
-      const hLower = (entry.header || []).map(h => String(h).toLowerCase());
-      const userIdx = hLower.indexOf('user');
-      if (userIdx < 0) return;
-      (entry.rows || []).forEach(r => {
-        const v = String(r[userIdx] || '').trim();
-        if (v && !set.has(v)) set.set(v, team);
+    // Names come from FOUR sources so the filter dropdown is populated as
+    // soon as someone is on the system today — even before they log a
+    // single task:
+    //   1. Live tab     → anyone currently shifted in (fresh heartbeat)
+    //   2. Attendance   → anyone marked Present today
+    //   3. Sessions     → anyone with a shift record today
+    //   4. Team logs    → anyone who has logged a task today
+    // Same Map keyed by name → first team we see them under wins.
+    const set = new Map();
+    const addUser = (name, team) => {
+      const v = String(name || '').trim();
+      if (v && !set.has(v)) set.set(v, team || '—');
+    };
+
+    // 1. Live (state-level, not part of `data`) — pulled in via callsite
+    if (state && state.liveData && Array.isArray(state.liveData.users)) {
+      state.liveData.users.forEach(u => addUser(u.user, u.team || u.homeTeam));
+    }
+
+    // 2. Attendance rows — User column + HomeTeam column
+    if (data && data.attendance && Array.isArray(data.attendance.rows)) {
+      const ah = (data.attendance.header || []).map(h => String(h).toLowerCase());
+      const auIdx = ah.indexOf('user');
+      const atIdx = ah.indexOf('hometeam') >= 0 ? ah.indexOf('hometeam') : ah.indexOf('team');
+      if (auIdx >= 0) {
+        data.attendance.rows.forEach(r => addUser(r[auIdx], atIdx >= 0 ? r[atIdx] : ''));
+      }
+    }
+
+    // 3. Sessions rows — Name column (sessions has no Team column)
+    if (data && data.sessions && Array.isArray(data.sessions.rows)) {
+      const sh = (data.sessions.header || []).map(h => String(h).toLowerCase());
+      const snIdx = sh.indexOf('name') >= 0 ? sh.indexOf('name') : sh.indexOf('user');
+      if (snIdx >= 0) {
+        data.sessions.rows.forEach(r => addUser(r[snIdx], ''));
+      }
+    }
+
+    // 4. Team task logs (original source) — last so already-known users
+    //    keep their first-seen team label.
+    if (data && data.logs) {
+      Object.keys(data.logs).forEach(team => {
+        const entry = data.logs[team] || { header: [], rows: [] };
+        const hLower = (entry.header || []).map(h => String(h).toLowerCase());
+        const userIdx = hLower.indexOf('user');
+        if (userIdx < 0) return;
+        (entry.rows || []).forEach(r => addUser(r[userIdx], team));
       });
-    });
+    }
+
     return Array.from(set.entries()).map(([name, team]) => ({ name, team }));
   }
 
