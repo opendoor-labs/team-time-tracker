@@ -1162,11 +1162,9 @@
       return;
     }
 
+    // ── Step 1: Always count tasks from team logs (canonical) ──────
     let totalTasks = 0;
-    let prodSec = 0;
-    let breakSec = 0;
-    let prodSourceLive = false;
-
+    let taskDurSec = 0;        // legacy fallback only
     Object.keys(data.logs).forEach(team => {
       if (!teamInFilter(team)) return;
       const entry = data.logs[team] || { header: [], rows: [] };
@@ -1182,104 +1180,80 @@
         const dur = durIdx >= 0 ? parseDurSec(r[durIdx]) : 0;
         if (act === 'production' && !isSystem) {
           totalTasks += 1;
-          prodSec += dur;
-        } else if (act === 'break' || act === 'dinner') {
-          breakSec += dur;
+          taskDurSec += dur;
         }
       });
     });
 
-    // Production hours: prefer Live's heartbeat-tracked ProdMin since
-    // it captures all time spent in Production activity (including
-    // think-time between tasks), not just the form-fill window of
-    // logged tasks. Sum of Duration cells under-counts mid-shift.
-    if (state && state.liveData && Array.isArray(state.liveData.users) &&
-        state.liveData.users.length) {
-      let liveProdMin = 0;
-      state.liveData.users.forEach(u => {
-        if (!teamInFilter(u.team) && !teamInFilter(u.homeTeam)) return;
-        liveProdMin += Number(u.prodMin) || 0;
-      });
-      // Use Live's value when it's larger than the task-duration sum
-      // (it almost always is) — the gap is the user's pre-task and
-      // between-task time spent in Production state.
-      if (liveProdMin * 60 > prodSec) {
-        prodSec = liveProdMin * 60;
-        prodSourceLive = true;
-      }
-    }
-
-    // Avg utilization + Break Hours: prefer Sessions (end-of-shift truth);
-    // fall back to Live (real-time mid-shift) so cards aren't stuck on '—'
-    // all day. Source label tells the TL which one is being shown.
-    let avgUtil = null;
+    // ── Step 2: Canonical Production / Break / Wall-clock minutes ──
+    //
+    //   Source priority (high → low):
+    //     1. Sessions tab (closed shifts — written by End Shift OR by
+    //        7:30 AM auto-close). End-of-shift truth.
+    //     2. Live tab (active shifts — heartbeat ProdMin).
+    //     3. Task-log span (last resort — only if neither above exists).
+    //
+    //   This reconciles ALL three summary cards (Productive Hours,
+    //   Break Hours, Avg Utilization) AND the leaderboard, against
+    //   the canonical Mac-app formula:
+    //     Productive Hours = heartbeat ProdMin ÷ 60
+    //     Utilization %    = Productive Hours ÷ wall-clock × 100
+    //     Productivity Rate = Tasks ÷ Productive Hours
+    //
+    let prodMin = 0;        // Total Production minutes (canonical)
+    let breakMin = 0;       // Total Break + Dinner minutes
+    let wallMin = 0;        // Total wall-clock-since-shift-start minutes
     let utilSource = 'pending';
-    let breakSourceLive = false;
+    const sessionUserKey = new Set();   // 'name|date' keys covered by Sessions
 
-    // Canonical formula (matches Mac app + My Dashboard):
-    //   Utilization = ProductionMin ÷ wall-clock minutes since Shift Start
-    // Sessions wins when end-of-shift data exists (Start + End cells).
-    // Otherwise fall back to Live (current shiftStartAt → now).
+    // 2a. Sessions — sum across rows (every closed shift contributes)
     if (data.sessions && data.sessions.header && data.sessions.rows && data.sessions.rows.length) {
       const sh = data.sessions.header.map(h => String(h).toLowerCase());
+      const nameIdx  = sh.indexOf('name') >= 0 ? sh.indexOf('name') : sh.indexOf('user');
+      const dateIdx  = sh.findIndex(x => x === 'date');
       const startIdx = sh.findIndex(x => x === 'start');
       const endIdx   = sh.findIndex(x => x === 'end');
       const pIdx     = sh.findIndex(x => x.includes('production'));
-      let totalProd = 0, totalWall = 0;
+      const bIdx     = sh.findIndex(x => x.includes('break'));
+      const dIdx     = sh.findIndex(x => x.includes('dinner'));
       data.sessions.rows.forEach(r => {
         const p = Number(r[pIdx]) || 0;
+        const b = Number(r[bIdx]) || 0;
+        const dn = dIdx >= 0 ? (Number(r[dIdx]) || 0) : 0;
         const wall = wallMinutesBetweenIst_(r[startIdx], r[endIdx]);
-        if (wall > 0) { totalProd += p; totalWall += wall; }
+        prodMin  += p;
+        breakMin += b + dn;
+        if (wall > 0) wallMin += wall;
+        // Track which (user, date) pairs Sessions covers so we don't
+        // double-count them from Live.
+        const nm = String(r[nameIdx] || '').toLowerCase().trim();
+        const dt = String(r[dateIdx] || '').slice(0, 10);
+        if (nm && dt) sessionUserKey.add(nm + '|' + dt);
       });
-      if (totalWall > 0) {
-        avgUtil = Math.min(100, Math.round((totalProd / totalWall) * 100));
-        utilSource = 'sessions';
-      }
+      if (prodMin > 0 || wallMin > 0) utilSource = 'sessions';
     }
 
-    // Live fallback — anyone with a fresh heartbeat in state.liveData.
-    // Use shiftMinutesElapsed (server-computed) instead of parsing
-    // shiftStartAt strings client-side — bypasses all timezone/format
-    // edge cases.
-    if ((avgUtil === null || breakSec === 0) &&
-         state && state.liveData && Array.isArray(state.liveData.users) &&
-         state.liveData.users.length) {
-      let prodMin = 0, breakMin = 0, wallMin = 0;
+    // 2b. Live — for users currently active and NOT yet in Sessions for today
+    if (state && state.liveData && Array.isArray(state.liveData.users) &&
+        state.liveData.users.length) {
+      const today = (data.date || todayIsoLocal());
       state.liveData.users.forEach(u => {
         if (!teamInFilter(u.team) && !teamInFilter(u.homeTeam)) return;
+        // Skip users who already have a Sessions row for the displayed date
+        // (auto-close + dashboard view of the same day).
+        const nm = String(u.user || '').toLowerCase().trim();
+        if (sessionUserKey.has(nm + '|' + today)) return;
         prodMin  += Number(u.prodMin)  || 0;
         breakMin += Number(u.breakMin) || 0;
-        // Prefer server-computed shiftMinutesElapsed; fall back to
-        // client-side parse for older API responses.
         const wm = Number(u.shiftMinutesElapsed) ||
                    wallMinutesSinceIst_(u.shiftStartAt);
-        wallMin  += wm;
+        wallMin += wm;
       });
-      if (avgUtil === null && wallMin > 0) {
-        avgUtil = Math.min(100, Math.round((prodMin / wallMin) * 100));
-        utilSource = 'live';
-      }
-      if (breakSec === 0 && breakMin > 0) {
-        breakSec = breakMin * 60;
-        breakSourceLive = true;
-      }
+      if (utilSource === 'pending' && (prodMin > 0 || wallMin > 0)) utilSource = 'live';
     }
 
-    // Past-date fallback — when neither Sessions nor Live has data
-    // (e.g. user worked yesterday but never clicked End Shift), estimate
-    // util from task-log span: sum of task durations ÷ (lastTaskEnd −
-    // firstTaskStart).
-    //
-    // Timestamps are 'PST-date + IST-time'. For overnight shifts, an
-    // early-morning IST task (e.g. 00:36) is recorded with the SAME PST
-    // date as the previous evening's tasks (e.g. 20:59), but it actually
-    // happened on the NEXT IST calendar day. Lexicographic sort makes
-    // 00:36 the 'first' task → fake 22h span → util reads as ~8%.
-    //
-    // Fix: parse every task to ms, then for any task with IST hour < 12
-    // bump it forward by 24h so chronological order is correct. Safe
-    // because QC shifts never start before noon IST.
-    if (avgUtil === null && data.logs) {
+    // 2c. Last-resort fallback — task-log span (overnight-cross aware)
+    if (utilSource === 'pending' && data.logs) {
       const taskMs = [];
       Object.keys(data.logs).forEach(team => {
         if (!teamInFilter(team)) return;
@@ -1290,32 +1264,34 @@
           if (!ts) return;
           let ms = parseIstToMs_(ts);
           if (!ms) return;
-          // Detect overnight-cross: late-evening tasks have IST hour >= 12,
-          // early-morning tasks have IST hour < 12. Bump the latter +24h.
           const hourMatch = ts.match(/\s(\d{1,2}):/);
           const hr = hourMatch ? Number(hourMatch[1]) : 12;
-          if (hr < 12) ms += 24 * 3600 * 1000;
+          if (hr < 12) ms += 24 * 3600 * 1000;  // overnight cross
           taskMs.push(ms);
         });
       });
-      if (taskMs.length >= 2) {
-        const firstMs = Math.min.apply(null, taskMs);
-        const lastMs  = Math.max.apply(null, taskMs);
-        const spanMin = Math.round((lastMs - firstMs) / 60000);
-        if (spanMin > 0 && prodSec > 0) {
-          avgUtil = Math.min(100, Math.round((prodSec / 60 / spanMin) * 100));
+      if (taskMs.length >= 2 && taskDurSec > 0) {
+        const span = (Math.max.apply(null, taskMs) - Math.min.apply(null, taskMs)) / 60000;
+        if (span > 0) {
+          prodMin += Math.round(taskDurSec / 60);
+          wallMin += Math.round(span);
           utilSource = 'approx';
         }
+      } else if (taskDurSec > 0) {
+        prodMin += Math.round(taskDurSec / 60);
+        utilSource = 'approx';
       }
     }
 
-    const prodHrs = (prodSec / 3600).toFixed(1);
-    const brkHrs  = (breakSec / 3600).toFixed(1);
-    const utilSubtitle = utilSource === 'sessions' ? 'From end-of-shift data'
-                       : utilSource === 'live'     ? 'Live (mid-shift)'
-                       : utilSource === 'approx'   ? 'Approx · shift not closed'
-                       : 'End-of-shift data pending';
-    const brkSubtitle  = breakSourceLive ? 'Live (mid-shift)' : 'Break + dinner combined';
+    // ── Step 3: Compute the four cards ─────────────────────────────
+    const prodHrs = (prodMin / 60).toFixed(1);
+    const brkHrs  = (breakMin / 60).toFixed(1);
+    const avgUtil = wallMin > 0 ? Math.min(100, Math.round((prodMin / wallMin) * 100)) : null;
+
+    const sourceTag = utilSource === 'sessions' ? 'From end-of-shift data'
+                    : utilSource === 'live'     ? 'Live (mid-shift)'
+                    : utilSource === 'approx'   ? 'Approx · shift not closed'
+                    : 'End-of-shift data pending';
 
     cardsEl.classList.remove('hidden');
     cardsEl.innerHTML = `
@@ -1327,17 +1303,17 @@
       <div class="card" data-c="prod">
         <div class="k"><span class="icon">⚡</span>Productive Hours</div>
         <div class="v">${prodHrs}<span class="unit">hrs</span></div>
-        <div class="sub">${prodSourceLive ? 'Live (mid-shift)' : 'Completed production time'}</div>
+        <div class="sub">${sourceTag}</div>
       </div>
       <div class="card" data-c="break">
         <div class="k"><span class="icon">☕</span>Break Hours</div>
         <div class="v">${brkHrs}<span class="unit">hrs</span></div>
-        <div class="sub">${brkSubtitle}</div>
+        <div class="sub">${sourceTag}</div>
       </div>
       <div class="card" data-c="util">
         <div class="k"><span class="icon">%</span>Avg Utilization</div>
         <div class="v">${avgUtil !== null ? avgUtil : '—'}<span class="unit">${avgUtil !== null ? '%' : ''}</span></div>
-        <div class="sub">${utilSubtitle}</div>
+        <div class="sub">${sourceTag}</div>
       </div>
     `;
   }
@@ -1574,12 +1550,11 @@
     }
 
     const list = Object.keys(users).map(u => {
-      const { tasks, prodSec } = users[u];
+      const { tasks, prodSec, firstTs, lastTs } = users[u];
       // Canonical Production Hours — prefer the heartbeat-tracked Live
       // ProdMin (or Sessions ProdMin after shift end). Falls back to
-      // sum-of-task-durations only if neither is available, so newly
-      // appearing users still get a number.
-      let prodMin = Math.round(prodSec / 60);  // legacy fallback
+      // sum-of-task-durations only if neither is available.
+      let prodMin = Math.round(prodSec / 60);  // task-duration baseline
       let util = null, utilSource = null;
 
       // 1. End-of-shift Sessions row — canonical truth.
@@ -1589,15 +1564,13 @@
         util = Math.min(100, Math.round((sess.prodMin / sess.wallMin) * 100));
         utilSource = 'session';
       } else {
-        // 2. Live fallback — heartbeat ProdMin and server-computed
-        //    wall-clock minutes (shiftMinutesElapsed). Falls back to
-        //    client-side parse for older API responses.
+        // 2. Live row — heartbeat ProdMin + server-computed wall-clock.
         const live = liveByUser[u];
         if (live) {
           const wallMin = Number(live.shiftMinutesElapsed) ||
                           (live.shiftStartAt ? wallMinutesSinceIst_(live.shiftStartAt) : 0);
           const livePm  = Number(live.prodMin) || 0;
-          if (livePm > prodMin) prodMin = livePm;  // Live always wins if larger
+          if (livePm > prodMin) prodMin = livePm;
           if (wallMin > 0 && livePm >= 0) {
             util = Math.min(100, Math.round((livePm / wallMin) * 100));
             utilSource = 'live';
@@ -1605,9 +1578,28 @@
         }
       }
 
+      // 3. Approx fallback — past dates where neither Sessions nor Live
+      //    exist for this user. Uses task-span with overnight-cross
+      //    handling (early-morning timestamps shifted forward 24h).
+      if (util === null && firstTs && lastTs && firstTs !== lastTs) {
+        const adj = (ts) => {
+          let ms = parseIstToMs_(ts);
+          if (!ms) return 0;
+          const hr = Number((ts.match(/\s(\d{1,2}):/) || [])[1] || 12);
+          if (hr < 12) ms += 24 * 3600 * 1000;
+          return ms;
+        };
+        const fMs = adj(firstTs), lMs = adj(lastTs);
+        const span = (lMs - fMs) / 60000;
+        if (span > 0 && prodMin > 0) {
+          util = Math.min(100, Math.round((prodMin / span) * 100));
+          utilSource = 'approx';
+        }
+      }
+
       const prodHrs = prodMin / 60;
-      // Productivity Rate (tasks per hour of Production state) — uses
-      // the SAME prodMin as Utilization so the two metrics reconcile.
+      // Productivity Rate uses the SAME prodMin as Utilization, so the
+      // two metrics always reconcile mathematically.
       const throughput = prodHrs >= 0.05 && tasks > 0 ? (tasks / prodHrs) : null;
       return { user: u, tasks, prodHrs, throughput, util, utilSource };
     });

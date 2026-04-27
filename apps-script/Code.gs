@@ -845,11 +845,11 @@ function liveActivity_(ss, p) {
 
   var sh = ss.getSheetByName('Live');
   if (!sh) return { ok: true, users: [], byTeam: {}, isAdmin: wl.isAdmin, teams: wl.teams };
-  // 8 hours default — covers a full overnight shift even if the user
-  // briefly disconnects. Live tab gets swept clean by dailyArchive() at
-  // 8 AM IST, so a long staleMin doesn't risk leaking yesterday's
-  // not-end-shifted users into today's view. Override via &staleMin=N.
-  var staleMin = Number((p && p.staleMin) || 480);
+  // 10 hours default — covers a full overnight shift through long
+  // breaks/disconnects. autoCloseStaleShifts_ runs at 7:30 AM IST
+  // before the 8 AM archive trigger, sweeping any leftover rows.
+  // Override via &staleMin=N for one-off TL queries.
+  var staleMin = Number((p && p.staleMin) || 600);
   var now = new Date();
   // Read both raw values AND display values. Display values are what
   // the user sees in the cell — bypasses all the Date-object/UTC-shift
@@ -1687,6 +1687,109 @@ function installArchiveTrigger() {
   ScriptApp.newTrigger('dailyArchive')
     .timeBased()
     .atHour(8)  // IST assumed from script TZ; if project TZ differs, adjust.
+    .everyDays(1)
+    .create();
+  return { ok: true };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// AUTO-CLOSE — runs daily at 7:30 AM IST, BEFORE the 8 AM archive.
+// For every user still in the Live tab, write a Sessions row using
+// their last-known heartbeat data (treats last UpdatedAt as effective
+// shift end). Then clear Live so the dashboard starts the new day clean.
+//
+// Why: users who close their laptop without clicking 'End Shift' leave
+// a Live row with stale data. Without this, Sessions tab is missing
+// their canonical entry and the dashboard has to guess. After this runs,
+// EVERY shift has a Sessions row — canonical end-of-shift data for all.
+// ═══════════════════════════════════════════════════════════════════════
+function autoCloseStaleShifts_() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var liveSh = ss.getSheetByName('Live');
+  var sessSh = ss.getSheetByName('Sessions');
+  if (!liveSh || !sessSh) return { ok: false, error: 'sheets missing' };
+
+  var lastRow = liveSh.getLastRow();
+  if (lastRow < 2) return { ok: true, processed: 0, note: 'live empty' };
+
+  // Snapshot Live + Sessions (display values for date/time strings)
+  var liveRng = liveSh.getDataRange();
+  var liveVals = liveRng.getValues();
+  var liveDisp = liveRng.getDisplayValues();
+  var sessRng = sessSh.getDataRange();
+  var sessVals = sessRng.getValues();
+  var sessDisp = sessRng.getDisplayValues();
+
+  // Index existing Sessions rows by (user_lower, pstDate)
+  var sessIndex = {};
+  for (var s = 1; s < sessVals.length; s++) {
+    var sName = String(sessVals[s][0] || '').toLowerCase().trim();
+    var sDate = String(sessDisp[s][1] || '').slice(0, 10);
+    if (sName && sDate) sessIndex[sName + '|' + sDate] = s + 1;
+  }
+
+  var processed = 0;
+  var processedUsers = [];
+  for (var i = 1; i < liveVals.length; i++) {
+    var user = String(liveVals[i][1] || '').trim();
+    if (!user) continue;
+
+    var shiftStartStr = String(liveDisp[i][0] || '').trim();
+    var updatedAtStr  = String(liveDisp[i][11] || '').trim();
+    var prodMin       = Number(liveVals[i][6]) || 0;
+    var breakMin      = Number(liveVals[i][7]) || 0;
+    var idleMin       = Number(liveVals[i][8]) || 0;
+
+    // PST date for the Sessions row = first 10 chars of shiftStartAt.
+    var pstDate  = shiftStartStr.slice(0, 10);
+    var startTm  = shiftStartStr.slice(11) || timeIST_();
+    // Effective end = last heartbeat. If empty, fall back to now.
+    var endTm    = updatedAtStr.slice(11) || timeIST_();
+    if (!pstDate) continue;
+
+    var breakExceeded = Math.max(0, breakMin - BREAK_ALLOWANCE_MIN);
+    var key = user.toLowerCase() + '|' + pstDate;
+
+    if (sessIndex[key]) {
+      // Update existing Sessions row for this user/date
+      var rowIdx = sessIndex[key];
+      sessSh.getRange(rowIdx, 4).setValue(endTm);
+      sessSh.getRange(rowIdx, 5).setValue(prodMin);
+      sessSh.getRange(rowIdx, 6).setValue(breakMin);
+      sessSh.getRange(rowIdx, 10).setValue(idleMin);
+      sessSh.getRange(rowIdx, 11).setValue(breakExceeded);
+      sessSh.getRange(rowIdx, 5, 1, 7).setNumberFormat('0');
+    } else {
+      // Append new Sessions row — auto-closed shift
+      sessSh.appendRow([user, pstDate, startTm, endTm,
+                        prodMin, breakMin, 0, 0, 0, idleMin, breakExceeded]);
+      sessSh.getRange(sessSh.getLastRow(), 5, 1, 7).setNumberFormat('0');
+    }
+    processed++;
+    processedUsers.push(user);
+  }
+
+  // Clear all Live rows now that they're captured in Sessions
+  if (lastRow > 1) {
+    liveSh.getRange(2, 1, lastRow - 1, liveSh.getLastColumn()).clearContent();
+  }
+
+  Logger.log('autoCloseStaleShifts_: processed ' + processed + ' users: ' + processedUsers.join(', '));
+  return { ok: true, processed: processed, users: processedUsers };
+}
+
+// Install the 7:30 AM IST trigger. Run once from the editor.
+function installAutoCloseTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'autoCloseStaleShifts_') ScriptApp.deleteTrigger(t);
+  });
+  // Apps Script can't pick an exact minute. atHour(7) + nearMinute(30)
+  // schedules the trigger near 7:30 AM in the script's TZ. Verify the
+  // project TZ is 'Asia/Calcutta' under File → Project Settings.
+  ScriptApp.newTrigger('autoCloseStaleShifts_')
+    .timeBased()
+    .atHour(7)
+    .nearMinute(30)
     .everyDays(1)
     .create();
   return { ok: true };
