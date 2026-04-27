@@ -1238,6 +1238,9 @@
     }
 
     // Live fallback — anyone with a fresh heartbeat in state.liveData.
+    // Use shiftMinutesElapsed (server-computed) instead of parsing
+    // shiftStartAt strings client-side — bypasses all timezone/format
+    // edge cases.
     if ((avgUtil === null || breakSec === 0) &&
          state && state.liveData && Array.isArray(state.liveData.users) &&
          state.liveData.users.length) {
@@ -1246,7 +1249,11 @@
         if (!teamInFilter(u.team) && !teamInFilter(u.homeTeam)) return;
         prodMin  += Number(u.prodMin)  || 0;
         breakMin += Number(u.breakMin) || 0;
-        wallMin  += wallMinutesSinceIst_(u.shiftStartAt);
+        // Prefer server-computed shiftMinutesElapsed; fall back to
+        // client-side parse for older API responses.
+        const wm = Number(u.shiftMinutesElapsed) ||
+                   wallMinutesSinceIst_(u.shiftStartAt);
+        wallMin  += wm;
       });
       if (avgUtil === null && wallMin > 0) {
         avgUtil = Math.min(100, Math.round((prodMin / wallMin) * 100));
@@ -1537,10 +1544,13 @@
         util = Math.min(100, Math.round((sess.prodMin / sess.wallMin) * 100));
         utilSource = 'session';
       } else {
-        // 2. Live fallback — heartbeat ProdMin and wall-clock since shift start.
+        // 2. Live fallback — heartbeat ProdMin and server-computed
+        //    wall-clock minutes (shiftMinutesElapsed). Falls back to
+        //    client-side parse for older API responses.
         const live = liveByUser[u];
-        if (live && live.shiftStartAt) {
-          const wallMin = wallMinutesSinceIst_(live.shiftStartAt);
+        if (live) {
+          const wallMin = Number(live.shiftMinutesElapsed) ||
+                          (live.shiftStartAt ? wallMinutesSinceIst_(live.shiftStartAt) : 0);
           const livePm  = Number(live.prodMin) || 0;
           if (livePm > prodMin) prodMin = livePm;  // Live always wins if larger
           if (wallMin > 0 && livePm >= 0) {

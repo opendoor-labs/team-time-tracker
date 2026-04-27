@@ -877,6 +877,26 @@ function liveActivity_(ss, p) {
     } else {
       shiftStartStr = String(rawShiftStart || '').trim();
     }
+    // Wall-clock minutes since shift start — computed server-side so the
+    // dashboard doesn't have to parse mixed string/Date cell formats.
+    // For Date cells, getTime() is authoritative; for strings, parse the
+    // canonical 'YYYY-MM-DD HH:MM:SS' as IST wall-clock and convert to
+    // an absolute UTC ms before subtracting.
+    var shiftStartMs = 0;
+    if (rawShiftStart instanceof Date && !isNaN(rawShiftStart.getTime())) {
+      shiftStartMs = rawShiftStart.getTime();
+    } else {
+      var ssStr = String(rawShiftStart || '').trim();
+      var sm = ssStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+      if (sm) {
+        // String represents IST wall-clock — convert to absolute UTC ms.
+        shiftStartMs = Date.UTC(+sm[1], +sm[2]-1, +sm[3], +sm[4], +sm[5], +sm[6]) - 5.5 * 3600 * 1000;
+      }
+    }
+    var shiftMinutesElapsed = shiftStartMs > 0
+      ? Math.max(0, Math.round((now.getTime() - shiftStartMs) / 60000))
+      : 0;
+
     var u = {
       user:       String(r[1] || ''),
       homeTeam:   homeTeam,
@@ -890,6 +910,7 @@ function liveActivity_(ss, p) {
       taskEndedAt: String(r[10] || ''),
       updatedAt:  updatedAtStr,
       shiftStartAt: shiftStartStr,
+      shiftMinutesElapsed: shiftMinutesElapsed,
       ageMin:     Math.round(ageMin * 10) / 10
     };
     users.push(u);
