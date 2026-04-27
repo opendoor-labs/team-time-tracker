@@ -960,17 +960,34 @@ function readLog_(ss, p) {
   // Bottom-up scan: logs are append-only and sorted by time in col A.
   // Reads 500 rows at a time from the bottom and stops when we pass the
   // requested date. 50-100x faster than full-sheet scan at 30K+ rows.
+  //
+  // Use getDisplayValues for col A so we get "2026-04-27 20:59:07"
+  // regardless of whether the underlying cell is a string OR a Date
+  // object that Sheets auto-coerced. Otherwise rows whose Time cell
+  // got typed as Date silently fail the date filter (the bug that hid
+  // Ravi's 2nd task — String(dateObj).slice(0,10) yields "Sun Apr 27"
+  // not "2026-04-27"). Also overwrite col A in the returned row with
+  // the display string so downstream JSON serialization stays clean.
   var BLOCK = 500;
   var matched = [];
   var passed = false;
   var end = lastRow;
   while (end >= 2 && !passed) {
     var start = Math.max(2, end - BLOCK + 1);
-    var block = sh.getRange(start, 1, end - start + 1, lastCol).getValues();
+    var rng   = sh.getRange(start, 1, end - start + 1, lastCol);
+    var block = rng.getValues();
+    var disp  = rng.getDisplayValues();
     for (var i = block.length - 1; i >= 0; i--) {
-      var rowDate = String(block[i][0]).slice(0, 10);
-      if (rowDate === date) matched.unshift(block[i]);
-      else if (rowDate < date) { passed = true; break; } // gone past target
+      var rowDate = String(disp[i][0] || '').slice(0, 10);
+      if (rowDate === date) {
+        block[i][0] = String(disp[i][0] || '');
+        matched.unshift(block[i]);
+      } else if (rowDate < date && rowDate.length === 10 && rowDate.charAt(4) === '-') {
+        // Only break early on a properly-formatted date string we can
+        // safely lexically-compare. Skip non-canonical strings (eg
+        // "Sun Apr 27") so they don't trick the early-exit.
+        passed = true; break;
+      }
     }
     end = start - 1;
   }
