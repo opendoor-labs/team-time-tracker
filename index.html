@@ -2701,6 +2701,11 @@ function startWorking(skipIntro) {
   }).replace(/(\d{2})\/(\d{2})\/(\d{4}),?\s*/, '$3-$2-$1 ');
   state.shiftStartedAt = istNow;
   state.shiftStartMs = Date.now();
+  // Mark shift as active so all the welcome-back / auto-break / lock
+  // handlers don't bail out with their `shiftActive !== true` guard.
+  // Also clear any leftover `shiftEnded` from yesterday's End Shift.
+  state.shiftActive = true;
+  state.shiftEnded = false;
   nativeFire('shiftStart', {
     user: state.user,
     homeTeam: state.homeTeam,
@@ -3359,6 +3364,11 @@ function switchActivity(act) {
     state.activity = 'production';
     setActiveActBtn('production');
     setStatusChip('production');
+    // CRITICAL: unfreeze the form BEFORE showing the welcome modal.
+    // If showWelcomeBack returns early (e.g. shiftActive guard failed),
+    // the form would otherwise stay frozen even though Production is
+    // active — exactly the bug reported on Apr 28.
+    applyFormFreezeState();
     showWelcomeBack(prevBreakMs, 'manual');
     state.breakStartedAt = null;
     state.breakWasManual = false;
