@@ -1128,8 +1128,13 @@
       });
     });
 
-    // Avg utilization from sessions tab if available
+    // Avg utilization + Break Hours: prefer Sessions (end-of-shift truth);
+    // fall back to Live (real-time mid-shift) so cards aren't stuck on '—'
+    // all day. Source label tells the TL which one is being shown.
     let avgUtil = null;
+    let utilSource = 'pending';
+    let breakSourceLive = false;
+
     if (data.sessions && data.sessions.header && data.sessions.rows && data.sessions.rows.length) {
       const sh = data.sessions.header.map(h => String(h).toLowerCase());
       const pIdx = sh.findIndex(x => x.includes('production'));
@@ -1142,11 +1147,36 @@
         const i = Number(r[iIdx]) || 0;
         if (p + b + i > 0) { sumUtil += (p / (p + b + i)) * 100; n++; }
       });
-      if (n > 0) avgUtil = Math.round(sumUtil / n);
+      if (n > 0) { avgUtil = Math.round(sumUtil / n); utilSource = 'sessions'; }
+    }
+
+    // Live fallback — anyone with a fresh heartbeat in state.liveData.
+    if ((avgUtil === null || breakSec === 0) &&
+         state && state.liveData && Array.isArray(state.liveData.users) &&
+         state.liveData.users.length) {
+      let prodMin = 0, breakMin = 0, idleMin = 0;
+      state.liveData.users.forEach(u => {
+        if (!teamInFilter(u.team) && !teamInFilter(u.homeTeam)) return;
+        prodMin  += Number(u.prodMin)  || 0;
+        breakMin += Number(u.breakMin) || 0;
+        idleMin  += Number(u.idleMin)  || 0;
+      });
+      if (avgUtil === null && (prodMin + breakMin + idleMin) > 0) {
+        avgUtil = Math.round((prodMin / (prodMin + breakMin + idleMin)) * 100);
+        utilSource = 'live';
+      }
+      if (breakSec === 0 && breakMin > 0) {
+        breakSec = breakMin * 60;
+        breakSourceLive = true;
+      }
     }
 
     const prodHrs = (prodSec / 3600).toFixed(1);
     const brkHrs  = (breakSec / 3600).toFixed(1);
+    const utilSubtitle = utilSource === 'sessions' ? 'From end-of-shift data'
+                       : utilSource === 'live'     ? 'Live (mid-shift)'
+                       : 'End-of-shift data pending';
+    const brkSubtitle  = breakSourceLive ? 'Live (mid-shift)' : 'Break + dinner combined';
 
     cardsEl.classList.remove('hidden');
     cardsEl.innerHTML = `
@@ -1163,12 +1193,12 @@
       <div class="card" data-c="break">
         <div class="k"><span class="icon">☕</span>Break Hours</div>
         <div class="v">${brkHrs}<span class="unit">hrs</span></div>
-        <div class="sub">Break + dinner combined</div>
+        <div class="sub">${brkSubtitle}</div>
       </div>
       <div class="card" data-c="util">
         <div class="k"><span class="icon">%</span>Avg Utilization</div>
         <div class="v">${avgUtil !== null ? avgUtil : '—'}<span class="unit">${avgUtil !== null ? '%' : ''}</span></div>
-        <div class="sub">${avgUtil !== null ? 'From end-of-shift data' : 'End-of-shift data pending'}</div>
+        <div class="sub">${utilSubtitle}</div>
       </div>
     `;
   }
@@ -1555,6 +1585,9 @@
         renderLiveView();
         renderTabs();
       }
+      // Summary cards now read Live data as a mid-shift fallback for
+      // Break Hours + Avg Util, so refresh them on every Live poll.
+      try { renderSummaryCards(); } catch (_) {}
     }
   }
 
