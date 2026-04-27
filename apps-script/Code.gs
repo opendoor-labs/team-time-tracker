@@ -857,6 +857,17 @@ function liveActivity_(ss, p) {
     var team     = String(r[3] || '');
     // TL filter: show user only if their active team OR home team is allowed
     if (allowed && !allowed[team] && !allowed[homeTeam]) return;
+    // Same Date-coercion guard for ShiftStartAt (col A) — if the cell
+    // got auto-typed to a Date, re-format to canonical YYYY-MM-DD HH:MM:SS
+    // so the dashboard's parser hits the strict regex path (no Date.parse
+    // edge cases with browser-specific timezone-name handling).
+    var rawShiftStart = r[0];
+    var shiftStartStr;
+    if (rawShiftStart instanceof Date && !isNaN(rawShiftStart.getTime())) {
+      shiftStartStr = Utilities.formatDate(rawShiftStart, TZ, 'yyyy-MM-dd HH:mm:ss');
+    } else {
+      shiftStartStr = String(rawShiftStart || '').trim();
+    }
     var u = {
       user:       String(r[1] || ''),
       homeTeam:   homeTeam,
@@ -869,7 +880,7 @@ function liveActivity_(ss, p) {
       taskStartedAt: parseTaskStartedAt_(r[9]),
       taskEndedAt: String(r[10] || ''),
       updatedAt:  updatedAtStr,
-      shiftStartAt: String(r[0] || ''),
+      shiftStartAt: shiftStartStr,
       ageMin:     Math.round(ageMin * 10) / 10
     };
     users.push(u);

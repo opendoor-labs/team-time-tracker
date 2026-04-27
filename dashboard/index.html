@@ -813,25 +813,42 @@
 
   // Parse "YYYY-MM-DD HH:MM:SS" or "HH:MM:SS" as IST → epoch ms.
   // Also accepts JS Date.toString() output ("Sun Apr 27 2026 20:39:52
-  // GMT+0530...") which is what we get when a sheet cell got
-  // auto-coerced to a Date object before the column was format-locked.
+  // GMT+0530 (India Standard Time)") — which is what we get when a
+  // sheet cell got auto-coerced to a Date object. Some browsers reject
+  // the trailing (TZ name) part; strip it before parse as a fallback.
   // Returns 0 for unparseable input.
   function parseIstToMs_(s) {
     s = String(s || '').trim();
     if (!s) return 0;
+    // 1. Canonical "YYYY-MM-DD HH:MM:SS" (preferred)
     let m = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
     if (m) return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]) - 5.5 * 3600 * 1000;
-    // Time-only ('HH:MM:SS') — assume today's PST date (Sessions Start/End format)
+    // 2. Time-only ('HH:MM:SS') — assume today's PST date
     m = s.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
     if (m) {
       const today = todayIsoLocal().split('-');
       return Date.UTC(+today[0], +today[1]-1, +today[2], +m[1], +m[2], +m[3]) - 5.5 * 3600 * 1000;
     }
-    // Last-resort: anything Date.parse can chew (covers Date.toString
-    // output like 'Sun Apr 27 2026 20:39:52 GMT+0530'). The parsed value
-    // is already an absolute epoch ms — no IST offset adjustment needed.
-    const t = Date.parse(s);
+    // 3. JS Date.toString() — strip "(India Standard Time)" suffix that
+    //    older browsers reject, then let Date.parse handle the rest.
+    const cleaned = s.replace(/\s*\([^)]*\)\s*$/, '').trim();
+    let t = Date.parse(cleaned);
     if (!isNaN(t)) return t;
+    // 4. Last resort — try the original unmodified.
+    t = Date.parse(s);
+    if (!isNaN(t)) return t;
+    // 5. Date.toString() pattern parse: "Sun Apr 27 2026 20:39:52 GMT+0530"
+    //    Some engines parse 12-hour format only; manually extract.
+    m = cleaned.match(/^\w+\s+(\w{3})\s+(\d{1,2})\s+(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\s+GMT([+-])(\d{2})(\d{2})/);
+    if (m) {
+      const months = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+      const mon = months[m[1]];
+      if (mon !== undefined) {
+        const offsetSign = m[7] === '+' ? -1 : 1;  // sign flips for UTC adjustment
+        const offsetMs = (Number(m[8]) * 3600 + Number(m[9]) * 60) * 1000 * offsetSign;
+        return Date.UTC(+m[3], mon, +m[2], +m[4], +m[5], +m[6]) + offsetMs;
+      }
+    }
     return 0;
   }
 
