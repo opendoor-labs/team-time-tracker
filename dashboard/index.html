@@ -1741,9 +1741,43 @@
     }
     updateUrl(state.email, state.date);
     fetchData();
+    // Restart auto-polling — it should run on Today, stop on past dates.
+    startTeamDataPolling();
   });
 
   refreshBtn.addEventListener('click', () => { if (!state.loading) fetchData(); });
+
+  // ── Auto-refresh team data ─────────────────────────────────────────
+  // TLs were having to click Refresh manually to see new tasks. Live
+  // Activity already polls every 15s, but team task logs / Sessions /
+  // Attendance only updated on click. Now we also poll fetchData every
+  // 30 seconds — but ONLY when the dashboard is on TODAY (past dates
+  // never change, so polling is wasted) AND the tab is visible. Manual
+  // Refresh + filter changes still work the same way.
+  const TEAM_DATA_POLL_MS = 30000;
+  let _teamPollTimer = null;
+  function startTeamDataPolling() {
+    stopTeamDataPolling();
+    const isToday = (state.date === todayIsoLocal());
+    if (!isToday) return;          // past dates are immutable, no point polling
+    _teamPollTimer = setInterval(() => {
+      // Skip if tab is hidden, mid-load, mid-edit, or signed out
+      if (document.hidden) return;
+      if (state.loading) return;
+      if (!state.token) return;
+      fetchData();
+    }, TEAM_DATA_POLL_MS);
+  }
+  function stopTeamDataPolling() {
+    if (_teamPollTimer) { clearInterval(_teamPollTimer); _teamPollTimer = null; }
+  }
+  // Re-evaluate polling whenever the tab visibility OR date changes.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopTeamDataPolling();
+    else startTeamDataPolling();
+  });
+  // Kick off polling once on initial load
+  startTeamDataPolling();
 
   // User pill dropdown
   const userPill = $('userPill');
