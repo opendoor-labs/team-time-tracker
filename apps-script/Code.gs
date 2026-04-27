@@ -826,7 +826,18 @@ function liveActivity_(ss, p) {
   //   E=Activity(4) F=TasksDone(5) G=ProdMin(6) H=BreakMin(7) I=IdleMin(8)
   //   J=TaskStartedAt(9) K=TaskEndedAt(10) L=UpdatedAt(11)
   vals.forEach(function (r) {
-    var updatedAtStr = String(r[11] || '');
+    // UpdatedAt can come back as either a String (preferred — written via
+    // setValue with a 'PST date + IST time' literal) OR a Date object if
+    // the cell got auto-typed before the column was set to text format.
+    // Handle both → re-format Date objects to the canonical string before
+    // regex parsing so the row never drops out silently.
+    var rawUpdated = r[11];
+    var updatedAtStr;
+    if (rawUpdated instanceof Date && !isNaN(rawUpdated.getTime())) {
+      updatedAtStr = Utilities.formatDate(rawUpdated, TZ, 'yyyy-MM-dd HH:mm:ss');
+    } else {
+      updatedAtStr = String(rawUpdated || '').trim();
+    }
     var parts = updatedAtStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
     if (!parts) return;
     var istNowStr = Utilities.formatDate(now, TZ, 'yyyy-MM-dd HH:mm:ss');
