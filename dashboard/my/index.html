@@ -958,6 +958,12 @@
     document.getElementById(id).addEventListener('change', rerenderWithCurrentPayload);
   });
 
+  // Initial load — fires the moment the page opens. Without this the
+  // dashboard sat empty for up to 30s waiting for the auto-poll, since
+  // window 'focus' / 'visibilitychange' don't always fire on first
+  // open from NSWorkspace (the Mac app's launcher).
+  if (TOKEN) loadAndRender();
+
   // Auto-refresh
   var POLL_MS = 30000;
   setInterval(function () {

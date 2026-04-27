@@ -3351,21 +3351,27 @@ function pad(n) { return n.toString().padStart(2, '0'); }
 // ═══════════════════════════════════════════════════════════════════
 function switchActivity(act) {
   const prev = state.activity;
-  const prevWasManualBreak = state.breakWasManual && prev === 'break';
-  const prevBreakMs = state.breakStartedAt ? Date.now() - state.breakStartedAt : 0;
+  // Treat any non-production state (break / dinner / meeting / training)
+  // as "away" — welcome-back fires when returning from any of these.
+  const prevWasAway = prev !== 'production' && prev !== 'idle' &&
+                       state.breakStartedAt;
+  const prevAwayMs  = state.breakStartedAt ? Date.now() - state.breakStartedAt : 0;
 
   if (prev === act) return;
 
-  // Starting a break MANUALLY
-  if (act === 'break') {
+  // Starting any non-production activity — track the start time so we
+  // can compute duration on return. Reset autoBreak flag (they manually
+  // chose this activity, it's not an auto-trigger).
+  if (act === 'break' || act === 'dinner' || act === 'meeting' || act === 'training') {
     state.breakStartedAt = Date.now();
     state.breakWasManual = true;
     state.autoBreak = false;
+    state.awayKind = act;  // remember which one (for the modal label)
   }
 
-  // Coming back to production from a manual break ≥ 5 min → welcome-back modal
-  if (act === 'production' && prevWasManualBreak &&
-      prevBreakMs >= RULES.MANUAL_BREAK_WELCOME_SEC * 1000) {
+  // Coming back to production from any away-state ≥ 5 min → welcome modal
+  if (act === 'production' && prevWasAway &&
+      prevAwayMs >= RULES.MANUAL_BREAK_WELCOME_SEC * 1000) {
     state.activity = 'production';
     setActiveActBtn('production');
     setStatusChip('production');
@@ -3374,9 +3380,10 @@ function switchActivity(act) {
     // the form would otherwise stay frozen even though Production is
     // active — exactly the bug reported on Apr 28.
     applyFormFreezeState();
-    showWelcomeBack(prevBreakMs, 'manual');
+    showWelcomeBack(prevAwayMs, state.awayKind || 'manual');
     state.breakStartedAt = null;
     state.breakWasManual = false;
+    state.awayKind = null;
     return;
   }
 
@@ -3635,9 +3642,22 @@ function showUnlockWelcome(lockedMs) {
 function showWelcomeBack(breakMs, kind) {
   if (state.shiftEnded === true || state.shiftActive !== true) return;
   document.getElementById('welcomeTitle').textContent = `Welcome back, ${state.user.split(' ')[0]}!`;
-  document.getElementById('welcomeKind').textContent = kind === 'manual' ? '☕ Break ended' : '🔒 Auto-break ended';
+  // kind can be: 'break', 'dinner', 'meeting', 'training', 'manual', or 'auto'
+  const kindLabels = {
+    break:    '☕ Break ended',
+    dinner:   '🍽 Dinner ended',
+    meeting:  '👥 Meeting ended',
+    training: '📚 Training ended',
+    manual:   '☕ Break ended',
+    auto:     '🔒 Auto-break ended'
+  };
+  const noun = kind === 'dinner' ? 'dinner break'
+             : kind === 'meeting' ? 'meeting'
+             : kind === 'training' ? 'training'
+             : 'break';
+  document.getElementById('welcomeKind').textContent = kindLabels[kind] || kindLabels.manual;
   document.getElementById('welcomeSub').innerHTML =
-    `Your break lasted <b>${fmtDurationShort(breakMs)}</b>. Ready to pick up where you left off?`;
+    `Your ${noun} lasted <b>${fmtDurationShort(breakMs)}</b>. Ready to pick up where you left off?`;
   document.getElementById('welcomeModal').classList.add('show');
 }
 
