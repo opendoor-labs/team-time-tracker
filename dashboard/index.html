@@ -811,6 +811,41 @@
     return `${yyyy}-${mm}-${dd}`;
   }
 
+  // Parse "YYYY-MM-DD HH:MM:SS" or "HH:MM:SS" as IST → epoch ms.
+  // Returns 0 for unparseable input.
+  function parseIstToMs_(s) {
+    s = String(s || '').trim();
+    if (!s) return 0;
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+    if (m) return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]) - 5.5 * 3600 * 1000;
+    // Time-only ('HH:MM:SS') — assume today's PST date (Sessions Start/End format)
+    m = s.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+    if (m) {
+      const today = todayIsoLocal().split('-');
+      return Date.UTC(+today[0], +today[1]-1, +today[2], +m[1], +m[2], +m[3]) - 5.5 * 3600 * 1000;
+    }
+    return 0;
+  }
+
+  // Minutes between two IST time strings (Sessions C/D cols). Treats
+  // end < start as overnight shift (+24h).
+  function wallMinutesBetweenIst_(startStr, endStr) {
+    const a = parseIstToMs_(startStr);
+    const b = parseIstToMs_(endStr);
+    if (!a || !b) return 0;
+    let diff = b - a;
+    if (diff < 0) diff += 86400 * 1000;
+    return Math.max(0, Math.round(diff / 60000));
+  }
+
+  // Minutes from a IST shiftStartAt timestamp to NOW. Used for live
+  // utilization (active shifts that haven't been End-Shifted yet).
+  function wallMinutesSinceIst_(shiftStartIst) {
+    const start = parseIstToMs_(shiftStartIst);
+    if (!start) return 0;
+    return Math.max(0, Math.round((Date.now() - start) / 60000));
+  }
+
   function emailToInitials(e) {
     const name = String(e || '').split('@')[0].replace(/[._-]/g, ' ').trim();
     if (!name) return '··';
@@ -1135,34 +1170,40 @@
     let utilSource = 'pending';
     let breakSourceLive = false;
 
+    // Canonical formula (matches Mac app + My Dashboard):
+    //   Utilization = ProductionMin ÷ wall-clock minutes since Shift Start
+    // Sessions wins when end-of-shift data exists (Start + End cells).
+    // Otherwise fall back to Live (current shiftStartAt → now).
     if (data.sessions && data.sessions.header && data.sessions.rows && data.sessions.rows.length) {
       const sh = data.sessions.header.map(h => String(h).toLowerCase());
-      const pIdx = sh.findIndex(x => x.includes('production'));
-      const bIdx = sh.findIndex(x => x.includes('break'));
-      const iIdx = sh.findIndex(x => x.includes('idle'));
-      let sumUtil = 0, n = 0;
+      const startIdx = sh.findIndex(x => x === 'start');
+      const endIdx   = sh.findIndex(x => x === 'end');
+      const pIdx     = sh.findIndex(x => x.includes('production'));
+      let totalProd = 0, totalWall = 0;
       data.sessions.rows.forEach(r => {
         const p = Number(r[pIdx]) || 0;
-        const b = Number(r[bIdx]) || 0;
-        const i = Number(r[iIdx]) || 0;
-        if (p + b + i > 0) { sumUtil += (p / (p + b + i)) * 100; n++; }
+        const wall = wallMinutesBetweenIst_(r[startIdx], r[endIdx]);
+        if (wall > 0) { totalProd += p; totalWall += wall; }
       });
-      if (n > 0) { avgUtil = Math.round(sumUtil / n); utilSource = 'sessions'; }
+      if (totalWall > 0) {
+        avgUtil = Math.min(100, Math.round((totalProd / totalWall) * 100));
+        utilSource = 'sessions';
+      }
     }
 
     // Live fallback — anyone with a fresh heartbeat in state.liveData.
     if ((avgUtil === null || breakSec === 0) &&
          state && state.liveData && Array.isArray(state.liveData.users) &&
          state.liveData.users.length) {
-      let prodMin = 0, breakMin = 0, idleMin = 0;
+      let prodMin = 0, breakMin = 0, wallMin = 0;
       state.liveData.users.forEach(u => {
         if (!teamInFilter(u.team) && !teamInFilter(u.homeTeam)) return;
         prodMin  += Number(u.prodMin)  || 0;
         breakMin += Number(u.breakMin) || 0;
-        idleMin  += Number(u.idleMin)  || 0;
+        wallMin  += wallMinutesSinceIst_(u.shiftStartAt);
       });
-      if (avgUtil === null && (prodMin + breakMin + idleMin) > 0) {
-        avgUtil = Math.round((prodMin / (prodMin + breakMin + idleMin)) * 100);
+      if (avgUtil === null && wallMin > 0) {
+        avgUtil = Math.min(100, Math.round((prodMin / wallMin) * 100));
         utilSource = 'live';
       }
       if (breakSec === 0 && breakMin > 0) {
@@ -1402,7 +1443,10 @@
     const sessMap = {};
     if (sessionsBlock && sessionsBlock.header && sessionsBlock.rows) {
       const sh = sessionsBlock.header.map(h => String(h).toLowerCase());
-      const sUserIdx = sh.indexOf('user');
+      // Sessions tab uses 'name' for the user column (col A), not 'user'.
+      const sUserIdx = sh.indexOf('name') >= 0 ? sh.indexOf('name') : sh.indexOf('user');
+      const sStartIdx = sh.findIndex(x => x === 'start');
+      const sEndIdx   = sh.findIndex(x => x === 'end');
       const sProdIdx = sh.findIndex(x => x.includes('production'));
       const sBreakIdx = sh.findIndex(x => x.includes('break'));
       const sIdleIdx = sh.findIndex(x => x.includes('idle'));
@@ -1411,12 +1455,24 @@
           const u = String(sr[sUserIdx] || '').trim();
           if (!u) return;
           sessMap[u] = {
-            prodMin: Number(sr[sProdIdx]) || 0,
+            prodMin:  Number(sr[sProdIdx])  || 0,
             breakMin: Number(sr[sBreakIdx]) || 0,
-            idleMin: Number(sr[sIdleIdx]) || 0
+            idleMin:  Number(sr[sIdleIdx])  || 0,
+            wallMin:  wallMinutesBetweenIst_(sr[sStartIdx], sr[sEndIdx])
           };
         });
       }
+    }
+
+    // Build a map of {user → liveData} for the active-shift fallback.
+    // Lets the leaderboard compute canonical utilization (Production ÷
+    // wall-clock-since-shift-start) for users mid-shift, matching the
+    // Mac app's My Dashboard formula and the top summary card.
+    const liveByUser = {};
+    if (state && state.liveData && Array.isArray(state.liveData.users)) {
+      state.liveData.users.forEach(lu => {
+        if (lu && lu.user) liveByUser[String(lu.user).trim()] = lu;
+      });
     }
 
     const list = Object.keys(users).map(u => {
@@ -1424,15 +1480,21 @@
       const prodHrs = prodSec / 3600;
       const throughput = prodHrs >= 0.05 && tasks > 0 ? (tasks / prodHrs) : null;
       let util = null, utilSource = null;
+      // 1. End-of-shift Sessions row — canonical truth.
       const sess = sessMap[u];
-      if (sess && (sess.prodMin + sess.breakMin + sess.idleMin) > 0) {
-        util = Math.round((sess.prodMin / (sess.prodMin + sess.breakMin + sess.idleMin)) * 100);
+      if (sess && sess.wallMin > 0) {
+        util = Math.min(100, Math.round((sess.prodMin / sess.wallMin) * 100));
         utilSource = 'session';
-      } else if (firstTs && lastTs && firstTs !== lastTs) {
-        const spanSec = (new Date(lastTs).getTime() - new Date(firstTs).getTime()) / 1000;
-        if (spanSec > 60) {
-          util = Math.min(100, Math.round((prodSec / spanSec) * 100));
-          utilSource = 'approx';
+      } else {
+        // 2. Live fallback — Production ÷ (now - shiftStartAt).
+        const live = liveByUser[u];
+        if (live && live.shiftStartAt) {
+          const wallMin = wallMinutesSinceIst_(live.shiftStartAt);
+          const livePm  = Number(live.prodMin) || 0;
+          if (wallMin > 0 && livePm >= 0) {
+            util = Math.min(100, Math.round((livePm / wallMin) * 100));
+            utilSource = 'live';
+          }
         }
       }
       return { user: u, tasks, prodHrs, throughput, util, utilSource };
