@@ -874,10 +874,13 @@ function liveActivity_(ss, p) {
     // UpdatedAt — same as ShiftStartAt: use the display value to bypass
     // any Date-object UTC-offset weirdness.
     var updatedAtStr = String(rDisp[11] || r[11] || '').trim();
-    var parts = updatedAtStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+    // Accept single-digit hour too — Sheets sometimes displays Date
+    // cells as 'YYYY-MM-DD H:MM:SS' (one-digit hour). Strict 2-digit
+    // regex was silently dropping fresh rows like '2026-04-27 1:48:59'.
+    var parts = updatedAtStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
     if (!parts) return;
     var istNowStr = Utilities.formatDate(now, TZ, 'yyyy-MM-dd HH:mm:ss');
-    var istNowParts = istNowStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+    var istNowParts = istNowStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
     if (!istNowParts) return;
     var toMs = function (m) {
       return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
@@ -900,7 +903,7 @@ function liveActivity_(ss, p) {
     // ms → subtract from now. Bypasses every Date-object UTC-offset
     // weirdness because we never touch the underlying typed value.
     var shiftMinutesElapsed = 0;
-    var sm = shiftStartStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+    var sm = shiftStartStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
     if (sm) {
       var shiftStartMs = Date.UTC(+sm[1], +sm[2]-1, +sm[3], +sm[4], +sm[5], +sm[6]) - 5.5 * 3600 * 1000;
       shiftMinutesElapsed = Math.max(0, Math.round((now.getTime() - shiftStartMs) / 60000));
