@@ -1500,7 +1500,18 @@
     const timeIdx  = 0;
     if (userIdx < 0 || durIdx < 0) return '';
 
+    // Per-user stats. Collect all task timestamps as overnight-cross-aware
+    // ms values so min/max chronological order is correct (lex compare on
+    // raw 'YYYY-MM-DD HH:MM:SS' strings inverts overnight shifts where the
+    // early-morning IST task has the same PST date as the prior evening).
     const users = {};
+    const tsToAdjustedMs = (ts) => {
+      let ms = parseIstToMs_(ts);
+      if (!ms) return 0;
+      const hr = Number((ts.match(/\s(\d{1,2}):/) || [])[1] || 12);
+      if (hr < 12) ms += 24 * 3600 * 1000;
+      return ms;
+    };
     rows.forEach(r => {
       const user = String(r[userIdx] || '').trim();
       if (!user) return;
@@ -1508,9 +1519,9 @@
       const isSystem = sysIdx >= 0 && String(r[sysIdx] || '').toUpperCase() === 'TRUE';
       const durSec = parseDurSec(r[durIdx]);
       const ts = String(r[timeIdx] || '');
-      const u = users[user] || (users[user] = { tasks: 0, prodSec: 0, firstTs: ts, lastTs: ts });
-      if (ts && ts < u.firstTs) u.firstTs = ts;
-      if (ts && ts > u.lastTs) u.lastTs = ts;
+      const u = users[user] || (users[user] = { tasks: 0, prodSec: 0, taskMs: [] });
+      const ms = tsToAdjustedMs(ts);
+      if (ms) u.taskMs.push(ms);
       if (act === 'production' && !isSystem) { u.tasks += 1; u.prodSec += durSec; }
     });
 
@@ -1550,10 +1561,9 @@
     }
 
     const list = Object.keys(users).map(u => {
-      const { tasks, prodSec, firstTs, lastTs } = users[u];
-      // Canonical Production Hours — prefer the heartbeat-tracked Live
-      // ProdMin (or Sessions ProdMin after shift end). Falls back to
-      // sum-of-task-durations only if neither is available.
+      const { tasks, prodSec, taskMs } = users[u];
+      // Canonical Production Hours — prefer Sessions (closed shifts) →
+      // Live (active shifts) → task-duration baseline (last resort).
       let prodMin = Math.round(prodSec / 60);  // task-duration baseline
       let util = null, utilSource = null;
 
@@ -1578,20 +1588,14 @@
         }
       }
 
-      // 3. Approx fallback — past dates where neither Sessions nor Live
-      //    exist for this user. Uses task-span with overnight-cross
-      //    handling (early-morning timestamps shifted forward 24h).
-      if (util === null && firstTs && lastTs && firstTs !== lastTs) {
-        const adj = (ts) => {
-          let ms = parseIstToMs_(ts);
-          if (!ms) return 0;
-          const hr = Number((ts.match(/\s(\d{1,2}):/) || [])[1] || 12);
-          if (hr < 12) ms += 24 * 3600 * 1000;
-          return ms;
-        };
-        const fMs = adj(firstTs), lMs = adj(lastTs);
+      // 3. Approx fallback — task-span (already overnight-cross adjusted).
+      //    Use chronological min/max of taskMs (NOT lex compare), so
+      //    overnight shifts compute correctly.
+      if (util === null && taskMs && taskMs.length >= 2 && prodMin > 0) {
+        const fMs = Math.min.apply(null, taskMs);
+        const lMs = Math.max.apply(null, taskMs);
         const span = (lMs - fMs) / 60000;
-        if (span > 0 && prodMin > 0) {
+        if (span > 0) {
           util = Math.min(100, Math.round((prodMin / span) * 100));
           utilSource = 'approx';
         }
