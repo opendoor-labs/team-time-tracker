@@ -3201,7 +3201,17 @@ function startClock() {
     if (!window._lastTick) { window._lastTick = Date.now(); return; }
     const delta = Date.now() - window._lastTick;
     window._lastTick = Date.now();
-    state.totals[state.activity] = (state.totals[state.activity] || 0) + delta;
+    // Don't count this tick into the activity total when:
+    //   • The user is past the idle threshold while in production (idle is
+    //     already accruing into idleTotalMs — without this guard production
+    //     would also tick → same wall-clock second counted twice → Sessions
+    //     activity-sum > wall-clock shift duration by exactly idleTotalMs).
+    //   • Mac is locked (auto-break logic owns that window).
+    const isIdleProduction = state.activity === 'production'
+      && state.idleStreakSec > RULES.IDLE_THRESHOLD_SEC;
+    if (!isIdleProduction && !state.macLocked) {
+      state.totals[state.activity] = (state.totals[state.activity] || 0) + delta;
+    }
 
     // Persist snapshot to localStorage every tick so update/crash/force-quit
     // can all restore without data loss. Marked dirty by form input, activity
