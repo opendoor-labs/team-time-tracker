@@ -3581,6 +3581,25 @@ function lockMac() {
 function unlockMac() {
   if (!state.macLocked) return;
   const lockedMs = Date.now() - state.macLockedAt;
+  const lockedSec = Math.floor(lockedMs / 1000);
+
+  // ── Retroactive auto-break for the Mac-sleep case ───────────────────
+  // While the Mac is locked/asleep, macOS suspends the WebView, so
+  // `lockInterval` can't tick and `triggerAutoBreak()` never fires
+  // even after the 15-min threshold elapses in wall-clock time.
+  // On unlock, JS resumes execution and we get here with the correct
+  // `lockedMs` derived from `Date.now()`. If that crosses the
+  // threshold, retroactively switch to Auto Break AND credit the
+  // away time to the break bucket (otherwise those minutes vanish —
+  // clockInterval doesn't run while macLocked, by design).
+  if (lockedSec >= RULES.MAC_LOCK_BREAK_SEC &&
+      !state.autoBreak &&
+      state.activity !== 'break' &&
+      state.shiftEnded !== true && state.shiftActive === true) {
+    state.totals.break = (state.totals.break || 0) + lockedMs;
+    triggerAutoBreak();
+  }
+
   state.macLocked = false;
   state.macLockedAt = null;
   if (lockInterval) clearInterval(lockInterval);
@@ -3589,7 +3608,8 @@ function unlockMac() {
   document.getElementById('unlockMacBtn').style.display = 'none';
   document.getElementById('lockMacBtn').style.display = 'block';
 
-  // If auto-break was triggered, show the unlock welcome modal asking to resume
+  // If auto-break was triggered (live OR retroactively), show the unlock
+  // welcome modal asking to resume Production
   if (state.activity === 'break' && state.autoBreak) {
     showUnlockWelcome(lockedMs);
   }
