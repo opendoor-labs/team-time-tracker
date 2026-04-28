@@ -582,11 +582,18 @@
           </div>
 
           <span class="flabel" style="margin-left: 12px;">User</span>
-          <div class="ac" id="userAc">
-            <div class="ac-wrap">
-              <input type="text" id="userInput" placeholder="Search user…" autocomplete="off">
+          <div class="multi" id="userAc">
+            <button class="multi-trigger" id="userTrigger" type="button">
+              <span id="userTriggerText">All users</span>
+              <span class="chev">▼</span>
+            </button>
+            <div class="multi-panel" id="userPanelWrap">
+              <div class="mhead" style="padding: 8px 10px; gap: 6px;">
+                <input type="text" id="userInput" placeholder="Type to filter…" autocomplete="off"
+                       style="flex:1; border:1px solid var(--border); border-radius:6px; padding:5px 8px; font-size:13px;">
+              </div>
+              <div class="ac-panel" id="userPanel" style="position: static; box-shadow: none; border: 0;"></div>
             </div>
-            <div class="ac-panel" id="userPanel"></div>
           </div>
         </div>
 
@@ -2969,6 +2976,10 @@
   }
 
   function updateFilterUI() {
+    // User trigger label — show selected user or "All users"
+    var userTrig = document.getElementById('userTriggerText');
+    if (userTrig) userTrig.textContent = filters.user ? filters.user : 'All users';
+
     // Chips
     const chips = [];
     const allTeams = (state.data && state.data.teams) || [];
@@ -3114,6 +3125,20 @@
     $('taskMulti').classList.remove('open');
     $('userAc').classList.remove('open');
     userPill.classList.remove('open');
+  });
+
+  // User dropdown trigger — same pattern as team multi-trigger
+  $('userTrigger').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = !$('userAc').classList.contains('open');
+    $('userAc').classList.toggle('open', willOpen);
+    $('teamMulti').classList.remove('open');
+    $('taskMulti').classList.remove('open');
+    if (willOpen) {
+      // Build/refresh the panel each open + auto-focus the search input
+      try { buildUserPanel($('userInput').value || ''); } catch (e) {}
+      try { $('userInput').focus(); } catch (e) {}
+    }
   });
   $('selAllTeams').addEventListener('click', (e) => {
     e.stopPropagation();
