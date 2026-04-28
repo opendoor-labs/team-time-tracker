@@ -1851,6 +1851,14 @@ function _archiveTeamDay_(ss, team, cutoff, yyyymm) {
 // Same archive locations as the daily run (per-team monthly files +
 // _System/Sessions_yyyymm + _System/Attendance_yyyymm). Idempotent — re-runs
 // only move whatever's still in the active sheet.
+
+// One-click helper — run from the Apps Script editor (no args needed).
+// Force-archives all data dated <= today's PST date. Use this once if
+// you need an immediate archive, otherwise rely on the 8 AM IST trigger.
+function forceArchiveTodayPst() {
+  return forceArchiveAllPast(todayPST_());
+}
+
 function forceArchiveAllPast(targetDate) {
   if (!targetDate || !/^\d{4}-\d{2}-\d{2}$/.test(String(targetDate))) {
     return { ok: false, error: 'targetDate required, format YYYY-MM-DD' };
