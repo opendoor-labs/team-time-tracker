@@ -602,15 +602,21 @@
     document.getElementById('statProdSub').textContent =
       'Prod: ' + minToHM(totals.productionMin||0) + ' · Meeting: ' + minToHM(totals.meetingMin||0)
       + ' · Training: ' + minToHM(totals.trainingMin||0);
-    // Break Time = break + dinner (dinner is effectively a meal break)
-    var breakMin  = Number(totals.breakMin  || 0);
-    var dinnerMin = Number(totals.dinnerMin || 0);
-    var totalBreak = breakMin + dinnerMin;
+    // Break Time = manual break + auto break + dinner. PR #10: auto-break
+    // is tracked separately so users can see when the system auto-flipped
+    // them off Production after Mac lock ≥ 15 min. Shown as a breakdown
+    // in the sub-text so they understand the total.
+    var breakMin     = Number(totals.breakMin     || 0);
+    var autoBreakMin = Number(totals.autoBreakMin || 0);
+    var dinnerMin    = Number(totals.dinnerMin    || 0);
+    var totalBreak   = breakMin + autoBreakMin + dinnerMin;
     document.getElementById('statBreak').textContent = minToHM(totalBreak);
+    var subParts = [];
+    if (breakMin > 0)     subParts.push('Manual ' + minToHM(breakMin));
+    if (autoBreakMin > 0) subParts.push('🔒 Auto ' + minToHM(autoBreakMin));
+    if (dinnerMin > 0)    subParts.push('Dinner ' + minToHM(dinnerMin));
     document.getElementById('statBreakSub').textContent =
-      dinnerMin > 0
-        ? 'Break: ' + minToHM(breakMin) + ' · Dinner: ' + minToHM(dinnerMin)
-        : 'includes dinner';
+      subParts.length ? subParts.join(' · ') : 'includes dinner';
 
     // Utilization — server-computed (production-only ÷ wall-clock shift),
     // matches Mac app + TL dashboard formula exactly.
