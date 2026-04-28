@@ -3577,8 +3577,17 @@ function lockMac() {
   updateIdleBanner();
 
   // Start lock tick — after threshold, trigger Auto Break
+  // Track previous tick wall-clock to credit auto_break minutes in real
+  // time once the threshold is crossed, so heartbeats during the lock
+  // report a growing autoBreakMin (TL dashboard shows live "🔒 Auto Break"
+  // minutes ticking up instead of 0 until unlock).
+  var _lockTickPrev = Date.now();
   lockInterval = setInterval(() => {
-    const lockedMs = Date.now() - state.macLockedAt;
+    const now = Date.now();
+    const tickDelta = now - _lockTickPrev;
+    _lockTickPrev = now;
+
+    const lockedMs = now - state.macLockedAt;
     const lockedSec = Math.floor(lockedMs / 1000);
     document.getElementById('lockCountdown').textContent = lockedSec + 's';
     updateIdleBanner();
@@ -3590,6 +3599,15 @@ function lockMac() {
         statusEl.classList.add('fired');
       }
       if (cdEl) cdEl.classList.add('fired');
+    }
+
+    // After auto-break has fired, credit each tick's wall-clock delta to
+    // state.totals.auto_break so heartbeat reports growing minutes.
+    // clockInterval skips ticks while macLocked (by design — see PR #1
+    // / PR #10 guard), so without this lockInterval credit, auto-break
+    // minutes stay at 0 until unlockMac runs.
+    if (state.autoBreak && tickDelta > 0 && tickDelta < 5000) {
+      state.totals.auto_break = (state.totals.auto_break || 0) + tickDelta;
     }
   }, 1000);
 }
