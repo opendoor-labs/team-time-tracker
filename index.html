@@ -3583,21 +3583,40 @@ function unlockMac() {
   const lockedMs = Date.now() - state.macLockedAt;
   const lockedSec = Math.floor(lockedMs / 1000);
 
-  // ── Retroactive auto-break for the Mac-sleep case ───────────────────
-  // While the Mac is locked/asleep, macOS suspends the WebView, so
-  // `lockInterval` can't tick and `triggerAutoBreak()` never fires
-  // even after the 15-min threshold elapses in wall-clock time.
-  // On unlock, JS resumes execution and we get here with the correct
-  // `lockedMs` derived from `Date.now()`. If that crosses the
-  // threshold, retroactively switch to Auto Break AND credit the
-  // away time to the break bucket (otherwise those minutes vanish —
-  // clockInterval doesn't run while macLocked, by design).
+  // ── Credit lock duration to Break + ensure auto-break is set ────────
+  // Time accounting during a lock is tricky:
+  //   • clockInterval has a `!state.macLocked` guard, so it doesn't
+  //     increment any bucket (incl. break) while the Mac is locked.
+  //   • lockInterval may or may not tick depending on whether macOS
+  //     suspended the WebView. If it does tick, it triggers
+  //     triggerAutoBreak() at the 15-min mark — but that only flips
+  //     state.activity / state.autoBreak; it doesn't credit time.
+  // Net result without this block: the entire lock duration vanishes
+  // from the daily totals. Fix: on unlock, if the threshold was
+  // crossed, ALWAYS credit lockedMs to state.totals.break (regardless
+  // of whether autoBreak was already set), and trigger autoBreak if
+  // it isn't set yet.
   if (lockedSec >= RULES.MAC_LOCK_BREAK_SEC &&
-      !state.autoBreak &&
-      state.activity !== 'break' &&
       state.shiftEnded !== true && state.shiftActive === true) {
     state.totals.break = (state.totals.break || 0) + lockedMs;
-    triggerAutoBreak();
+    if (!state.autoBreak && state.activity !== 'break') {
+      triggerAutoBreak();
+    }
+    // Update the auto-break log row's duration so the Recent Tasks
+    // list shows the actual lock time (not "0s"). triggerAutoBreak
+    // adds the row with durationMs:0 because at the time it fires
+    // (either at the 15-min lockInterval tick OR via this retroactive
+    // path) the final lock duration isn't known until unlock.
+    try {
+      const entry = (typeof loggedTasks !== 'undefined') &&
+        loggedTasks.find(function (t) {
+          return t && t._system && t.type && t.type.indexOf('Auto Break') >= 0;
+        });
+      if (entry) {
+        entry.durationMs = lockedMs;
+        if (typeof renderRecentList === 'function') renderRecentList();
+      }
+    } catch (e) { try { Logger && Logger.log && Logger.log('autobreak entry update failed: ' + e); } catch (_) {} }
   }
 
   state.macLocked = false;
