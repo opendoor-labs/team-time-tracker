@@ -1266,7 +1266,14 @@ function readByDate_(ss, tabName, date, teamFilter) {
     if (date && d !== date) continue;
     if (teamFilter && teamFilter.length &&
         teamFilter.indexOf(String(vals[i][2] || '')) < 0) continue;
+    // Coerce col A (Date) AND col E (MarkedAt) to display strings. Sheets
+    // sometimes types the time-only MarkedAt cell as a Date with a 1899-12-30
+    // base, which JSON-serialises as "1899-12-30T01:28:35.000Z" on the
+    // dashboard. Display value gives the clean "01:28:35" string.
     vals[i][0] = String(disp[i][0] || vals[i][0] || '');
+    if (tabName === 'Attendance' && disp[i].length > 4) {
+      vals[i][4] = String(disp[i][4] || vals[i][4] || '');
+    }
     activeRows.push(vals[i]);
   }
 
@@ -3284,7 +3291,14 @@ function _readUserAttendanceRange_(ss, user, fromDate, toDate) {
         var n = String(vals[i][1] || '').toLowerCase().trim();
         if (n !== userLc) continue;
         var d = String(disp[i][0] || '').slice(0, 10);
-        if (d >= fromDate && d <= toDate) rows.push(vals[i]);
+        if (d >= fromDate && d <= toDate) {
+          // Coerce col A (Date) and col E (MarkedAt) to display strings so
+          // time-only Date cells don't serialise as 1899-12-30T... on the
+          // dashboard.
+          vals[i][0] = String(disp[i][0] || vals[i][0] || '');
+          if (disp[i].length > 4) vals[i][4] = String(disp[i][4] || vals[i][4] || '');
+          rows.push(vals[i]);
+        }
       }
     }
   }

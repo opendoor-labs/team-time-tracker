@@ -2681,19 +2681,44 @@
     return Array.from(set).sort();
   }
 
+  // localStorage key for the cumulative known-users cache. Persists across
+  // dashboard reloads so the User dropdown stays populated when the
+  // selected date has no activity (e.g. weekend / future date).
+  const KNOWN_USERS_KEY = 'ttk.knownUsers.v1';
+
+  function _loadKnownUsersCache() {
+    try {
+      const raw = localStorage.getItem(KNOWN_USERS_KEY);
+      const obj = raw ? JSON.parse(raw) : {};
+      return obj && typeof obj === 'object' ? obj : {};
+    } catch (e) { return {}; }
+  }
+  function _saveKnownUsersCache(obj) {
+    try { localStorage.setItem(KNOWN_USERS_KEY, JSON.stringify(obj)); } catch (e) {}
+  }
+
   function getAllUsers(data) {
-    // Names come from FOUR sources so the filter dropdown is populated as
-    // soon as someone is on the system today — even before they log a
-    // single task:
-    //   1. Live tab     → anyone currently shifted in (fresh heartbeat)
-    //   2. Attendance   → anyone marked Present today
-    //   3. Sessions     → anyone with a shift record today
-    //   4. Team logs    → anyone who has logged a task today
+    // Names come from FIVE sources so the filter dropdown is always
+    // populated, even when the selected date has no activity:
+    //   1. Live tab           → anyone currently shifted in (fresh heartbeat)
+    //   2. Attendance         → anyone marked Present today
+    //   3. Sessions           → anyone with a shift record today
+    //   4. Team logs          → anyone who has logged a task today
+    //   5. localStorage cache → everyone seen on prior dashboard loads
+    //                           (persisted union across sessions/dates)
     // Same Map keyed by name → first team we see them under wins.
     const set = new Map();
+    const cache = _loadKnownUsersCache();
     const addUser = (name, team) => {
       const v = String(name || '').trim();
-      if (v && !set.has(v)) set.set(v, team || '—');
+      if (!v) return;
+      if (!set.has(v)) set.set(v, team || cache[v] || '—');
+      // Update persistent cache so the dropdown stays populated next time
+      if (team && cache[v] !== team) {
+        cache[v] = team;
+      } else if (!cache[v]) {
+        cache[v] = team || '—';
+      }
     };
 
     // 1. Live (state-level, not part of `data`) — pulled in via callsite
@@ -2732,7 +2757,19 @@
       });
     }
 
-    return Array.from(set.entries()).map(([name, team]) => ({ name, team }));
+    // 5. Persistent cache from prior loads — names not in today's data
+    //    but seen in any previous dashboard session. Last so today's
+    //    teams override stale cache entries.
+    Object.keys(cache).forEach(function (name) {
+      if (!set.has(name)) set.set(name, cache[name] || '—');
+    });
+
+    // Persist any new names we picked up this load
+    _saveKnownUsersCache(cache);
+
+    return Array.from(set.entries())
+      .map(([name, team]) => ({ name, team }))
+      .sort(function (a, b) { return a.name.localeCompare(b.name); });
   }
 
   function filtersActive() {
@@ -2887,29 +2924,48 @@
     q = (q || '').toLowerCase().trim();
     const matches = all
       .filter(u => !q || u.name.toLowerCase().includes(q) || u.team.toLowerCase().includes(q))
-      .slice(0, 10);
+      .slice(0, 50);  // show more in dropdown — was 10
     const panel = $('userPanel');
+    // Always show "All users" option at top so user can clear the filter
+    // by clicking, not just by clearing the text input.
+    var allItem = `<div class="item" data-u="__ALL__" style="font-weight:600;color:var(--accent);">
+         <span class="avatar-sm">∗</span>
+         <span>All users</span>
+         <span class="team">${all.length} known</span>
+       </div>`;
     if (!matches.length) {
-      panel.innerHTML = `<div class="item" style="color:var(--text-3);">${q ? 'No users match' : 'No users yet today'}</div>`;
+      panel.innerHTML = allItem +
+        `<div class="item" style="color:var(--text-3);">${q ? 'No users match' : 'No users yet'}</div>`;
+      attachUserClickHandlers();
       return;
     }
     const initials = (n) => n.split(/\s+/).map(p => p[0]).slice(0,2).join('').toUpperCase();
-    panel.innerHTML = matches.map(u =>
+    panel.innerHTML = allItem + matches.map(u =>
       `<div class="item" data-u="${escapeHtml(u.name)}">
          <span class="avatar-sm">${escapeHtml(initials(u.name))}</span>
          <span>${escapeHtml(u.name)}</span>
          <span class="team">${escapeHtml(u.team)}</span>
        </div>`
     ).join('');
-    panel.querySelectorAll('.item[data-u]').forEach(it => {
-      it.addEventListener('click', () => {
-        filters.user = it.dataset.u;
-        $('userInput').value = it.dataset.u;
-        $('userAc').classList.remove('open');
-        updateFilterUI();
-        renderContent();
+    attachUserClickHandlers();
+
+    function attachUserClickHandlers() {
+      panel.querySelectorAll('.item[data-u]').forEach(it => {
+        it.addEventListener('click', () => {
+          if (it.dataset.u === '__ALL__') {
+            // Clear the user filter — show all users
+            filters.user = null;
+            $('userInput').value = '';
+          } else {
+            filters.user = it.dataset.u;
+            $('userInput').value = it.dataset.u;
+          }
+          $('userAc').classList.remove('open');
+          updateFilterUI();
+          renderContent();
+        });
       });
-    });
+    }
   }
 
   function updateFilterUI() {
