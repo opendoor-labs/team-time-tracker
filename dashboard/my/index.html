@@ -237,6 +237,16 @@
       <div class="v" id="statAvgTask">—</div>
       <div class="sub" id="statAvgTaskSub">production ÷ tasks</div>
     </div>
+    <div class="card">
+      <div class="k">Utilization</div>
+      <div class="v" id="statUtil">—</div>
+      <div class="sub" id="statUtilSub">production ÷ wall-clock shift</div>
+    </div>
+    <div class="card">
+      <div class="k">Throughput</div>
+      <div class="v" id="statTput">—</div>
+      <div class="sub" id="statTputSub">tasks ÷ production hrs</div>
+    </div>
   </div>
 
   <section class="block" id="roleBreakdownBlock">
@@ -601,6 +611,35 @@
       dinnerMin > 0
         ? 'Break: ' + minToHM(breakMin) + ' · Dinner: ' + minToHM(dinnerMin)
         : 'includes dinner';
+
+    // Utilization — server-computed (production-only ÷ wall-clock shift),
+    // matches Mac app + TL dashboard formula exactly.
+    var util = Number(totals.utilization || 0);
+    var denomMin = Number(totals.denomMin || 0);
+    var utilEl = document.getElementById('statUtil');
+    var utilSub = document.getElementById('statUtilSub');
+    if (denomMin > 0) {
+      utilEl.textContent = util + '%';
+      utilSub.textContent = 'Production ' + minToHM(totals.productionMin || 0) +
+                            ' ÷ ' + minToHM(denomMin) + ' shift';
+    } else {
+      utilEl.textContent = '—';
+      utilSub.textContent = 'production ÷ wall-clock shift';
+    }
+  }
+
+  // Throughput = Tasks ÷ Production hours. Same formula as TL leaderboard.
+  // Shown as "X.X/hr" (or "X/hr" when ≥ 10).
+  function renderThroughput(totals, taskCount) {
+    var el = document.getElementById('statTput');
+    var sub = document.getElementById('statTputSub');
+    var prod = Number((totals && totals.productionMin) || 0);
+    var n = Number(taskCount || 0);
+    if (!prod || !n) { el.textContent = '—'; sub.textContent = 'tasks ÷ production hrs'; return; }
+    var prodHrs = prod / 60;
+    var rate = n / prodHrs;
+    el.textContent = (rate >= 10 ? rate.toFixed(0) : rate.toFixed(1)) + '/hr';
+    sub.textContent = n + ' tasks ÷ ' + prodHrs.toFixed(2) + ' hrs';
   }
 
   // Avg Task Time = production minutes ÷ tasks completed. Displayed as "Xm Ys"
@@ -906,6 +945,7 @@
       // Task count = number of rows (each row = one logged task)
       document.getElementById('statTasks').textContent = rows.length;
       renderAvgTaskTime(resp.totals || {}, rows.length);
+      renderThroughput(resp.totals || {}, rows.length);
 
       if (activeTeam) {
         renderBreakdowns(activeTeam, header, rows);
@@ -964,6 +1004,7 @@
     lastRowsFiltered = rows;
     document.getElementById('statTasks').textContent = rows.length;
     renderAvgTaskTime(resp.totals || {}, rows.length);
+    renderThroughput(resp.totals || {}, rows.length);
     renderBreakdowns(team, header, rows);
     renderRoleBreakdown(team, header, rows);
     renderRecent(team, header, rows);
