@@ -1135,11 +1135,23 @@ function lookupWhitelist_(ss, email) {
 function readByDate_(ss, tabName, date, teamFilter) {
   var sh = ss.getSheetByName(tabName);
   if (!sh) return { header: [], rows: [] };
-  var vals = sh.getDataRange().getValues();
+  // Use display values for the date column — raw getValues() returns Date
+  // objects when Sheets coerces "2026-04-27" cells, and String(Date) starts
+  // with "Sat Apr 27" not "2026-04-27", silently dropping every row.
+  var rng = sh.getDataRange();
+  var vals = rng.getValues();
+  var disp = rng.getDisplayValues();
   var header = vals.shift() || [];
-  var rows = vals.filter(function (r) { return String(r[0]).indexOf(date) === 0; });
-  if (teamFilter && teamFilter.length) {
-    rows = rows.filter(function (r) { return teamFilter.indexOf(String(r[2] || '')) >= 0; });
+  disp.shift();
+  var rows = [];
+  for (var i = 0; i < vals.length; i++) {
+    var d = String(disp[i][0] || vals[i][0] || '').slice(0, 10);
+    if (d !== date) continue;
+    if (teamFilter && teamFilter.length &&
+        teamFilter.indexOf(String(vals[i][2] || '')) < 0) continue;
+    // Replace col A with display string so JSON downstream renders cleanly
+    vals[i][0] = String(disp[i][0] || vals[i][0] || '');
+    rows.push(vals[i]);
   }
   return { header: header, rows: rows };
 }
@@ -1153,11 +1165,26 @@ function readByDate_(ss, tabName, date, teamFilter) {
 function readSessionsByDate_(ss, date, teamFilter) {
   var sh = ss.getSheetByName('Sessions');
   if (!sh) return { header: [], rows: [] };
-  var vals = sh.getDataRange().getValues();
+  // Use display values everywhere we filter on a date column. raw getValues()
+  // returns Date objects when Sheets coerces the cell, and String(Date)
+  // starts with "Sat Apr 27" not "2026-04-27" → silently drops every row.
+  var rng = sh.getDataRange();
+  var vals = rng.getValues();
+  var disp = rng.getDisplayValues();
   var header = vals.shift() || [];
-  var rows = vals.filter(function (r) { return String(r[1]).indexOf(date) === 0; });
+  disp.shift();
+  var rows = [];
+  for (var ri = 0; ri < vals.length; ri++) {
+    var d = String(disp[ri][1] || vals[ri][1] || '').slice(0, 10);
+    if (d !== date) continue;
+    // Replace cols B/C/D with display strings so JSON downstream is clean
+    vals[ri][1] = String(disp[ri][1] || vals[ri][1] || '');
+    vals[ri][2] = String(disp[ri][2] || vals[ri][2] || '');
+    vals[ri][3] = String(disp[ri][3] || vals[ri][3] || '');
+    rows.push(vals[ri]);
+  }
 
-  // Super-admin path — no filter (identical to previous behavior)
+  // Super-admin path — no team filter
   if (!teamFilter || !teamFilter.length) {
     return { header: header, rows: rows };
   }
@@ -1167,12 +1194,15 @@ function readSessionsByDate_(ss, date, teamFilter) {
   teamFilter.forEach(function (t) { teamSet[t] = true; });
   var nameSet = {};
 
-  // (1) Attendance: col A=Date, col B=User, col C=Team
+  // (1) Attendance: col A=Date, col B=User, col C=Team — display values for date
   var att = ss.getSheetByName('Attendance');
   if (att) {
-    var aVals = att.getDataRange().getValues();
+    var aRng = att.getDataRange();
+    var aVals = aRng.getValues();
+    var aDisp = aRng.getDisplayValues();
     for (var i = 1; i < aVals.length; i++) {
-      if (String(aVals[i][0]).indexOf(date) !== 0) continue;
+      var aDate = String(aDisp[i][0] || aVals[i][0] || '').slice(0, 10);
+      if (aDate !== date) continue;
       var team = String(aVals[i][2] || '');
       if (!teamSet[team]) continue;
       var name = String(aVals[i][1] || '').toLowerCase().trim();
@@ -1180,7 +1210,7 @@ function readSessionsByDate_(ss, date, teamFilter) {
     }
   }
 
-  // (2) Team logs for this date — covers users who logged tasks but skipped attendance
+  // (2) Team logs for this date — display values for the timestamp column
   Object.keys(teamSet).forEach(function (team) {
     var tab = TEAM_TO_TAB[team];
     if (!tab) return;
@@ -1188,9 +1218,12 @@ function readSessionsByDate_(ss, date, teamFilter) {
     if (!sh2) return;
     var lr = sh2.getLastRow();
     if (lr < 2) return;
-    var block = sh2.getRange(2, 1, lr - 1, 2).getValues(); // A=Timestamp, B=User
+    var rng2 = sh2.getRange(2, 1, lr - 1, 2); // A=Timestamp, B=User
+    var block = rng2.getValues();
+    var blockDisp = rng2.getDisplayValues();
     for (var j = 0; j < block.length; j++) {
-      if (String(block[j][0]).indexOf(date) !== 0) continue;
+      var rowDate = String(blockDisp[j][0] || block[j][0] || '').slice(0, 10);
+      if (rowDate !== date) continue;
       var n = String(block[j][1] || '').toLowerCase().trim();
       if (n) nameSet[n] = true;
     }
