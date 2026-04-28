@@ -1510,7 +1510,20 @@ function _findFileInFolder_(folder, name) {
 }
 
 // Sync Drive permissions from Whitelist — run daily or when TL roster changes.
-// Super_admins → edit on root. TLs → view on their team subfolders.
+//
+// Permission model (strict):
+//   • super_admin → Editor on root (cascades to every subfolder)
+//   • tl          → Viewer on each subfolder for teams in Whitelist.Teams
+//   • qc          → NO Drive access. QC reviewers see all data through
+//                   the dashboard, which calls Apps Script (running as
+//                   workbook owner) to read archives on their behalf.
+//                   Bypasses any need for direct Drive access.
+//   • everyone else → no access
+//
+// Previously the code lumped "Teams=ALL" with super_admin for Drive
+// purposes, which leaked Editor on _Overall and every team folder to
+// QC reviewers (who have Teams=ALL). Strict role gate now matches
+// lookupWhitelist_ semantics.
 function syncArchivePermissions() {
   var rootId = _getArchiveRootId_();
   if (!rootId) return { ok: false, error: 'archive not set up; run setupArchive()' };
@@ -1521,18 +1534,21 @@ function syncArchivePermissions() {
   if (!wl) return { ok: false, error: 'no Whitelist tab' };
   var rows = wl.getDataRange().getValues();
   var admins = [];
+  var qcEmails = [];
   var tlTeams = {}; // team -> [email, ...]
   for (var i = 1; i < rows.length; i++) {
     var email = String(rows[i][0] || '').toLowerCase().trim();
     var role  = String(rows[i][1] || '').toLowerCase().trim();
     var teams = String(rows[i][2] || '');
     if (!email) continue;
-    if (role === 'super_admin' || teams.toUpperCase() === 'ALL') {
+    if (role === 'super_admin') {
       admins.push(email);
     } else if (role === 'tl') {
       teams.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (t) {
         (tlTeams[t] = tlTeams[t] || []).push(email);
       });
+    } else if (role === 'qc') {
+      qcEmails.push(email);
     }
   }
 
@@ -1541,12 +1557,17 @@ function syncArchivePermissions() {
     try { root.addEditor(e); } catch (err) { Logger.log('addEditor ' + e + ' failed: ' + err); }
   });
 
-  // TLs get viewer access on their team folder
+  // TLs get viewer access on their team folder ONLY (no Editor anywhere)
   Object.keys(TEAM_TO_TAB).forEach(function (team) {
     var folder = _findOrCreateChild_(root, _folderNameForTeam_(team));
     var emails = tlTeams[team] || [];
     emails.forEach(function (e) {
       try { folder.addViewer(e); } catch (err) { Logger.log('addViewer ' + e + '@' + team + ' failed: ' + err); }
+    });
+    // Strip any QC user who somehow has direct access to this team folder
+    qcEmails.forEach(function (qe) {
+      try { folder.removeViewer(qe); } catch (e1) {}
+      try { folder.removeEditor(qe); } catch (e2) {}
     });
   });
 
@@ -1571,7 +1592,78 @@ function syncArchivePermissions() {
     admins.forEach(function (e) { try { overall.addEditor(e); } catch (err) {} });
   } catch (err) { Logger.log('overall lockdown failed: ' + err); }
 
-  return { ok: true, admins: admins.length, teams: Object.keys(tlTeams).length };
+  // _System (Sessions + Attendance) folder → super_admins ONLY. Same lockdown
+  // pattern as _Overall. QC users explicitly stripped here to make sure no
+  // historical Editor access remains.
+  try {
+    var system = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+    var adminSet2 = {};
+    admins.forEach(function (e) { adminSet2[String(e).toLowerCase()] = true; });
+    system.getViewers().forEach(function (u) {
+      var em = String(u.getEmail() || '').toLowerCase();
+      if (em && !adminSet2[em]) { try { system.removeViewer(em); } catch (err) {} }
+    });
+    system.getEditors().forEach(function (u) {
+      var em = String(u.getEmail() || '').toLowerCase();
+      if (em && !adminSet2[em]) { try { system.removeEditor(em); } catch (err) {} }
+    });
+    admins.forEach(function (e) { try { system.addEditor(e); } catch (err) {} });
+  } catch (err) { Logger.log('system lockdown failed: ' + err); }
+
+  // Strip QC users from root (in case the previous Teams=ALL bug gave them
+  // root Editor — that cascade is the source of the leak we're fixing)
+  qcEmails.forEach(function (e) {
+    try { root.removeEditor(e); } catch (err) {}
+    try { root.removeViewer(e); } catch (err) {}
+  });
+
+  return {
+    ok: true,
+    admins: admins.length,
+    tls:    Object.keys(tlTeams).length,
+    qcRevoked: qcEmails.length
+  };
+}
+
+// One-shot cleanup — run from the Apps Script editor when you want to
+// immediately revoke any QC-role user's existing Drive access (Editor or
+// Viewer) without waiting for the next syncArchivePermissions run.
+function revokeQcDriveAccess() {
+  var rootId = _getArchiveRootId_();
+  if (!rootId) return { ok: false, error: 'archive not set up' };
+  var root = DriveApp.getFolderById(rootId);
+
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var wl = ss.getSheetByName('Whitelist');
+  if (!wl) return { ok: false, error: 'no Whitelist tab' };
+  var rows = wl.getDataRange().getValues();
+  var qcEmails = [];
+  for (var i = 1; i < rows.length; i++) {
+    var email = String(rows[i][0] || '').toLowerCase().trim();
+    var role  = String(rows[i][1] || '').toLowerCase().trim();
+    if (email && role === 'qc') qcEmails.push(email);
+  }
+  if (qcEmails.length === 0) return { ok: true, note: 'no qc users in Whitelist', revoked: 0 };
+
+  var revoked = 0;
+
+  function strip(folder) {
+    qcEmails.forEach(function (e) {
+      try { folder.removeEditor(e); revoked++; } catch (err) {}
+      try { folder.removeViewer(e); revoked++; } catch (err) {}
+    });
+  }
+
+  // Root + all 17 team folders + _Overall + _System
+  strip(root);
+  Object.keys(TEAM_TO_TAB).forEach(function (team) {
+    strip(_findOrCreateChild_(root, _folderNameForTeam_(team)));
+  });
+  strip(_findOrCreateChild_(root, OVERALL_FOLDER_NAME));
+  strip(_findOrCreateChild_(root, SYSTEM_FOLDER_NAME));
+
+  Logger.log('revokeQcDriveAccess: stripped ' + revoked + ' permissions for ' + qcEmails.join(', '));
+  return { ok: true, qcUsers: qcEmails, removeAttempts: revoked };
 }
 
 // Get or create the monthly rollup spreadsheet for a team, e.g. "BRN_Log_2026_04".
@@ -1697,19 +1789,28 @@ function _archiveTeamDay_(ss, team, cutoff, yyyymm) {
 
   var lastCol = sh.getLastColumn();
   var header  = sh.getRange(1, 1, 1, lastCol).getValues()[0];
-  var values  = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  var rng     = sh.getRange(2, 1, lastRow - 1, lastCol);
+  var values  = rng.getValues();
+  var disp    = rng.getDisplayValues();
 
-  // Rows to archive = col A starts with cutoff date.
-  // Find contiguous bottom range with date < today (handles the intended case:
-  // tab has only today's rows at the top after archive, BUT first-run has
-  // months of data, so we explicitly filter by exact cutoff date here).
+  // Rows to archive = col A date == cutoff. Use display values — raw
+  // getValues() returns Date objects when Sheets coerces the timestamp,
+  // and String(Date) starts with "Sat Apr 27" not "2026-04-27", silently
+  // dropping every row. Same date-coerce bug pattern fixed elsewhere.
   var toArchive = [];
   var toKeep = [];
-  values.forEach(function (r) {
-    var d = String(r[0]).slice(0, 10);
-    if (d === cutoff) toArchive.push(r);
-    else toKeep.push(r);
-  });
+  for (var i = 0; i < values.length; i++) {
+    var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
+    if (d === cutoff) {
+      // Coerce col A to display string before archiving so the archive
+      // file doesn't get Date-typed cells (which would re-introduce the
+      // same bug on read).
+      values[i][0] = String(disp[i][0] || values[i][0] || '');
+      toArchive.push(values[i]);
+    } else {
+      toKeep.push(values[i]);
+    }
+  }
   if (toArchive.length === 0) return { ok: true, moved: 0, note: 'no rows for ' + cutoff };
 
   // Write to monthly archive file
@@ -1737,6 +1838,186 @@ function _archiveTeamDay_(ss, team, cutoff, yyyymm) {
   }
   SpreadsheetApp.flush();
   return { ok: true, moved: toArchive.length, kept: toKeep.length, archiveFile: archSs.getName() };
+}
+
+// One-shot sweep — archives ALL rows whose date <= cutoff across every
+// data tab, regardless of PST timing. Run from the Apps Script editor
+// when you want today's data archived NOW instead of waiting for PST
+// midnight + the next dailyArchive trigger.
+//
+// Usage from the editor:
+//   forceArchiveAllPast('2026-04-28')   // archive everything dated 4/28 and earlier
+//
+// Same archive locations as the daily run (per-team monthly files +
+// _System/Sessions_yyyymm + _System/Attendance_yyyymm). Idempotent — re-runs
+// only move whatever's still in the active sheet.
+function forceArchiveAllPast(targetDate) {
+  if (!targetDate || !/^\d{4}-\d{2}-\d{2}$/.test(String(targetDate))) {
+    return { ok: false, error: 'targetDate required, format YYYY-MM-DD' };
+  }
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var report = { targetDate: targetDate, started: istNow_(), teams: {}, errors: [] };
+
+  // 1) Team logs — for each team, walk all rows ≤ targetDate, group by month
+  Object.keys(TEAM_TO_TAB).forEach(function (team) {
+    try {
+      report.teams[team] = _forceArchiveTeamUpTo_(ss, team, targetDate);
+    } catch (err) {
+      report.errors.push(team + ': ' + err);
+      report.teams[team] = { ok: false, error: String(err) };
+    }
+  });
+
+  // 2) Sessions — archive all rows date ≤ targetDate
+  try {
+    report.sessions = _forceArchiveSystemUpTo_(ss, 'Sessions', 1 /*dateColIdx*/, targetDate);
+  } catch (err) {
+    report.errors.push('sessions: ' + err);
+    report.sessions = { ok: false, error: String(err) };
+  }
+
+  // 3) Attendance — archive all rows date ≤ targetDate
+  try {
+    report.attendance = _forceArchiveSystemUpTo_(ss, 'Attendance', 0 /*dateColIdx*/, targetDate);
+  } catch (err) {
+    report.errors.push('attendance: ' + err);
+    report.attendance = { ok: false, error: String(err) };
+  }
+
+  report.finished = istNow_();
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
+// Archive all rows in a team log where date col A <= targetDate, grouped
+// by month. Verified write before clear. Used by forceArchiveAllPast.
+function _forceArchiveTeamUpTo_(ss, team, targetDate) {
+  var tab = TEAM_TO_TAB[team];
+  var sh = ss.getSheetByName(tab);
+  if (!sh) return { ok: true, moved: 0, note: 'tab missing' };
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return { ok: true, moved: 0, note: 'empty' };
+
+  var lastCol = sh.getLastColumn();
+  var header  = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  var rng     = sh.getRange(2, 1, lastRow - 1, lastCol);
+  var values  = rng.getValues();
+  var disp    = rng.getDisplayValues();
+
+  var byMonth = {};
+  var toKeep  = [];
+  for (var i = 0; i < values.length; i++) {
+    var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
+    if (d && d.length === 10 && d.charAt(4) === '-' && d <= targetDate) {
+      values[i][0] = String(disp[i][0] || values[i][0] || '');
+      var mo = d.slice(0, 7).replace('-', '_');
+      (byMonth[mo] = byMonth[mo] || []).push(values[i]);
+    } else {
+      toKeep.push(values[i]);
+    }
+  }
+  if (Object.keys(byMonth).length === 0) {
+    return { ok: true, moved: 0, kept: toKeep.length, note: 'no rows ≤ ' + targetDate };
+  }
+
+  var moved = 0;
+  var months = [];
+  Object.keys(byMonth).forEach(function (yyyymm) {
+    var rows = byMonth[yyyymm];
+    var archSs = _getMonthlyArchiveFile_(team, yyyymm);
+    var archSh = archSs.getSheets()[0];
+    if (archSh.getLastRow() < 1) {
+      archSh.getRange(1, 1, 1, header.length).setValues([header]);
+      archSh.setFrozenRows(1);
+    }
+    var archStart = archSh.getLastRow() + 1;
+    archSh.getRange(archStart, 1, rows.length, rows[0].length).setValues(rows);
+    SpreadsheetApp.flush();
+    var written = archSh.getRange(archStart, 1, rows.length, 1).getValues();
+    if (written.length !== rows.length) {
+      throw new Error('verify failed for ' + team + '/' + yyyymm);
+    }
+    moved += rows.length;
+    months.push(yyyymm + '(' + rows.length + ')');
+  });
+
+  sh.getRange(2, 1, values.length, lastCol).clearContent();
+  if (toKeep.length > 0) {
+    sh.getRange(2, 1, toKeep.length, toKeep[0].length).setValues(toKeep);
+  }
+  SpreadsheetApp.flush();
+  return { ok: true, moved: moved, kept: toKeep.length, months: months };
+}
+
+// Archive all rows in Sessions or Attendance where date col <= targetDate.
+// dateColIdx: 0 for Attendance (col A=Date), 1 for Sessions (col B=Date).
+function _forceArchiveSystemUpTo_(ss, tabName, dateColIdx, targetDate) {
+  var sh = ss.getSheetByName(tabName);
+  if (!sh) return { ok: true, moved: 0, note: tabName + ' tab missing' };
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return { ok: true, moved: 0, note: 'empty' };
+
+  var lastCol = sh.getLastColumn();
+  var header  = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  var rng     = sh.getRange(2, 1, lastRow - 1, lastCol);
+  var values  = rng.getValues();
+  var disp    = rng.getDisplayValues();
+
+  var byMonth = {};
+  var toKeep  = [];
+  for (var i = 0; i < values.length; i++) {
+    var d = String(disp[i][dateColIdx] || values[i][dateColIdx] || '').slice(0, 10);
+    if (d && d.length === 10 && d.charAt(4) === '-' && d <= targetDate) {
+      // Coerce all string-formatted cells to display strings so archive
+      // doesn't get Date-typed cells.
+      if (tabName === 'Sessions') {
+        values[i][1] = String(disp[i][1] || values[i][1] || '');
+        values[i][2] = String(disp[i][2] || values[i][2] || '');
+        values[i][3] = String(disp[i][3] || values[i][3] || '');
+      } else if (tabName === 'Attendance') {
+        values[i][0] = String(disp[i][0] || values[i][0] || '');
+        values[i][4] = String(disp[i][4] || values[i][4] || '');
+      }
+      var mo = d.slice(0, 7).replace('-', '_');
+      (byMonth[mo] = byMonth[mo] || []).push(values[i]);
+    } else {
+      toKeep.push(values[i]);
+    }
+  }
+  if (Object.keys(byMonth).length === 0) {
+    return { ok: true, moved: 0, kept: toKeep.length, note: 'no rows ≤ ' + targetDate };
+  }
+
+  var moved = 0;
+  var months = [];
+  Object.keys(byMonth).forEach(function (yyyymm) {
+    var rows = byMonth[yyyymm];
+    var archSs = _getSystemArchiveFile_(tabName, yyyymm);
+    var archSh = archSs.getSheets()[0];
+    if (archSh.getLastRow() < 1) {
+      archSh.getRange(1, 1, 1, header.length).setValues([header]);
+      archSh.setFrozenRows(1);
+    }
+    var archStart = archSh.getLastRow() + 1;
+    archSh.getRange(archStart, 1, rows.length, rows[0].length).setValues(rows);
+    SpreadsheetApp.flush();
+    var written = archSh.getRange(archStart, 1, rows.length, 1).getValues();
+    if (written.length !== rows.length) {
+      throw new Error('verify failed for ' + tabName + '/' + yyyymm);
+    }
+    moved += rows.length;
+    months.push(yyyymm + '(' + rows.length + ')');
+  });
+
+  sh.getRange(2, 1, values.length, lastCol).clearContent();
+  if (toKeep.length > 0) {
+    sh.getRange(2, 1, toKeep.length, toKeep[0].length).setValues(toKeep);
+    if (tabName === 'Sessions') {
+      sh.getRange(2, 5, toKeep.length, 7).setNumberFormat('0');
+    }
+  }
+  SpreadsheetApp.flush();
+  return { ok: true, moved: moved, kept: toKeep.length, months: months };
 }
 
 // Open or create a monthly archive workbook for Sessions or Attendance.
