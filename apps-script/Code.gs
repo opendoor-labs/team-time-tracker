@@ -988,66 +988,81 @@ function readLog_(ss, p) {
 
   var date = p.date ? String(p.date) : '';
 
-  // Past date? Serve from Drive monthly archive (active sheet keeps only
-  // today's rows after nightly archive job runs at 8 AM IST).
-  if (date && date !== todayPST_()) {
+  // Always check the Drive archive for this date FIRST. After PR #4 +
+  // forceArchiveAllPast(today), today's PST data may already be archived
+  // even though the date matches todayPST_(). The previous "skip archive
+  // if date == today" check missed those rows.
+  var archRows = [];
+  var archHeader = [];
+  if (date) {
     var arch = readArchiveLog_(team, date);
-    if (arch.ok) {
-      return { ok: true, team: team, tab: tab, header: arch.header, rows: arch.rows, source: 'archive' };
+    if (arch && arch.ok) {
+      archRows = arch.rows || [];
+      archHeader = arch.header || [];
     }
-    // Fall through: if archive miss, try active sheet anyway (transitional week)
   }
 
   var sh = ss.getSheetByName(tab);
-  if (!sh) return { ok: false, error: 'tab missing: ' + tab };
+  if (!sh) {
+    // No active tab — return whatever we got from archive (or empty)
+    return { ok: true, team: team, tab: tab, header: archHeader, rows: archRows,
+             source: archRows.length ? 'archive' : 'none' };
+  }
   var lastRow = sh.getLastRow();
-  if (lastRow < 2) return { ok: true, team: team, tab: tab, header: [], rows: [], source: 'active' };
-
-  // Read header once (col count comes from actual sheet)
   var lastCol = sh.getLastColumn();
-  var header  = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  var header  = lastCol > 0 ? sh.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  if (!archHeader.length) archHeader = header;
 
-  // No date filter → return full tab (used rarely, usually bounded to "today" tabs)
+  // No date filter → return full tab (rare path)
   if (!date) {
     var all = lastRow > 1 ? sh.getRange(2, 1, lastRow - 1, lastCol).getValues() : [];
     return { ok: true, team: team, tab: tab, header: header, rows: all, source: 'active' };
   }
 
-  // Bottom-up scan: logs are append-only and sorted by time in col A.
-  // Reads 500 rows at a time from the bottom and stops when we pass the
-  // requested date. 50-100x faster than full-sheet scan at 30K+ rows.
-  //
-  // Use getDisplayValues for col A so we get "2026-04-27 20:59:07"
-  // regardless of whether the underlying cell is a string OR a Date
-  // object that Sheets auto-coerced. Otherwise rows whose Time cell
-  // got typed as Date silently fail the date filter (the bug that hid
-  // Ravi's 2nd task — String(dateObj).slice(0,10) yields "Sun Apr 27"
-  // not "2026-04-27"). Also overwrite col A in the returned row with
-  // the display string so downstream JSON serialization stays clean.
-  var BLOCK = 500;
+  // Active sheet scan — bottom-up, getDisplayValues for date col so
+  // Date-typed cells don't silently drop. (Fix from PR #2 retained.)
   var matched = [];
-  var passed = false;
-  var end = lastRow;
-  while (end >= 2 && !passed) {
-    var start = Math.max(2, end - BLOCK + 1);
-    var rng   = sh.getRange(start, 1, end - start + 1, lastCol);
-    var block = rng.getValues();
-    var disp  = rng.getDisplayValues();
-    for (var i = block.length - 1; i >= 0; i--) {
-      var rowDate = String(disp[i][0] || '').slice(0, 10);
-      if (rowDate === date) {
-        block[i][0] = String(disp[i][0] || '');
-        matched.unshift(block[i]);
-      } else if (rowDate < date && rowDate.length === 10 && rowDate.charAt(4) === '-') {
-        // Only break early on a properly-formatted date string we can
-        // safely lexically-compare. Skip non-canonical strings (eg
-        // "Sun Apr 27") so they don't trick the early-exit.
-        passed = true; break;
+  if (lastRow >= 2) {
+    var BLOCK = 500;
+    var passed = false;
+    var end = lastRow;
+    while (end >= 2 && !passed) {
+      var start = Math.max(2, end - BLOCK + 1);
+      var rng   = sh.getRange(start, 1, end - start + 1, lastCol);
+      var block = rng.getValues();
+      var disp  = rng.getDisplayValues();
+      for (var i = block.length - 1; i >= 0; i--) {
+        var rowDate = String(disp[i][0] || '').slice(0, 10);
+        if (rowDate === date) {
+          block[i][0] = String(disp[i][0] || '');
+          matched.unshift(block[i]);
+        } else if (rowDate < date && rowDate.length === 10 && rowDate.charAt(4) === '-') {
+          passed = true; break;
+        }
       }
+      end = start - 1;
     }
-    end = start - 1;
   }
-  return { ok: true, team: team, tab: tab, header: header, rows: matched, source: 'active' };
+
+  // Merge archive + active. Archive rows first (chronologically earlier),
+  // then active rows. Dedupe by stringified row content (cheap and exact).
+  var merged = archRows.concat(matched);
+  if (archRows.length && matched.length) {
+    var seen = {};
+    var deduped = [];
+    for (var mi = 0; mi < merged.length; mi++) {
+      var key = JSON.stringify(merged[mi]);
+      if (seen[key]) continue;
+      seen[key] = true;
+      deduped.push(merged[mi]);
+    }
+    merged = deduped;
+  }
+
+  var src = archRows.length && matched.length ? 'archive+active'
+          : archRows.length ? 'archive'
+          : 'active';
+  return { ok: true, team: team, tab: tab, header: archHeader, rows: merged, source: src };
 }
 
 // Multi-tab read for dashboard — respects scope.
@@ -1133,41 +1148,68 @@ function lookupWhitelist_(ss, email) {
 }
 
 function readByDate_(ss, tabName, date, teamFilter) {
-  // Past-date Attendance: pull from monthly Drive archive (after dailyArchive
-  // ran, the active Attendance tab only holds today's rows). Other tabs
-  // continue to read from the active sheet only — they're not archived.
-  if (tabName === 'Attendance' && date && date !== todayPST_()) {
+  // For Attendance: always check Drive archive AND active sheet, merge.
+  // After PR #4 + forceArchiveAllPast(today), even "today's PST data" may
+  // already be archived. Reading from a single source can miss rows.
+  var archRows = [];
+  var archHeader = [];
+  if (tabName === 'Attendance' && date) {
     var arch = readArchiveAttendance_(date);
-    var rows = arch.rows || [];
-    if (teamFilter && teamFilter.length) {
-      rows = rows.filter(function (r) {
-        return teamFilter.indexOf(String(r[2] || '')) >= 0;
-      });
+    if (arch) {
+      archRows = arch.rows || [];
+      archHeader = arch.header || [];
     }
-    return { header: arch.header || [], rows: rows };
   }
 
   var sh = ss.getSheetByName(tabName);
-  if (!sh) return { header: [], rows: [] };
-  // Use display values for the date column — raw getValues() returns Date
-  // objects when Sheets coerces "2026-04-27" cells, and String(Date) starts
-  // with "Sat Apr 27" not "2026-04-27", silently dropping every row.
+  if (!sh) {
+    // No active sheet — return archive rows (filtered by team)
+    if (teamFilter && teamFilter.length) {
+      archRows = archRows.filter(function (r) {
+        return teamFilter.indexOf(String(r[2] || '')) >= 0;
+      });
+    }
+    return { header: archHeader, rows: archRows };
+  }
+
   var rng = sh.getDataRange();
   var vals = rng.getValues();
   var disp = rng.getDisplayValues();
   var header = vals.shift() || [];
   disp.shift();
-  var rows = [];
+  if (!archHeader.length) archHeader = header;
+
+  var activeRows = [];
   for (var i = 0; i < vals.length; i++) {
     var d = String(disp[i][0] || vals[i][0] || '').slice(0, 10);
-    if (d !== date) continue;
+    if (date && d !== date) continue;
     if (teamFilter && teamFilter.length &&
         teamFilter.indexOf(String(vals[i][2] || '')) < 0) continue;
-    // Replace col A with display string so JSON downstream renders cleanly
     vals[i][0] = String(disp[i][0] || vals[i][0] || '');
-    rows.push(vals[i]);
+    activeRows.push(vals[i]);
   }
-  return { header: header, rows: rows };
+
+  // Apply team filter to archive too
+  if (teamFilter && teamFilter.length) {
+    archRows = archRows.filter(function (r) {
+      return teamFilter.indexOf(String(r[2] || '')) >= 0;
+    });
+  }
+
+  // Merge + dedupe
+  var merged = archRows.concat(activeRows);
+  if (archRows.length && activeRows.length) {
+    var seen = {};
+    var out = [];
+    for (var mi = 0; mi < merged.length; mi++) {
+      var key = JSON.stringify(merged[mi]);
+      if (seen[key]) continue;
+      seen[key] = true;
+      out.push(merged[mi]);
+    }
+    merged = out;
+  }
+  return { header: archHeader, rows: merged };
 }
 
 // ★ CHANGED: Sessions-specific reader with TL team filtering.
@@ -1177,24 +1219,30 @@ function readByDate_(ss, tabName, date, teamFilter) {
 // set from Attendance (date + team) AND from that date's team-log rows (col B=User),
 // then filter Sessions by Name. teamFilter=null → super-admin path (no filter).
 function readSessionsByDate_(ss, date, teamFilter) {
-  // Past-date Sessions: pull from monthly Drive archive. Active sheet only
-  // holds today's rows after dailyArchive runs at 8 AM IST.
+  // Always check Drive archive AND active sheet, merge results. After
+  // PR #4 + forceArchiveAllPast(today), rows for today's PST date may
+  // already be archived even though date == todayPST_().
   var rows = [];
   var header = [];
-  if (date && date !== todayPST_()) {
+
+  // Archive lookup
+  if (date) {
     var arch = readArchiveSessions_(date);
-    rows = arch.rows || [];
-    header = arch.header || [];
-  } else {
-    var sh = ss.getSheetByName('Sessions');
-    if (!sh) return { header: [], rows: [] };
-    // Use display values for date filter — raw getValues() returns Date
-    // objects when Sheets coerces the cell, dropping rows silently.
+    if (arch) {
+      rows = (arch.rows || []).slice();
+      header = arch.header || [];
+    }
+  }
+
+  // Active sheet lookup
+  var sh = ss.getSheetByName('Sessions');
+  if (sh) {
     var rng = sh.getDataRange();
     var vals = rng.getValues();
     var disp = rng.getDisplayValues();
-    header = vals.shift() || [];
+    var activeHeader = vals.shift() || [];
     disp.shift();
+    if (!header.length) header = activeHeader;
     for (var ri = 0; ri < vals.length; ri++) {
       var d = String(disp[ri][1] || vals[ri][1] || '').slice(0, 10);
       if (d !== date) continue;
@@ -1203,6 +1251,19 @@ function readSessionsByDate_(ss, date, teamFilter) {
       vals[ri][3] = String(disp[ri][3] || vals[ri][3] || '');
       rows.push(vals[ri]);
     }
+  }
+
+  // Dedupe by row content (handles edge case where row exists in both)
+  if (rows.length > 1) {
+    var seen = {};
+    var deduped = [];
+    for (var di = 0; di < rows.length; di++) {
+      var key = JSON.stringify(rows[di]);
+      if (seen[key]) continue;
+      seen[key] = true;
+      deduped.push(rows[di]);
+    }
+    rows = deduped;
   }
 
   // Super-admin path — no team filter
@@ -1215,24 +1276,19 @@ function readSessionsByDate_(ss, date, teamFilter) {
   teamFilter.forEach(function (t) { teamSet[t] = true; });
   var nameSet = {};
 
-  // (1) Attendance: col A=Date, col B=User, col C=Team — for past dates the
-  // active Attendance tab no longer holds these rows; pull from archive.
-  // For today, read from the active sheet directly.
+  // (1) Attendance — always check archive AND active for the date, merge.
   var attRows = [];
-  if (date !== todayPST_()) {
-    var attArch = readArchiveAttendance_(date);
-    attRows = attArch.rows || [];
-  } else {
-    var att = ss.getSheetByName('Attendance');
-    if (att) {
-      var aRng = att.getDataRange();
-      var aVals = aRng.getValues();
-      var aDisp = aRng.getDisplayValues();
-      for (var i = 1; i < aVals.length; i++) {
-        var aDate = String(aDisp[i][0] || aVals[i][0] || '').slice(0, 10);
-        if (aDate !== date) continue;
-        attRows.push(aVals[i]);
-      }
+  var attArch = readArchiveAttendance_(date);
+  if (attArch && attArch.rows) attRows = attRows.concat(attArch.rows);
+  var att = ss.getSheetByName('Attendance');
+  if (att) {
+    var aRng = att.getDataRange();
+    var aVals = aRng.getValues();
+    var aDisp = aRng.getDisplayValues();
+    for (var i = 1; i < aVals.length; i++) {
+      var aDate = String(aDisp[i][0] || aVals[i][0] || '').slice(0, 10);
+      if (aDate !== date) continue;
+      attRows.push(aVals[i]);
     }
   }
   for (var ai = 0; ai < attRows.length; ai++) {
@@ -1242,27 +1298,25 @@ function readSessionsByDate_(ss, date, teamFilter) {
     if (name) nameSet[name] = true;
   }
 
-  // (2) Team logs for this date — past dates already moved to Drive monthly
-  // archive by dailyArchive(). For today, read active sheet directly.
+  // (2) Team logs — always check archive AND active for the date, merge.
   Object.keys(teamSet).forEach(function (team) {
     var tab = TEAM_TO_TAB[team];
     if (!tab) return;
     var teamRows = [];
-    if (date !== todayPST_()) {
-      var arch = readArchiveLog_(team, date);
-      if (arch && arch.ok) teamRows = arch.rows || [];
-    } else {
-      var sh2 = ss.getSheetByName(tab);
-      if (!sh2) return;
+    var arch = readArchiveLog_(team, date);
+    if (arch && arch.ok && arch.rows) teamRows = teamRows.concat(arch.rows);
+    var sh2 = ss.getSheetByName(tab);
+    if (sh2) {
       var lr = sh2.getLastRow();
-      if (lr < 2) return;
-      var rng2 = sh2.getRange(2, 1, lr - 1, 2); // A=Timestamp, B=User
-      var block = rng2.getValues();
-      var blockDisp = rng2.getDisplayValues();
-      for (var j = 0; j < block.length; j++) {
-        var rowDate = String(blockDisp[j][0] || block[j][0] || '').slice(0, 10);
-        if (rowDate !== date) continue;
-        teamRows.push(block[j]);
+      if (lr >= 2) {
+        var rng2 = sh2.getRange(2, 1, lr - 1, 2); // A=Timestamp, B=User
+        var block = rng2.getValues();
+        var blockDisp = rng2.getDisplayValues();
+        for (var j = 0; j < block.length; j++) {
+          var rowDate = String(blockDisp[j][0] || block[j][0] || '').slice(0, 10);
+          if (rowDate !== date) continue;
+          teamRows.push(block[j]);
+        }
       }
     }
     for (var k = 0; k < teamRows.length; k++) {
