@@ -1133,6 +1133,20 @@ function lookupWhitelist_(ss, email) {
 }
 
 function readByDate_(ss, tabName, date, teamFilter) {
+  // Past-date Attendance: pull from monthly Drive archive (after dailyArchive
+  // ran, the active Attendance tab only holds today's rows). Other tabs
+  // continue to read from the active sheet only — they're not archived.
+  if (tabName === 'Attendance' && date && date !== todayPST_()) {
+    var arch = readArchiveAttendance_(date);
+    var rows = arch.rows || [];
+    if (teamFilter && teamFilter.length) {
+      rows = rows.filter(function (r) {
+        return teamFilter.indexOf(String(r[2] || '')) >= 0;
+      });
+    }
+    return { header: arch.header || [], rows: rows };
+  }
+
   var sh = ss.getSheetByName(tabName);
   if (!sh) return { header: [], rows: [] };
   // Use display values for the date column — raw getValues() returns Date
@@ -1163,25 +1177,32 @@ function readByDate_(ss, tabName, date, teamFilter) {
 // set from Attendance (date + team) AND from that date's team-log rows (col B=User),
 // then filter Sessions by Name. teamFilter=null → super-admin path (no filter).
 function readSessionsByDate_(ss, date, teamFilter) {
-  var sh = ss.getSheetByName('Sessions');
-  if (!sh) return { header: [], rows: [] };
-  // Use display values everywhere we filter on a date column. raw getValues()
-  // returns Date objects when Sheets coerces the cell, and String(Date)
-  // starts with "Sat Apr 27" not "2026-04-27" → silently drops every row.
-  var rng = sh.getDataRange();
-  var vals = rng.getValues();
-  var disp = rng.getDisplayValues();
-  var header = vals.shift() || [];
-  disp.shift();
+  // Past-date Sessions: pull from monthly Drive archive. Active sheet only
+  // holds today's rows after dailyArchive runs at 8 AM IST.
   var rows = [];
-  for (var ri = 0; ri < vals.length; ri++) {
-    var d = String(disp[ri][1] || vals[ri][1] || '').slice(0, 10);
-    if (d !== date) continue;
-    // Replace cols B/C/D with display strings so JSON downstream is clean
-    vals[ri][1] = String(disp[ri][1] || vals[ri][1] || '');
-    vals[ri][2] = String(disp[ri][2] || vals[ri][2] || '');
-    vals[ri][3] = String(disp[ri][3] || vals[ri][3] || '');
-    rows.push(vals[ri]);
+  var header = [];
+  if (date && date !== todayPST_()) {
+    var arch = readArchiveSessions_(date);
+    rows = arch.rows || [];
+    header = arch.header || [];
+  } else {
+    var sh = ss.getSheetByName('Sessions');
+    if (!sh) return { header: [], rows: [] };
+    // Use display values for date filter — raw getValues() returns Date
+    // objects when Sheets coerces the cell, dropping rows silently.
+    var rng = sh.getDataRange();
+    var vals = rng.getValues();
+    var disp = rng.getDisplayValues();
+    header = vals.shift() || [];
+    disp.shift();
+    for (var ri = 0; ri < vals.length; ri++) {
+      var d = String(disp[ri][1] || vals[ri][1] || '').slice(0, 10);
+      if (d !== date) continue;
+      vals[ri][1] = String(disp[ri][1] || vals[ri][1] || '');
+      vals[ri][2] = String(disp[ri][2] || vals[ri][2] || '');
+      vals[ri][3] = String(disp[ri][3] || vals[ri][3] || '');
+      rows.push(vals[ri]);
+    }
   }
 
   // Super-admin path — no team filter
@@ -1194,37 +1215,58 @@ function readSessionsByDate_(ss, date, teamFilter) {
   teamFilter.forEach(function (t) { teamSet[t] = true; });
   var nameSet = {};
 
-  // (1) Attendance: col A=Date, col B=User, col C=Team — display values for date
-  var att = ss.getSheetByName('Attendance');
-  if (att) {
-    var aRng = att.getDataRange();
-    var aVals = aRng.getValues();
-    var aDisp = aRng.getDisplayValues();
-    for (var i = 1; i < aVals.length; i++) {
-      var aDate = String(aDisp[i][0] || aVals[i][0] || '').slice(0, 10);
-      if (aDate !== date) continue;
-      var team = String(aVals[i][2] || '');
-      if (!teamSet[team]) continue;
-      var name = String(aVals[i][1] || '').toLowerCase().trim();
-      if (name) nameSet[name] = true;
+  // (1) Attendance: col A=Date, col B=User, col C=Team — for past dates the
+  // active Attendance tab no longer holds these rows; pull from archive.
+  // For today, read from the active sheet directly.
+  var attRows = [];
+  if (date !== todayPST_()) {
+    var attArch = readArchiveAttendance_(date);
+    attRows = attArch.rows || [];
+  } else {
+    var att = ss.getSheetByName('Attendance');
+    if (att) {
+      var aRng = att.getDataRange();
+      var aVals = aRng.getValues();
+      var aDisp = aRng.getDisplayValues();
+      for (var i = 1; i < aVals.length; i++) {
+        var aDate = String(aDisp[i][0] || aVals[i][0] || '').slice(0, 10);
+        if (aDate !== date) continue;
+        attRows.push(aVals[i]);
+      }
     }
   }
+  for (var ai = 0; ai < attRows.length; ai++) {
+    var team = String(attRows[ai][2] || '');
+    if (!teamSet[team]) continue;
+    var name = String(attRows[ai][1] || '').toLowerCase().trim();
+    if (name) nameSet[name] = true;
+  }
 
-  // (2) Team logs for this date — display values for the timestamp column
+  // (2) Team logs for this date — past dates already moved to Drive monthly
+  // archive by dailyArchive(). For today, read active sheet directly.
   Object.keys(teamSet).forEach(function (team) {
     var tab = TEAM_TO_TAB[team];
     if (!tab) return;
-    var sh2 = ss.getSheetByName(tab);
-    if (!sh2) return;
-    var lr = sh2.getLastRow();
-    if (lr < 2) return;
-    var rng2 = sh2.getRange(2, 1, lr - 1, 2); // A=Timestamp, B=User
-    var block = rng2.getValues();
-    var blockDisp = rng2.getDisplayValues();
-    for (var j = 0; j < block.length; j++) {
-      var rowDate = String(blockDisp[j][0] || block[j][0] || '').slice(0, 10);
-      if (rowDate !== date) continue;
-      var n = String(block[j][1] || '').toLowerCase().trim();
+    var teamRows = [];
+    if (date !== todayPST_()) {
+      var arch = readArchiveLog_(team, date);
+      if (arch && arch.ok) teamRows = arch.rows || [];
+    } else {
+      var sh2 = ss.getSheetByName(tab);
+      if (!sh2) return;
+      var lr = sh2.getLastRow();
+      if (lr < 2) return;
+      var rng2 = sh2.getRange(2, 1, lr - 1, 2); // A=Timestamp, B=User
+      var block = rng2.getValues();
+      var blockDisp = rng2.getDisplayValues();
+      for (var j = 0; j < block.length; j++) {
+        var rowDate = String(blockDisp[j][0] || block[j][0] || '').slice(0, 10);
+        if (rowDate !== date) continue;
+        teamRows.push(block[j]);
+      }
+    }
+    for (var k = 0; k < teamRows.length; k++) {
+      var n = String(teamRows[k][1] || '').toLowerCase().trim();
       if (n) nameSet[n] = true;
     }
   });
@@ -1399,6 +1441,10 @@ function setVersion(ver) {
 var ARCHIVE_ROOT_DEFAULT = '1hHzoyp8unXqbDUehmqob5Nl1k_FQ__5C';
 // Name of the admin-only subfolder that holds full-sheet daily snapshots.
 var OVERALL_FOLDER_NAME = '_Overall (Admins Only)';
+// Name of the subfolder that holds archived Sessions + Attendance monthlies.
+// Apps Script reads them server-side (running as owner) — no per-TL Drive
+// permission needed; team filtering happens in code.
+var SYSTEM_FOLDER_NAME  = '_System (Sessions + Attendance)';
 
 function _getArchiveRootId_() {
   var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('Config');
@@ -1436,9 +1482,15 @@ function setupArchive() {
   var overall = _findOrCreateChild_(root, OVERALL_FOLDER_NAME);
   Logger.log('Overall folder ready → ' + overall.getId());
 
+  // System folder for archived Sessions + Attendance monthlies. No per-user
+  // sharing needed — Apps Script reads server-side and filters by team.
+  var system = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+  Logger.log('System folder ready → ' + system.getId());
+
   // Grant access from Whitelist
   syncArchivePermissions();
-  return { ok: true, rootId: root.getId(), teams: teams.length, overall: overall.getId() };
+  return { ok: true, rootId: root.getId(), teams: teams.length,
+           overall: overall.getId(), system: system.getId() };
 }
 
 function _folderNameForTeam_(team) {
@@ -1561,6 +1613,28 @@ function dailyArchive() {
     }
   });
 
+  // Sessions archive — move ALL pre-today rows out of the active Sessions
+  // tab into per-month Drive files in `_System` folder. Read path falls
+  // through to these archives for any past-date query.
+  try {
+    var sessRes = _archiveSessionsPreToday_(ss);
+    log.sessions = sessRes;
+  } catch (err) {
+    log.ok = false;
+    log.errors.push('sessions: ' + err);
+    log.sessions = { ok: false, error: String(err) };
+  }
+
+  // Attendance archive — same pattern as Sessions.
+  try {
+    var attRes = _archiveAttendancePreToday_(ss);
+    log.attendance = attRes;
+  } catch (err) {
+    log.ok = false;
+    log.errors.push('attendance: ' + err);
+    log.attendance = { ok: false, error: String(err) };
+  }
+
   // Full-sheet daily snapshot → admin-only folder.
   // This is a copy of the whole spreadsheet (every tab as-of this moment)
   // so super_admins can always reconstruct any day even if team moves fail.
@@ -1665,6 +1739,359 @@ function _archiveTeamDay_(ss, team, cutoff, yyyymm) {
   return { ok: true, moved: toArchive.length, kept: toKeep.length, archiveFile: archSs.getName() };
 }
 
+// Open or create a monthly archive workbook for Sessions or Attendance.
+// kind: 'Sessions' or 'Attendance' · yyyymm: '2026_04'
+// Files live in _System (Sessions + Attendance) under the archive root.
+function _getSystemArchiveFile_(kind, yyyymm) {
+  var rootId = _getArchiveRootId_();
+  if (!rootId) throw new Error('archive not set up; run setupArchive()');
+  var root = DriveApp.getFolderById(rootId);
+  var folder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+  var baseName = kind + '_' + yyyymm;
+  var existing = _findFileInFolder_(folder, baseName);
+  if (existing) return SpreadsheetApp.openById(existing.getId());
+  var ssArch = SpreadsheetApp.create(baseName);
+  var file = DriveApp.getFileById(ssArch.getId());
+  folder.addFile(file);
+  try { DriveApp.getRootFolder().removeFile(file); } catch (e) {}
+  return ssArch;
+}
+
+// Archive ALL Sessions rows whose date < today (PST), grouped by yyyymm
+// month, into per-month Drive files. Active Sessions tab keeps only
+// today's rows after this returns. Verified-write before clear pattern.
+// Used by dailyArchive() at 8 AM IST.
+function _archiveSessionsPreToday_(ss) {
+  var sh = ss.getSheetByName('Sessions');
+  if (!sh) return { ok: true, moved: 0, note: 'Sessions tab missing' };
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return { ok: true, moved: 0, note: 'empty' };
+  var lastCol = sh.getLastColumn();
+  var header  = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+
+  var today = todayPST_();
+  var rng = sh.getRange(2, 1, lastRow - 1, lastCol);
+  var values = rng.getValues();
+  var disp   = rng.getDisplayValues();
+
+  // Group rows older than today by month; keep today's rows in active sheet.
+  var byMonth = {};   // yyyy_mm -> [rows]
+  var toKeep  = [];
+  var perMonthOriginal = {};  // for stable display values per month
+  for (var i = 0; i < values.length; i++) {
+    var d = String(disp[i][1] || values[i][1] || '').slice(0, 10);
+    if (d && d.length === 10 && d.charAt(4) === '-' && d < today) {
+      var mo = d.slice(0, 7).replace('-', '_');
+      // Replace col B/C/D with display strings so archive doesn't get
+      // Date-typed cells (which would re-introduce the same date-coerce bug).
+      values[i][1] = String(disp[i][1] || values[i][1] || '');
+      values[i][2] = String(disp[i][2] || values[i][2] || '');
+      values[i][3] = String(disp[i][3] || values[i][3] || '');
+      (byMonth[mo] = byMonth[mo] || []).push(values[i]);
+    } else {
+      toKeep.push(values[i]);
+    }
+  }
+
+  if (Object.keys(byMonth).length === 0) {
+    return { ok: true, moved: 0, kept: toKeep.length, note: 'no pre-today rows' };
+  }
+
+  // Write each month's rows to its archive file (verified before clear)
+  var moved = 0;
+  var months = [];
+  Object.keys(byMonth).forEach(function (yyyymm) {
+    var rows = byMonth[yyyymm];
+    var archSs = _getSystemArchiveFile_('Sessions', yyyymm);
+    var archSh = archSs.getSheets()[0];
+    if (archSh.getLastRow() < 1) {
+      archSh.getRange(1, 1, 1, header.length).setValues([header]);
+      archSh.setFrozenRows(1);
+    }
+    var archStart = archSh.getLastRow() + 1;
+    archSh.getRange(archStart, 1, rows.length, rows[0].length).setValues(rows);
+    SpreadsheetApp.flush();
+    var written = archSh.getRange(archStart, 1, rows.length, 1).getValues();
+    if (written.length !== rows.length) {
+      throw new Error('Sessions archive verify failed for ' + yyyymm +
+                      ': expected ' + rows.length + ', got ' + written.length);
+    }
+    moved += rows.length;
+    months.push(yyyymm + '(' + rows.length + ')');
+  });
+
+  // Safe to clear active sheet now — all archived rows are persisted
+  sh.getRange(2, 1, values.length, lastCol).clearContent();
+  if (toKeep.length > 0) {
+    sh.getRange(2, 1, toKeep.length, lastCol).setValues(toKeep);
+    sh.getRange(2, 5, toKeep.length, 7).setNumberFormat('0');
+  }
+  SpreadsheetApp.flush();
+  return { ok: true, moved: moved, kept: toKeep.length, months: months };
+}
+
+// Archive ALL Attendance rows whose date < today (PST), grouped by month.
+// Same pattern as _archiveSessionsPreToday_. Active Attendance tab keeps
+// only today's rows after this returns.
+function _archiveAttendancePreToday_(ss) {
+  var sh = ss.getSheetByName('Attendance');
+  if (!sh) return { ok: true, moved: 0, note: 'Attendance tab missing' };
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return { ok: true, moved: 0, note: 'empty' };
+  var lastCol = sh.getLastColumn();
+  var header  = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+
+  var today = todayPST_();
+  var rng = sh.getRange(2, 1, lastRow - 1, lastCol);
+  var values = rng.getValues();
+  var disp   = rng.getDisplayValues();
+
+  var byMonth = {};
+  var toKeep  = [];
+  for (var i = 0; i < values.length; i++) {
+    var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
+    if (d && d.length === 10 && d.charAt(4) === '-' && d < today) {
+      var mo = d.slice(0, 7).replace('-', '_');
+      // Col A = Date, col E = MarkedAt — clean both before archiving
+      values[i][0] = String(disp[i][0] || values[i][0] || '');
+      values[i][4] = String(disp[i][4] || values[i][4] || '');
+      (byMonth[mo] = byMonth[mo] || []).push(values[i]);
+    } else {
+      toKeep.push(values[i]);
+    }
+  }
+
+  if (Object.keys(byMonth).length === 0) {
+    return { ok: true, moved: 0, kept: toKeep.length, note: 'no pre-today rows' };
+  }
+
+  var moved = 0;
+  var months = [];
+  Object.keys(byMonth).forEach(function (yyyymm) {
+    var rows = byMonth[yyyymm];
+    var archSs = _getSystemArchiveFile_('Attendance', yyyymm);
+    var archSh = archSs.getSheets()[0];
+    if (archSh.getLastRow() < 1) {
+      archSh.getRange(1, 1, 1, header.length).setValues([header]);
+      archSh.setFrozenRows(1);
+    }
+    var archStart = archSh.getLastRow() + 1;
+    archSh.getRange(archStart, 1, rows.length, rows[0].length).setValues(rows);
+    SpreadsheetApp.flush();
+    var written = archSh.getRange(archStart, 1, rows.length, 1).getValues();
+    if (written.length !== rows.length) {
+      throw new Error('Attendance archive verify failed for ' + yyyymm +
+                      ': expected ' + rows.length + ', got ' + written.length);
+    }
+    moved += rows.length;
+    months.push(yyyymm + '(' + rows.length + ')');
+  });
+
+  sh.getRange(2, 1, values.length, lastCol).clearContent();
+  if (toKeep.length > 0) {
+    sh.getRange(2, 1, toKeep.length, lastCol).setValues(toKeep);
+  }
+  SpreadsheetApp.flush();
+  return { ok: true, moved: moved, kept: toKeep.length, months: months };
+}
+
+// Read archived Sessions for a single past date. Returns same shape as
+// active Sessions filter: { header, rows } with col B/C/D coerced to
+// display strings. Falls through teamFilter to caller.
+function readArchiveSessions_(date) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var key = 'archSess:' + date;
+    var hit = cache.get(key);
+    if (hit) return JSON.parse(hit);
+
+    var rootId = _getArchiveRootId_();
+    if (!rootId) return { header: [], rows: [] };
+    var root = DriveApp.getFolderById(rootId);
+    var folder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+    var yyyymm = date.slice(0, 7).replace('-', '_');
+    var file = _findFileInFolder_(folder, 'Sessions_' + yyyymm);
+    if (!file) return { header: [], rows: [] };
+
+    var archSs = SpreadsheetApp.openById(file.getId());
+    var sh = archSs.getSheets()[0];
+    var lastRow = sh.getLastRow();
+    var lastCol = sh.getLastColumn();
+    if (lastRow < 2) return { header: [], rows: [] };
+    var header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+    var rng    = sh.getRange(2, 1, lastRow - 1, lastCol);
+    var values = rng.getValues();
+    var disp   = rng.getDisplayValues();
+    var rows = [];
+    for (var i = 0; i < values.length; i++) {
+      var d = String(disp[i][1] || values[i][1] || '').slice(0, 10);
+      if (d !== date) continue;
+      values[i][1] = String(disp[i][1] || values[i][1] || '');
+      values[i][2] = String(disp[i][2] || values[i][2] || '');
+      values[i][3] = String(disp[i][3] || values[i][3] || '');
+      rows.push(values[i]);
+    }
+    var result = { header: header, rows: rows };
+    cache.put(key, JSON.stringify(result), 600);
+    return result;
+  } catch (err) {
+    Logger.log('readArchiveSessions_ failed: ' + err);
+    return { header: [], rows: [] };
+  }
+}
+
+// Read archived Attendance for a single past date.
+function readArchiveAttendance_(date) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var key = 'archAtt:' + date;
+    var hit = cache.get(key);
+    if (hit) return JSON.parse(hit);
+
+    var rootId = _getArchiveRootId_();
+    if (!rootId) return { header: [], rows: [] };
+    var root = DriveApp.getFolderById(rootId);
+    var folder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+    var yyyymm = date.slice(0, 7).replace('-', '_');
+    var file = _findFileInFolder_(folder, 'Attendance_' + yyyymm);
+    if (!file) return { header: [], rows: [] };
+
+    var archSs = SpreadsheetApp.openById(file.getId());
+    var sh = archSs.getSheets()[0];
+    var lastRow = sh.getLastRow();
+    var lastCol = sh.getLastColumn();
+    if (lastRow < 2) return { header: [], rows: [] };
+    var header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+    var rng    = sh.getRange(2, 1, lastRow - 1, lastCol);
+    var values = rng.getValues();
+    var disp   = rng.getDisplayValues();
+    var rows = [];
+    for (var i = 0; i < values.length; i++) {
+      var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
+      if (d !== date) continue;
+      values[i][0] = String(disp[i][0] || values[i][0] || '');
+      values[i][4] = String(disp[i][4] || values[i][4] || '');
+      rows.push(values[i]);
+    }
+    var result = { header: header, rows: rows };
+    cache.put(key, JSON.stringify(result), 600);
+    return result;
+  } catch (err) {
+    Logger.log('readArchiveAttendance_ failed: ' + err);
+    return { header: [], rows: [] };
+  }
+}
+
+// Range read across archived Sessions for a given user. Walks each month
+// covered by [fromDate, toDate], opens each archive file ONCE, filters by
+// user. Returns {header, rows, startEnd}. Caller merges with active-sheet
+// rows for today.
+function _readUserSessionsArchiveRange_(user, fromDate, toDate) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var cacheKey = 'archUSess:' + user + ':' + fromDate + ':' + toDate;
+    var hit = cache.get(cacheKey);
+    if (hit) return JSON.parse(hit);
+
+    var rootId = _getArchiveRootId_();
+    if (!rootId) return { header: [], rows: [], startEnd: [] };
+    var root = DriveApp.getFolderById(rootId);
+    var folder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+    var months = {};
+    var days = _dateRange_(fromDate, toDate);
+    days.forEach(function (d) { months[d.slice(0, 7).replace('-', '_')] = true; });
+
+    var userLc = String(user || '').toLowerCase().trim();
+    var header = [];
+    var rows = [];
+    var startEnd = [];
+
+    Object.keys(months).forEach(function (yyyymm) {
+      var file = _findFileInFolder_(folder, 'Sessions_' + yyyymm);
+      if (!file) return;
+      var archSs = SpreadsheetApp.openById(file.getId());
+      var sh = archSs.getSheets()[0];
+      var lastRow = sh.getLastRow();
+      var lastCol = sh.getLastColumn();
+      if (lastRow < 2) return;
+      if (!header.length) header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+      var rng = sh.getRange(2, 1, lastRow - 1, lastCol);
+      var values = rng.getValues();
+      var disp   = rng.getDisplayValues();
+      for (var i = 0; i < values.length; i++) {
+        var n = String(values[i][0] || '').toLowerCase().trim();
+        if (n !== userLc) continue;
+        var d = String(disp[i][1] || values[i][1] || '').slice(0, 10);
+        if (d < fromDate || d > toDate) continue;
+        values[i][1] = String(disp[i][1] || values[i][1] || '');
+        rows.push(values[i]);
+        startEnd.push([
+          String(disp[i][2] || values[i][2] || ''),
+          String(disp[i][3] || values[i][3] || '')
+        ]);
+      }
+    });
+
+    var result = { header: header, rows: rows, startEnd: startEnd };
+    try { cache.put(cacheKey, JSON.stringify(result), 300); } catch (e) {}
+    return result;
+  } catch (err) {
+    Logger.log('_readUserSessionsArchiveRange_ failed: ' + err);
+    return { header: [], rows: [], startEnd: [] };
+  }
+}
+
+// Range read across archived Attendance for a given user.
+function _readUserAttendanceArchiveRange_(user, fromDate, toDate) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var cacheKey = 'archUAtt:' + user + ':' + fromDate + ':' + toDate;
+    var hit = cache.get(cacheKey);
+    if (hit) return JSON.parse(hit);
+
+    var rootId = _getArchiveRootId_();
+    if (!rootId) return { header: [], rows: [] };
+    var root = DriveApp.getFolderById(rootId);
+    var folder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+    var months = {};
+    var days = _dateRange_(fromDate, toDate);
+    days.forEach(function (d) { months[d.slice(0, 7).replace('-', '_')] = true; });
+
+    var userLc = String(user || '').toLowerCase().trim();
+    var header = [];
+    var rows = [];
+
+    Object.keys(months).forEach(function (yyyymm) {
+      var file = _findFileInFolder_(folder, 'Attendance_' + yyyymm);
+      if (!file) return;
+      var archSs = SpreadsheetApp.openById(file.getId());
+      var sh = archSs.getSheets()[0];
+      var lastRow = sh.getLastRow();
+      var lastCol = sh.getLastColumn();
+      if (lastRow < 2) return;
+      if (!header.length) header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+      var rng = sh.getRange(2, 1, lastRow - 1, lastCol);
+      var values = rng.getValues();
+      var disp   = rng.getDisplayValues();
+      for (var i = 0; i < values.length; i++) {
+        var n = String(values[i][1] || '').toLowerCase().trim();
+        if (n !== userLc) continue;
+        var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
+        if (d < fromDate || d > toDate) continue;
+        values[i][0] = String(disp[i][0] || values[i][0] || '');
+        rows.push(values[i]);
+      }
+    });
+
+    var result = { header: header, rows: rows };
+    try { cache.put(cacheKey, JSON.stringify(result), 300); } catch (e) {}
+    return result;
+  } catch (err) {
+    Logger.log('_readUserAttendanceArchiveRange_ failed: ' + err);
+    return { header: [], rows: [] };
+  }
+}
+
 function _yesterdayPST_() {
   var d = new Date();
   d.setTime(d.getTime() - 86400000);
@@ -1685,6 +2112,23 @@ function _writeArchiveLog_(ss, log) {
       team, t.moved || 0, t.kept || 0, t.archiveFile || '', t.error || t.note || ''
     ]);
   });
+  // Sessions / Attendance archive rows
+  if (log.sessions) {
+    var s = log.sessions;
+    sh.appendRow([
+      log.date, log.started, log.finished, s.ok === false ? 'NO' : 'YES',
+      '__SESSIONS__', s.moved || 0, s.kept || 0,
+      (s.months || []).join(','), s.error || s.note || ''
+    ]);
+  }
+  if (log.attendance) {
+    var a = log.attendance;
+    sh.appendRow([
+      log.date, log.started, log.finished, a.ok === false ? 'NO' : 'YES',
+      '__ATTENDANCE__', a.moved || 0, a.kept || 0,
+      (a.months || []).join(','), a.error || a.note || ''
+    ]);
+  }
   // Overall snapshot row
   if (log.overall) {
     var o = log.overall;
@@ -1911,6 +2355,20 @@ function resetAllLogs() {
     report.clearedLive = true;
   }
 
+  // 2b. Clear Sessions tab (keep header)
+  var sess = ss.getSheetByName('Sessions');
+  if (sess && sess.getLastRow() > 1) {
+    sess.getRange(2, 1, sess.getLastRow() - 1, sess.getLastColumn()).clearContent();
+    report.clearedSessions = true;
+  }
+
+  // 2c. Clear Attendance tab (keep header)
+  var att = ss.getSheetByName('Attendance');
+  if (att && att.getLastRow() > 1) {
+    att.getRange(2, 1, att.getLastRow() - 1, att.getLastColumn()).clearContent();
+    report.clearedAttendance = true;
+  }
+
   // 3. Clear ArchiveLog tab (keep row 1 header)
   var al = ss.getSheetByName('ArchiveLog');
   if (al && al.getLastRow() > 1) {
@@ -1918,7 +2376,7 @@ function resetAllLogs() {
     report.clearedArchiveLog = true;
   }
 
-  // 4. Trash every file inside each team folder + _Overall folder
+  // 4. Trash every file inside each team folder + _Overall + _System folders
   try {
     var rootId = _getArchiveRootId_();
     var root = DriveApp.getFolderById(rootId);
@@ -1938,6 +2396,14 @@ function resetAllLogs() {
     while (it2.hasNext()) {
       var f2 = it2.next();
       f2.setTrashed(true);
+      report.deletedDriveFiles++;
+    }
+    // System folder (Sessions + Attendance monthlies)
+    var system = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+    var it3 = system.getFiles();
+    while (it3.hasNext()) {
+      var f3 = it3.next();
+      f3.setTrashed(true);
       report.deletedDriveFiles++;
     }
   } catch (err) {
@@ -2298,23 +2764,42 @@ function _readUserArchiveRange_(team, user, fromDate, toDate) {
 // Returns rows AND a parallel display array for col C (Start) + col D (End)
 // so the caller can compute wall-clock shift duration (Mac-app util formula).
 function _readUserSessionsRange_(ss, user, fromDate, toDate) {
-  var sh = ss.getSheetByName('Sessions');
-  if (!sh) return { header: [], rows: [], startEnd: [] };
-  var rng = sh.getDataRange();
-  var vals = rng.getValues();
-  var disp = rng.getDisplayValues();
-  var header = vals.shift() || [];
-  disp.shift();
-  var userLc = String(user || '').toLowerCase().trim();
+  var today = todayPST_();
   var rows = [];
   var startEnd = [];
-  for (var i = 0; i < vals.length; i++) {
-    var n = String(vals[i][0] || '').toLowerCase().trim();
-    if (n !== userLc) continue;
-    var d = String(disp[i][1] || '').slice(0, 10);
-    if (d >= fromDate && d <= toDate) {
-      rows.push(vals[i]);
-      startEnd.push([ String(disp[i][2] || ''), String(disp[i][3] || '') ]);
+  var header = [];
+
+  // 1) Pull past-date rows from monthly archives (covers the bulk of any
+  //    week/month range query). Active sheet only holds today's rows after
+  //    8 AM IST archive job.
+  if (fromDate < today) {
+    var pastTo = toDate < today ? toDate : _prevDayPST_(today);
+    var arch = _readUserSessionsArchiveRange_(user, fromDate, pastTo);
+    rows  = (arch.rows || []).slice();
+    startEnd = (arch.startEnd || []).slice();
+    header = arch.header || [];
+  }
+
+  // 2) Today's rows still live in the active Sessions sheet
+  if (toDate >= today) {
+    var sh = ss.getSheetByName('Sessions');
+    if (sh) {
+      var rng = sh.getDataRange();
+      var vals = rng.getValues();
+      var disp = rng.getDisplayValues();
+      var activeHeader = vals.shift() || [];
+      disp.shift();
+      if (!header.length) header = activeHeader;
+      var userLc = String(user || '').toLowerCase().trim();
+      for (var i = 0; i < vals.length; i++) {
+        var n = String(vals[i][0] || '').toLowerCase().trim();
+        if (n !== userLc) continue;
+        var d = String(disp[i][1] || '').slice(0, 10);
+        if (d >= fromDate && d <= toDate) {
+          rows.push(vals[i]);
+          startEnd.push([ String(disp[i][2] || ''), String(disp[i][3] || '') ]);
+        }
+      }
     }
   }
   return { header: header, rows: rows, startEnd: startEnd };
@@ -2346,20 +2831,36 @@ function _nowIstSec_() {
 
 // Read Attendance for user in date range. Cols A=Date, B=User, C=Team, D=Status.
 function _readUserAttendanceRange_(ss, user, fromDate, toDate) {
-  var sh = ss.getSheetByName('Attendance');
-  if (!sh) return { header: [], rows: [] };
-  var rng = sh.getDataRange();
-  var vals = rng.getValues();
-  var disp = rng.getDisplayValues();  // col A date as displayed ("2026-04-24")
-  var header = vals.shift() || [];
-  disp.shift();
-  var userLc = String(user || '').toLowerCase().trim();
+  var today = todayPST_();
   var rows = [];
-  for (var i = 0; i < vals.length; i++) {
-    var n = String(vals[i][1] || '').toLowerCase().trim();
-    if (n !== userLc) continue;
-    var d = String(disp[i][0] || '').slice(0, 10);
-    if (d >= fromDate && d <= toDate) rows.push(vals[i]);
+  var header = [];
+
+  // 1) Past-date rows from monthly archive
+  if (fromDate < today) {
+    var pastTo = toDate < today ? toDate : _prevDayPST_(today);
+    var arch = _readUserAttendanceArchiveRange_(user, fromDate, pastTo);
+    rows = (arch.rows || []).slice();
+    header = arch.header || [];
+  }
+
+  // 2) Today's row from active Attendance tab
+  if (toDate >= today) {
+    var sh = ss.getSheetByName('Attendance');
+    if (sh) {
+      var rng = sh.getDataRange();
+      var vals = rng.getValues();
+      var disp = rng.getDisplayValues();
+      var activeHeader = vals.shift() || [];
+      disp.shift();
+      if (!header.length) header = activeHeader;
+      var userLc = String(user || '').toLowerCase().trim();
+      for (var i = 0; i < vals.length; i++) {
+        var n = String(vals[i][1] || '').toLowerCase().trim();
+        if (n !== userLc) continue;
+        var d = String(disp[i][0] || '').slice(0, 10);
+        if (d >= fromDate && d <= toDate) rows.push(vals[i]);
+      }
+    }
   }
   return { header: header, rows: rows };
 }
