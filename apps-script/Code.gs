@@ -2472,13 +2472,18 @@ function myStats_(ss, p) {
     }
   }
 
-  var productiveMin = totals.production + totals.meeting + totals.training;
-  // Prefer Mac-app formula (productive ÷ wall-clock shift time). Fall back
-  // to activity-sum denominator only if we couldn't compute shift duration
-  // for ALL rows (corrupt/empty Start or End cells).
-  var activitySum   = productiveMin + totals.break_ + totals.dinner + totals.idle;
+  // ── Canonical formula (matches Mac app + TL dashboard exactly) ──
+  //   Utilization % = Production min ÷ wall-clock shift min × 100
+  //   (Production-only numerator. Meeting + Training are tracked but
+  //    NOT counted as "production" — they're separate buckets, same
+  //    way TL leaderboard scores users on heads-down output.)
+  var activitySum   = totals.production + totals.meeting + totals.training +
+                      totals.break_ + totals.dinner + totals.idle;
   var denomMin      = (totals.shiftMin > 0 && !missedAnyShiftMin) ? totals.shiftMin : activitySum;
-  var utilization   = denomMin > 0 ? Math.round((productiveMin / denomMin) * 100) : 0;
+  var utilization   = denomMin > 0 ? Math.min(100, Math.round((totals.production / denomMin) * 100)) : 0;
+  // Kept for backward compat (any legacy frontend reading productiveMin
+  // gets the wider definition: production + meeting + training).
+  var productiveMin = totals.production + totals.meeting + totals.training;
 
   // Attendance — build set of teams the user touched in range
   var att = _readUserAttendanceRange_(ss, user, fromDate, toDate);
