@@ -238,6 +238,7 @@
                 font-weight: 600; text-transform: uppercase; margin-left: 6px; letter-spacing: 0.03em; }
   .live-badge.production { background: var(--green-50); color: #047857; }
   .live-badge.break      { background: var(--amber-50); color: #b45309; }
+  .live-badge.auto_break { background: rgba(255,69,58,0.12); color: #b91c1c; }
   .live-badge.meeting    { background: var(--purple-50); color: var(--purple); }
   .live-badge.training   { background: rgba(6,182,212,0.12); color: #0e7490; }
   .live-badge.dinner     { background: rgba(249,115,22,0.12); color: #c2410c; }
@@ -317,6 +318,7 @@
   .pill-btn .dot { width: 6px; height: 6px; border-radius: 50%; }
   .pill-btn[data-a="production"] .dot { background: var(--green); }
   .pill-btn[data-a="break"] .dot { background: var(--amber); }
+  .pill-btn[data-a="auto_break"] .dot { background: #ff453a; }
   .pill-btn[data-a="idle"] .dot { background: var(--text-3); }
   .pill-btn[data-a="meeting"] .dot { background: var(--purple); }
   .pill-btn[data-a="training"] .dot { background: #06b6d4; }
@@ -594,6 +596,7 @@
           <button class="pill-btn activity active" data-a="all">All</button>
           <button class="pill-btn activity" data-a="production"><span class="dot"></span>Production</button>
           <button class="pill-btn activity" data-a="break"><span class="dot"></span>Break</button>
+          <button class="pill-btn activity" data-a="auto_break"><span class="dot"></span>🔒 Auto Break</button>
           <button class="pill-btn activity" data-a="idle"><span class="dot"></span>Idle</button>
           <button class="pill-btn activity" data-a="meeting"><span class="dot"></span>Meeting</button>
           <button class="pill-btn activity" data-a="training"><span class="dot"></span>Training</button>
@@ -1219,6 +1222,11 @@
       return String(name || '').toLowerCase().trim() === filterUser;
     };
 
+    // PR #10: track manual break vs auto break separately so the
+    // Break card subtext can show "Manual Xm · Auto Ym".
+    let manualBreakMin = 0;
+    let autoBreakMin = 0;
+
     // 2a. Sessions — sum across rows (every closed shift contributes)
     if (data.sessions && data.sessions.header && data.sessions.rows && data.sessions.rows.length) {
       const sh = data.sessions.header.map(h => String(h).toLowerCase());
@@ -1227,16 +1235,21 @@
       const startIdx = sh.findIndex(x => x === 'start');
       const endIdx   = sh.findIndex(x => x === 'end');
       const pIdx     = sh.findIndex(x => x.includes('production'));
-      const bIdx     = sh.findIndex(x => x.includes('break'));
+      // 'break' alone — must NOT match 'break exceeded' or 'auto break'.
+      const bIdx     = sh.findIndex(x => /^\s*break(\s|\(|$)/.test(x));
       const dIdx     = sh.findIndex(x => x.includes('dinner'));
+      const abIdx    = sh.findIndex(x => x.indexOf('auto') >= 0 && x.indexOf('break') >= 0);
       data.sessions.rows.forEach(r => {
         if (!userMatches(r[nameIdx])) return;
         const p = Number(r[pIdx]) || 0;
         const b = Number(r[bIdx]) || 0;
         const dn = dIdx >= 0 ? (Number(r[dIdx]) || 0) : 0;
+        const ab = abIdx >= 0 ? (Number(r[abIdx]) || 0) : 0;
         const wall = wallMinutesBetweenIst_(r[startIdx], r[endIdx]);
         prodMin  += p;
-        breakMin += b + dn;
+        breakMin += b + dn + ab;
+        manualBreakMin += b + dn;
+        autoBreakMin += ab;
         if (wall > 0) wallMin += wall;
         const nm = String(r[nameIdx] || '').toLowerCase().trim();
         const dt = String(r[dateIdx] || '').slice(0, 10);
@@ -1254,8 +1267,11 @@
         if (!userMatches(u.user)) return;
         const nm = String(u.user || '').toLowerCase().trim();
         if (sessionUserKey.has(nm + '|' + today)) return;
+        const ab = Number(u.autoBreakMin) || 0;
         prodMin  += Number(u.prodMin)  || 0;
-        breakMin += Number(u.breakMin) || 0;
+        breakMin += (Number(u.breakMin) || 0) + ab;
+        manualBreakMin += Number(u.breakMin) || 0;
+        autoBreakMin += ab;
         const wm = Number(u.shiftMinutesElapsed) ||
                    wallMinutesSinceIst_(u.shiftStartAt);
         wallMin += wm;
@@ -1319,7 +1335,11 @@
       <div class="card" data-c="break">
         <div class="k"><span class="icon">☕</span>Break Hours</div>
         <div class="v">${brkHrs}<span class="unit">hrs</span></div>
-        <div class="sub">${sourceTag}</div>
+        <div class="sub">${
+          (manualBreakMin > 0 || autoBreakMin > 0)
+            ? 'Manual ' + Math.round(manualBreakMin) + 'm · Auto ' + Math.round(autoBreakMin) + 'm'
+            : sourceTag
+        }</div>
       </div>
       <div class="card" data-c="util">
         <div class="k"><span class="icon">%</span>Avg Utilization</div>
@@ -1739,7 +1759,7 @@
 
   // ── Live Activity ──────────────────────────────────────────────────
   const LIVE_POLL_MS = 15000;
-  const KNOWN_ACTIVITIES = ['production', 'break', 'meeting', 'training', 'dinner', 'idle'];
+  const KNOWN_ACTIVITIES = ['production', 'break', 'auto_break', 'meeting', 'training', 'dinner', 'idle'];
 
   async function fetchLiveActivity() {
     if (state.liveLoading) return;
@@ -1867,21 +1887,27 @@
         const tasks = Number(u.tasksDone || 0);
         const prod = Math.round(Number(u.prodMin || 0));
         const brk = Math.round(Number(u.breakMin || 0));
+        const autoBrk = Math.round(Number(u.autoBreakMin || 0));
         const age = Number(u.ageMin || 0);
-        // Heartbeat interval is 4 min, so any user is naturally 2-4 min
-        // 'stale' between heartbeats. Only flag when truly behind: 6+ min
-        // (4 min interval + 2 min grace). Below that = normal heartbeat gap.
         const staleHtml = age > 6 ? `<div class="live-user-stale">⚠️ stale ${Math.round(age)}m ago</div>` : '';
         const shiftStart = String(u.shiftStartAt || '');
         const shiftStartHm = (shiftStart.match(/\s(\d{2}:\d{2})/) || [])[1] || '';
         const shiftHtml = shiftStartHm ? `<div class="live-user-shift">🟢 Shift: ${shiftStartHm} IST</div>` : '';
+        // PR #10: render Auto Break with the lock icon and a clearer label
+        const actLabel = (act === 'auto_break')
+          ? '🔒 Auto Break'
+          : String(u.activity || 'idle');
+        // Show break breakdown when auto-break has any minutes
+        const brkMeta = autoBrk > 0
+          ? `${tasks} tasks · ${prod}m prod · ${brk + autoBrk}m break (manual ${brk}m · auto ${autoBrk}m)`
+          : `${tasks} tasks · ${prod}m prod · ${brk}m break`;
         return `
           <div class="live-user">
             <div class="live-user-name">
               ${escapeHtml(u.user || '—')}
-              <span class="live-badge ${act}">${escapeHtml(String(u.activity || 'idle'))}</span>
+              <span class="live-badge ${act}">${escapeHtml(actLabel)}</span>
             </div>
-            <div class="live-user-meta">${tasks} tasks · ${prod}m prod · ${brk}m break</div>
+            <div class="live-user-meta">${brkMeta}</div>
             ${shiftHtml}
             ${staleHtml}
           </div>`;

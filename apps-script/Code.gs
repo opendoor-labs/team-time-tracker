@@ -428,9 +428,13 @@ function markAttendance_(ss, b) {
   });
 }
 
-// Sessions schema (11 cols):
+// Sessions schema (12 cols, post PR #10):
 //   A=Name | B=Date | C=Start | D=End | E=Production(min) | F=Break(min)
-//   G=Dinner(min) | H=Meeting(min) | I=Training(min) | J=Idle(min) | K=Break Exceeded(min)
+//   G=Dinner(min) | H=Meeting(min) | I=Training(min) | J=Idle(min)
+//   K=Break Exceeded(min) | L=Auto Break(min)
+//
+// Backward compat: rows / archive files written before PR #10 have only
+// 11 cols. Read paths treat missing col L as 0.
 var BREAK_ALLOWANCE_MIN = 60;  // 1 hour break allowance per day
 
 function closeSession_(ss, b) {
@@ -445,19 +449,28 @@ function closeSession_(ss, b) {
       sh.getRange('C:C').setNumberFormat('@');
       sh.getRange('D:D').setNumberFormat('@');
     } catch (e) {}
+    // Self-heal Sessions header to include col L on first call after deploy
+    try {
+      var hdr = sh.getRange(1, 1, 1, 12).getValues()[0];
+      if (!hdr[11] || String(hdr[11]).indexOf('Auto') < 0) {
+        sh.getRange(1, 12).setValue('Auto Break (min)');
+      }
+    } catch (e) {}
     // Date in PST (so a late-night IST shift stays on one date row)
     // Times in IST (so the team reads start/end in their own clock)
     var today = todayPST_();
     var user  = b.user || '';
     var nowTs = timeIST_();
 
-    var prodMin     = Number(b.productionMin) || 0;
-    var breakMin    = Number(b.breakMin)      || 0;
-    var dinnerMin   = Number(b.dinnerMin)     || 0;
-    var meetingMin  = Number(b.meetingMin)    || 0;
-    var trainingMin = Number(b.trainingMin)   || 0;
-    var idleMin     = Number(b.idleMin)       || 0;
-    var breakExceeded = Math.max(0, breakMin - BREAK_ALLOWANCE_MIN);
+    var prodMin      = Number(b.productionMin) || 0;
+    var breakMin     = Number(b.breakMin)      || 0;
+    var dinnerMin    = Number(b.dinnerMin)     || 0;
+    var meetingMin   = Number(b.meetingMin)    || 0;
+    var trainingMin  = Number(b.trainingMin)   || 0;
+    var idleMin      = Number(b.idleMin)       || 0;
+    var autoBreakMin = Number(b.autoBreakMin)  || 0;
+    // Total break = manual + auto; "Break Exceeded" measured against total.
+    var breakExceeded = Math.max(0, (breakMin + autoBreakMin) - BREAK_ALLOWANCE_MIN);
 
     // Find existing row for [user, today] — Name in col A, Date in col B
     var rng = sh.getDataRange().getValues();
@@ -465,21 +478,81 @@ function closeSession_(ss, b) {
       if (rng[i][0] === user && rng[i][1] === today) {
         sh.getRange(i + 1, 4).setValue(nowTs);         // End
         sh.getRange(i + 1, 5).setValue(prodMin);       // Production
-        sh.getRange(i + 1, 6).setValue(breakMin);      // Break
+        sh.getRange(i + 1, 6).setValue(breakMin);      // Break (manual)
         sh.getRange(i + 1, 7).setValue(dinnerMin);     // Dinner
         sh.getRange(i + 1, 8).setValue(meetingMin);    // Meeting
         sh.getRange(i + 1, 9).setValue(trainingMin);   // Training
         sh.getRange(i + 1, 10).setValue(idleMin);      // Idle
         sh.getRange(i + 1, 11).setValue(breakExceeded);// Break Exceeded
+        sh.getRange(i + 1, 12).setValue(autoBreakMin); // Auto Break
         // Guard against Sheets auto-formatting these minute cells as DateTime.
-        sh.getRange(i + 1, 5, 1, 7).setNumberFormat('0');
+        sh.getRange(i + 1, 5, 1, 8).setNumberFormat('0');
         return { ok: true, updated: true, breakExceeded: breakExceeded };
       }
     }
-    sh.appendRow([user, today, nowTs, nowTs,
-                  prodMin, breakMin, dinnerMin, meetingMin, trainingMin, idleMin, breakExceeded]);
-    // Force minute cols to integer format (new row just appended at bottom)
-    sh.getRange(sh.getLastRow(), 5, 1, 7).setNumberFormat('0');
+    // ── Derive real shift Start so we don't stamp End-time into both
+    //    Start AND End cols. Priority: payload → Live tab → Attendance
+    //    MarkedAt → nowTs. (Restores the v2.7.6 hotfix that was deployed
+    //    directly to Apps Script editor but never merged to GitHub.)
+    var userLc = String(user).toLowerCase().trim();
+    var startTs = '';
+    var startSrc = 'unknown';
+    var payloadStart = String(b.shiftStartAt || '').trim();
+    if (payloadStart) {
+      var pm = payloadStart.match(/(\d{1,2}:\d{2}:\d{2})/);
+      if (pm) { startTs = pm[1]; startSrc = 'payload'; }
+    }
+    if (!startTs) {
+      var liveSh = ss.getSheetByName('Live');
+      if (liveSh) {
+        var lRng = liveSh.getDataRange();
+        var lVals = lRng.getValues();
+        var lDisp = lRng.getDisplayValues();
+        for (var li = 1; li < lVals.length; li++) {
+          if (String(lVals[li][1] || '').toLowerCase().trim() === userLc) {
+            var rawLive = String(lDisp[li][0] || lVals[li][0] || '').trim();
+            var lm = rawLive.match(/(\d{1,2}:\d{2}:\d{2})/);
+            if (lm) { startTs = lm[1]; startSrc = 'live'; }
+            break;
+          }
+        }
+      }
+    }
+    if (!startTs) {
+      var attSh = ss.getSheetByName('Attendance');
+      if (attSh) {
+        var aRng = attSh.getDataRange();
+        var aVals = aRng.getValues();
+        var aDisp = aRng.getDisplayValues();
+        for (var ai = 1; ai < aVals.length; ai++) {
+          var attDate = String(aDisp[ai][0] || aVals[ai][0] || '').slice(0, 10);
+          var attUser = String(aVals[ai][1] || '').toLowerCase().trim();
+          if (attDate === today && attUser === userLc) {
+            var rawMarked = String(aDisp[ai][4] || aVals[ai][4] || '').trim();
+            var am = rawMarked.match(/(\d{1,2}:\d{2}:\d{2})/);
+            if (am) { startTs = am[1]; startSrc = 'attendance'; }
+            break;
+          }
+        }
+      }
+    }
+    if (!startTs) {
+      startTs = nowTs;
+      startSrc = 'fallback_now';
+      try {
+        handleLogError_(ss, {
+          source: 'apps-script', kind: 'closeSession-no-start',
+          message: 'No ShiftStartAt found for ' + user + ' on ' + today,
+          user: user
+        });
+      } catch (_) {}
+    }
+
+    sh.appendRow([user, today, startTs, nowTs,
+                  prodMin, breakMin, dinnerMin, meetingMin, trainingMin, idleMin,
+                  breakExceeded, autoBreakMin]);
+    // Force minute cols (E..L = 8 cols) to integer format
+    sh.getRange(sh.getLastRow(), 5, 1, 8).setNumberFormat('0');
     // ── Drop the user's Live row when their shift closes ───────────
     // Otherwise the row lingers with stale data and TLs see a 'ghost'
     // on the Live Activity card (or Util computed from a Live row
@@ -487,7 +560,7 @@ function closeSession_(ss, b) {
     try { _removeLiveRow_(ss, user); } catch (e) {
       try { Logger.log('removeLive failed: ' + e); } catch (_) {}
     }
-    return { ok: true, inserted: true, breakExceeded: breakExceeded };
+    return { ok: true, inserted: true, breakExceeded: breakExceeded, startSrc: startSrc };
   });
 }
 
@@ -647,8 +720,13 @@ function clearForceReset_(ss, b) {
 //   L=UpdatedAt (PST date + IST time)
 // Ensure Live sheet exists with the canonical header row.
 function ensureLiveSheet_(ss) {
+  // Schema (13 cols, post PR #10 — added AutoBreakMin at col M):
+  //   A=ShiftStartAt B=User C=HomeTeam D=Team E=Activity F=TasksDone
+  //   G=ProdMin H=BreakMin I=IdleMin J=TaskStartedAt K=TaskEndedAt
+  //   L=UpdatedAt M=AutoBreakMin
   var HEADER = ['ShiftStartAt','User','HomeTeam','Team','Activity','TasksDone',
-                'ProdMin','BreakMin','IdleMin','TaskStartedAt','TaskEndedAt','UpdatedAt'];
+                'ProdMin','BreakMin','IdleMin','TaskStartedAt','TaskEndedAt',
+                'UpdatedAt','AutoBreakMin'];
   var sh = ss.getSheetByName('Live');
   if (!sh) {
     sh = ss.insertSheet('Live');
@@ -689,8 +767,9 @@ function heartbeat_(ss, b) {
     if (!user) return { ok: false, error: 'no user' };
 
     // Preserve existing ShiftStartAt, TaskStartedAt, TaskEndedAt unless client
-    // supplied fresh values. Column map:
-    //   A=ShiftStartAt(0) B=User(1) ... J=TaskStartedAt(9) K=TaskEndedAt(10) L=UpdatedAt(11)
+    // supplied fresh values. Column map (post PR #10):
+    //   A=ShiftStartAt(0) B=User(1) ... J=TaskStartedAt(9) K=TaskEndedAt(10)
+    //   L=UpdatedAt(11) M=AutoBreakMin(12)
     var existingShiftStart   = '';
     var existingTaskStarted  = '';
     var existingTaskEndedAt  = '';
@@ -720,10 +799,10 @@ function heartbeat_(ss, b) {
       user,                                                   // B User
       canonHomeTeam,                                          // C HomeTeam
       canonTeam,                                              // D Team
-      String(b.activity || ''),                               // E Activity
+      String(b.activity || ''),                               // E Activity (may be 'auto_break')
       Number(b.tasksDone || 0),                               // F TasksDone
       Number(b.productionMin || 0),                           // G ProdMin
-      Number(b.breakMin || 0),                                // H BreakMin
+      Number(b.breakMin || 0),                                // H BreakMin (manual only — auto in col M)
       Number(b.idleMin || 0),                                 // I IdleMin
       // J TaskStartedAt: client sends ms-epoch when a new task opens.
       // If omitted, preserve the existing value so TLs keep seeing the
@@ -732,7 +811,8 @@ function heartbeat_(ss, b) {
         ? pstDateIstTimeFromMs_(Number(b.taskStartedAt))
         : existingTaskStarted,
       existingTaskEndedAt,                                    // K TaskEndedAt (preserved; only _bumpLiveAfterTask_ writes it)
-      nowPSTdateISTtime_()                                    // L UpdatedAt
+      nowPSTdateISTtime_(),                                   // L UpdatedAt
+      Number(b.autoBreakMin || 0)                             // M AutoBreakMin (PR #10)
     ];
     if (matchedRow > 0) {
       sh.getRange(matchedRow, 1, 1, row.length).setValues([row]);
@@ -916,10 +996,11 @@ function liveActivity_(ss, p) {
       user:       String(r[1] || ''),
       homeTeam:   homeTeam,
       team:       team,
-      activity:   String(r[4] || ''),
+      activity:   String(r[4] || ''),       // may be 'auto_break'
       tasksDone:  Number(r[5] || 0),
       prodMin:    Number(r[6] || 0),
-      breakMin:   Number(r[7] || 0),
+      breakMin:   Number(r[7] || 0),         // manual only
+      autoBreakMin: Number(r[12] || 0),      // M (PR #10) — Auto Break minutes
       idleMin:    Number(r[8] || 0),
       taskStartedAt: parseTaskStartedAt_(r[9]),
       taskEndedAt: String(r[10] || ''),
@@ -2565,6 +2646,7 @@ function autoCloseStaleShifts_() {
     var prodMin       = Number(liveVals[i][6]) || 0;
     var breakMin      = Number(liveVals[i][7]) || 0;
     var idleMin       = Number(liveVals[i][8]) || 0;
+    var autoBreakMin  = Number(liveVals[i][12]) || 0;  // M (PR #10)
 
     // PST date for the Sessions row = first 10 chars of shiftStartAt.
     var pstDate  = shiftStartStr.slice(0, 10);
@@ -2573,7 +2655,7 @@ function autoCloseStaleShifts_() {
     var endTm    = updatedAtStr.slice(11) || timeIST_();
     if (!pstDate) continue;
 
-    var breakExceeded = Math.max(0, breakMin - BREAK_ALLOWANCE_MIN);
+    var breakExceeded = Math.max(0, (breakMin + autoBreakMin) - BREAK_ALLOWANCE_MIN);
     var key = user.toLowerCase() + '|' + pstDate;
 
     if (sessIndex[key]) {
@@ -2584,12 +2666,13 @@ function autoCloseStaleShifts_() {
       sessSh.getRange(rowIdx, 6).setValue(breakMin);
       sessSh.getRange(rowIdx, 10).setValue(idleMin);
       sessSh.getRange(rowIdx, 11).setValue(breakExceeded);
-      sessSh.getRange(rowIdx, 5, 1, 7).setNumberFormat('0');
+      sessSh.getRange(rowIdx, 12).setValue(autoBreakMin);  // L = Auto Break
+      sessSh.getRange(rowIdx, 5, 1, 8).setNumberFormat('0');
     } else {
       // Append new Sessions row — auto-closed shift
       sessSh.appendRow([user, pstDate, startTm, endTm,
-                        prodMin, breakMin, 0, 0, 0, idleMin, breakExceeded]);
-      sessSh.getRange(sessSh.getLastRow(), 5, 1, 7).setNumberFormat('0');
+                        prodMin, breakMin, 0, 0, 0, idleMin, breakExceeded, autoBreakMin]);
+      sessSh.getRange(sessSh.getLastRow(), 5, 1, 8).setNumberFormat('0');
     }
     processed++;
     processedUsers.push(user);
@@ -3229,10 +3312,11 @@ function _readUserLiveRow_(ss, user) {
       return {
         shiftStartAt: String(disp[i][0] || vals[i][0] || ''),
         team:         String(vals[i][3] || ''),
-        activity:     String(vals[i][4] || ''),
+        activity:     String(vals[i][4] || ''),       // may be 'auto_break'
         tasksDone:    Number(vals[i][5]) || 0,
         prodMin:      Number(vals[i][6]) || 0,
-        breakMin:     Number(vals[i][7]) || 0,
+        breakMin:     Number(vals[i][7]) || 0,        // manual only
+        autoBreakMin: Number(vals[i][12]) || 0,       // M (PR #10)
         idleMin:      Number(vals[i][8]) || 0
       };
     }
@@ -3260,7 +3344,8 @@ function myStats_(ss, p) {
   // across all shifts, it forms the Mac-app utilisation denominator
   // (Utilization = Productive ÷ logged-in time). Falls back to activity-
   // sum only if wall-clock duration can't be computed for any row.
-  var totals = { production: 0, break_: 0, dinner: 0, meeting: 0, training: 0, idle: 0, shifts: 0, shiftMin: 0 };
+  var totals = { production: 0, break_: 0, dinner: 0, meeting: 0, training: 0, idle: 0,
+                 shifts: 0, shiftMin: 0, autoBreak: 0 };
   var missedAnyShiftMin = false;
   for (var i = 0; i < sess.rows.length; i++) {
     var r = sess.rows[i];
@@ -3271,6 +3356,9 @@ function myStats_(ss, p) {
     totals.meeting    += Number(r[7]) || 0;
     totals.training   += Number(r[8]) || 0;
     totals.idle       += Number(r[9]) || 0;
+    // Col L = Auto Break (PR #10). Older rows / archives without col L
+    // return undefined → treated as 0.
+    totals.autoBreak  += Number(r[11]) || 0;
     var se = sess.startEnd && sess.startEnd[i];
     var dur = se ? _shiftDurationMin_(se[0], se[1]) : 0;
     if (dur > 0) totals.shiftMin += dur;
@@ -3296,6 +3384,7 @@ function myStats_(ss, p) {
         totals.shifts     += 1;
         totals.production += live.prodMin;
         totals.break_     += live.breakMin;
+        totals.autoBreak  += (live.autoBreakMin || 0);
         totals.idle       += live.idleMin;
         // live.shiftStartAt normally "YYYY-MM-DD HH:mm:ss" (IST wall clock)
         // but may be "Sat Apr 25 2026 04:45:31 GMT+0530" if Sheets coerced
@@ -3372,7 +3461,11 @@ function myStats_(ss, p) {
     totals: {
       shifts: totals.shifts,
       productionMin: totals.production,
-      breakMin:      totals.break_,
+      breakMin:      totals.break_,           // manual break only
+      autoBreakMin:  totals.autoBreak,        // PR #10 — auto-break minutes
+      // Convenience field — total break = manual + auto. Frontends that
+      // want "total time on break" should use this rather than summing.
+      totalBreakMin: totals.break_ + totals.autoBreak,
       dinnerMin:     totals.dinner,
       meetingMin:    totals.meeting,
       trainingMin:   totals.training,

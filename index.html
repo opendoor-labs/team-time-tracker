@@ -3210,7 +3210,11 @@ function startClock() {
     const isIdleProduction = state.activity === 'production'
       && state.idleStreakSec > RULES.IDLE_THRESHOLD_SEC;
     if (!isIdleProduction && !state.macLocked) {
-      state.totals[state.activity] = (state.totals[state.activity] || 0) + delta;
+      // PR #10: while in auto-break, route the tick into state.totals.auto_break
+      // instead of state.totals.break so manual vs auto break are tracked
+      // separately. Display still shows total (manual + auto).
+      const bucket = (state.activity === 'break' && state.autoBreak) ? 'auto_break' : state.activity;
+      state.totals[bucket] = (state.totals[bucket] || 0) + delta;
     }
 
     // Persist snapshot to localStorage every tick so update/crash/force-quit
@@ -3219,9 +3223,12 @@ function startClock() {
     markSnapshotDirty();
     saveSnapshotIfDirty();
 
-    // Update stats
+    // Update stats — Break display = manual + auto (user wants combined total
+    // visible; breakdown shown in subtext / dashboards).
     document.getElementById('sProd').textContent = fmtHM(state.totals.production);
-    document.getElementById('sBreak').textContent = fmtHM(state.totals.break);
+    document.getElementById('sBreak').textContent = fmtHM(
+      (state.totals.break || 0) + (state.totals.auto_break || 0)
+    );
     document.getElementById('sMeet').textContent = fmtHM(state.totals.meeting);
     document.getElementById('sIdle').textContent = fmtHM(state.idleTotalMs || 0);
     document.getElementById('sCount').textContent = state.tasksDone;
@@ -3252,14 +3259,23 @@ function startClock() {
 
 // Ship current activity to backend so TL dashboard can show live view
 function sendHeartbeat() {
+  // PR #10 — when state.autoBreak is true, send activity='auto_break' so
+  // TL dashboard's Live Activity tab can display "Auto Break" separately
+  // from a manual break. Server stores it in Live!E.
+  const reportedActivity = (state.activity === 'break' && state.autoBreak)
+    ? 'auto_break'
+    : state.activity;
   nativeFire('heartbeat', {
     user: state.user,
     team: state.team,
     homeTeam: state.homeTeam,
-    activity: state.activity,
+    activity: reportedActivity,
     tasksDone: state.tasksDone || 0,
     productionMin: Math.round((state.totals.production || 0) / 60000),
-    breakMin:      Math.round(((state.totals.break || 0) + (state.totals.auto_break || 0)) / 60000),
+    // breakMin = MANUAL break only. autoBreakMin tracked separately in
+    // its own field (server stores in Live col M / Sessions col L).
+    breakMin:      Math.round((state.totals.break || 0) / 60000),
+    autoBreakMin:  Math.round((state.totals.auto_break || 0) / 60000),
     idleMin:       Math.round((state.idleTotalMs || 0) / 60000),
     taskStartedAt: state.taskStartedAt || 0,
     shiftStartAt:  state.shiftStartedAt || '',
@@ -3598,7 +3614,9 @@ function unlockMac() {
   // it isn't set yet.
   if (lockedSec >= RULES.MAC_LOCK_BREAK_SEC &&
       state.shiftEnded !== true && state.shiftActive === true) {
-    state.totals.break = (state.totals.break || 0) + lockedMs;
+    // PR #10: credit lock duration to auto_break bucket (not the manual
+    // break bucket) so TLs / dashboards see the breakdown.
+    state.totals.auto_break = (state.totals.auto_break || 0) + lockedMs;
     if (!state.autoBreak && state.activity !== 'break') {
       triggerAutoBreak();
     }
@@ -4002,21 +4020,23 @@ async function confirmEndShiftFinal() {
   state.shiftEndTime = Date.now();
 
   // Tell backend the session is done — shape matches closeSession_ in Apps Script.
-  // Backend writes these directly into the 11-column Sessions schema:
-  //   Name, Date, Start, End, Production(min), Break(min), Dinner(min),
-  //   Meeting(min), Training(min), Idle(min), Break Exceeded(min)
-  // Break Exceeded is computed server-side as max(0, breakMin - 60).
+  // Backend writes these into the 12-column Sessions schema (PR #10):
+  //   Name, Date, Start, End, Production, Break, Dinner, Meeting, Training,
+  //   Idle, Break Exceeded, Auto Break
+  // breakMin = manual break only; autoBreakMin sent separately so the
+  // Sessions row shows the breakdown.
   const t = state.totals || {};
   const toMin = (ms) => Math.round((ms || 0) / 60000);
   nativeFire('closeSession', {
-    user:        state.user,
+    user:          state.user,
     productionMin: toMin(t.production),
-    breakMin:    toMin((t.break || 0) + (t.auto_break || 0)),
-    dinnerMin:   toMin(t.dinner),
-    meetingMin:  toMin(t.meeting),
-    trainingMin: toMin(t.training),
-    idleMin:     toMin(state.idleTotalMs),
-    endedAt:     new Date().toISOString()
+    breakMin:      toMin(t.break),                  // manual only
+    autoBreakMin:  toMin(t.auto_break),             // PR #10
+    dinnerMin:     toMin(t.dinner),
+    meetingMin:    toMin(t.meeting),
+    trainingMin:   toMin(t.training),
+    idleMin:       toMin(state.idleTotalMs),
+    endedAt:       new Date().toISOString()
   });
 
   // Build the end-of-day summary text
