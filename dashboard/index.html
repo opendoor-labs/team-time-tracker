@@ -1226,11 +1226,17 @@
     // ALL summary cards (Sessions + Live + task-span fallback) to just
     // that user. Otherwise Productive Hours / Util / Break show team
     // totals, mismatching the single-user task list shown below.
-    const filterUser = filters.user ? String(filters.user).toLowerCase().trim() : null;
+    // PR #15: filters.user is now an array (or null = all). Build a lookup
+    // set for O(1) membership checks.
+    const filterUserSet = (filters.user && filters.user.length)
+      ? new Set(filters.user.map(s => String(s).toLowerCase().trim()))
+      : null;
     const userMatches = (name) => {
-      if (!filterUser) return true;
-      return String(name || '').toLowerCase().trim() === filterUser;
+      if (!filterUserSet) return filters.user === null;
+      return filterUserSet.has(String(name || '').toLowerCase().trim());
     };
+    // Special case: filters.user === [] means "no users selected" → no rows.
+    // The userMatches above handles it (filterUserSet is empty Set → no hits).
 
     // PR #10: track manual break vs auto break separately so the
     // Break card subtext can show "Manual Xm · Auto Ym".
@@ -1853,13 +1859,21 @@
     // Activity too. Without this, a TL clicking 'Production' on the
     // activity pills only filtered task logs — Live Activity kept showing
     // every active user. Now Live respects all the same filters.
-    const filterUserLc = filters.user ? String(filters.user).toLowerCase().trim() : null;
+    // PR #15: filters.user is array (or null = all)
+    const filterUserSetLive = (filters.user && filters.user.length)
+      ? new Set(filters.user.map(s => String(s).toLowerCase().trim()))
+      : null;
     const filterAct = filters.activity && filters.activity !== 'all'
       ? String(filters.activity).toLowerCase().trim() : null;
 
     const users = allUsers.filter(u => {
       if (!teamInFilter(u.team) && !teamInFilter(u.homeTeam)) return false;
-      if (filterUserLc && String(u.user || '').toLowerCase().trim() !== filterUserLc) return false;
+      if (filterUserSetLive) {
+        if (!filterUserSetLive.has(String(u.user || '').toLowerCase().trim())) return false;
+      } else if (filters.user !== null) {
+        // [] selected → no users
+        return false;
+      }
       if (filterAct && String(u.activity || '').toLowerCase().trim() !== filterAct) return false;
       return true;
     });
@@ -2402,7 +2416,9 @@
   const filters = {
     period: 'today',
     teams: null,        // null = all; else array of selected team names
-    user: null,         // null = all; else specific user name
+    // PR #15: user is now an array (multi-select). null = all users; [] = none
+    // selected (zero rows); ['Ravi','Arun'] = filter to those names.
+    user: null,
     activity: 'all',    // 'all' or one of KNOWN_ACTIVITIES
     // Per-role multi-selects; null = all; else array of selected option strings.
     productivity: null,
@@ -2814,9 +2830,15 @@
       roleIsAll[role] = (sel === null) || (sel.length === allOptionsByRole[role].length);
     });
 
+    // PR #15: filters.user is array (or null)
+    const filterUserSetRows = (filters.user && filters.user.length)
+      ? new Set(filters.user.map(s => String(s).toLowerCase().trim()))
+      : null;
+
     return rows.filter(r => {
-      if (filters.user && userIdx >= 0) {
-        if (String(r[userIdx] || '').trim() !== filters.user) return false;
+      if (filters.user !== null && userIdx >= 0) {
+        if (!filterUserSetRows) return false;  // [] selected → no rows
+        if (!filterUserSetRows.has(String(r[userIdx] || '').toLowerCase().trim())) return false;
       }
       if (filters.activity !== 'all' && actIdx >= 0) {
         if (String(r[actIdx] || '').toLowerCase() !== filters.activity) return false;
@@ -2934,43 +2956,90 @@
     q = (q || '').toLowerCase().trim();
     const matches = all
       .filter(u => !q || u.name.toLowerCase().includes(q) || u.team.toLowerCase().includes(q))
-      .slice(0, 50);  // show more in dropdown — was 10
+      .slice(0, 200);
     const panel = $('userPanel');
-    // Always show "All users" option at top so user can clear the filter
-    // by clicking, not just by clearing the text input.
-    var allItem = `<div class="item" data-u="__ALL__" style="font-weight:600;color:var(--accent);">
-         <span class="avatar-sm">∗</span>
-         <span>All users</span>
-         <span class="team">${all.length} known</span>
-       </div>`;
+
+    // Determine if "all users" mode (filters.user === null) — checkboxes
+    // reflect this: when null, treat every visible user as "checked".
+    const isAllMode = filters.user === null;
+    const selectedSet = new Set(
+      (filters.user || []).map(s => String(s).toLowerCase().trim())
+    );
+    const isChecked = (name) => {
+      if (isAllMode) return true;
+      return selectedSet.has(String(name).toLowerCase().trim());
+    };
+
+    // Header row with Select all / Clear actions (mirrors team multi)
+    const headerHtml = `
+      <div class="mhead" style="padding: 6px 10px; gap: 6px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border);">
+        <span style="color: var(--text-3); font-size: 12px;">${all.length} users</span>
+        <span><a id="userSelAll" style="cursor:pointer;color:var(--accent);">Select all</a> · <a id="userClrAll" style="cursor:pointer;color:var(--accent);">Clear</a></span>
+      </div>`;
+
     if (!matches.length) {
-      panel.innerHTML = allItem +
-        `<div class="item" style="color:var(--text-3);">${q ? 'No users match' : 'No users yet'}</div>`;
+      panel.innerHTML = headerHtml +
+        `<div class="item" style="color:var(--text-3); padding: 10px;">${q ? 'No users match' : 'No users yet'}</div>`;
       attachUserClickHandlers();
       return;
     }
-    const initials = (n) => n.split(/\s+/).map(p => p[0]).slice(0,2).join('').toUpperCase();
-    panel.innerHTML = allItem + matches.map(u =>
-      `<div class="item" data-u="${escapeHtml(u.name)}">
-         <span class="avatar-sm">${escapeHtml(initials(u.name))}</span>
+    panel.innerHTML = headerHtml + matches.map(u => {
+      const checked = isChecked(u.name) ? 'checked' : '';
+      return `<label class="item" style="display:flex; align-items:center; gap:8px; padding:6px 10px; cursor:pointer;">
+         <input type="checkbox" class="user-cb" data-u="${escapeHtml(u.name)}" ${checked}>
          <span>${escapeHtml(u.name)}</span>
-         <span class="team">${escapeHtml(u.team)}</span>
-       </div>`
-    ).join('');
+         <span class="team" style="margin-left:auto; color: var(--text-3); font-size: 12px;">${escapeHtml(u.team)}</span>
+       </label>`;
+    }).join('');
     attachUserClickHandlers();
 
     function attachUserClickHandlers() {
-      panel.querySelectorAll('.item[data-u]').forEach(it => {
-        it.addEventListener('click', () => {
-          if (it.dataset.u === '__ALL__') {
-            // Clear the user filter — show all users
-            filters.user = null;
-            $('userInput').value = '';
+      // Select all
+      var selA = panel.querySelector('#userSelAll');
+      if (selA) selA.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        // Selecting all = clear the filter (filters.user = null)
+        filters.user = null;
+        buildUserPanel($('userInput').value || '');
+        updateFilterUI();
+        renderContent();
+      });
+      // Clear (no users selected → empty rows)
+      var clrA = panel.querySelector('#userClrAll');
+      if (clrA) clrA.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        filters.user = [];
+        buildUserPanel($('userInput').value || '');
+        updateFilterUI();
+        renderContent();
+      });
+      // Individual checkbox toggle
+      panel.querySelectorAll('input.user-cb').forEach(cb => {
+        cb.addEventListener('change', (ev) => {
+          ev.stopPropagation();
+          const name = cb.dataset.u;
+          // If currently in "all mode" (filters.user === null), starting an
+          // individual selection means only the OTHERS were checked. Treat
+          // the unchecking as "all minus this name".
+          if (filters.user === null) {
+            filters.user = all.map(u => u.name).filter(n => n !== name);
+            // If user just unchecked, that's the action; if checked while in
+            // all mode, that's a no-op (already all). The checkbox event
+            // tells us cb.checked AFTER the change.
+            if (cb.checked) {
+              filters.user = all.map(u => u.name);  // still everyone
+            }
           } else {
-            filters.user = it.dataset.u;
-            $('userInput').value = it.dataset.u;
+            const idx = filters.user.indexOf(name);
+            if (cb.checked && idx < 0) filters.user.push(name);
+            else if (!cb.checked && idx >= 0) filters.user.splice(idx, 1);
           }
-          $('userAc').classList.remove('open');
+          // Normalise: if user has selected ALL known users, collapse to null
+          // for cleaner state + chip display
+          const total = all.length;
+          if (Array.isArray(filters.user) && filters.user.length === total) {
+            filters.user = null;
+          }
           updateFilterUI();
           renderContent();
         });
@@ -2979,9 +3048,14 @@
   }
 
   function updateFilterUI() {
-    // User trigger label — show selected user or "All users"
+    // User trigger label — array semantics (PR #15)
     var userTrig = document.getElementById('userTriggerText');
-    if (userTrig) userTrig.textContent = filters.user ? filters.user : 'All users';
+    if (userTrig) {
+      if (filters.user === null) userTrig.textContent = 'All users';
+      else if (filters.user.length === 0) userTrig.textContent = '⚠ 0 users';
+      else if (filters.user.length === 1) userTrig.textContent = filters.user[0];
+      else userTrig.textContent = filters.user.length + ' users';
+    }
 
     // Chips
     const chips = [];
@@ -2990,7 +3064,11 @@
       filters.teams.forEach(t => chips.push({ type: 'team', v: t }));
       if (filters.teams.length === 0) chips.push({ type: 'team', v: '⚠ 0 teams' });
     }
-    if (filters.user) chips.push({ type: 'user', v: filters.user });
+    // PR #15: filters.user is array — one chip per selected user
+    if (filters.user !== null) {
+      filters.user.forEach(u => chips.push({ type: 'user', v: u }));
+      if (filters.user.length === 0) chips.push({ type: 'user', v: '⚠ 0 users' });
+    }
     if (filters.activity !== 'all') chips.push({ type: 'activity', v: filters.activity });
     ROLES.forEach(role => {
       const sel = filters[role];
@@ -3021,7 +3099,17 @@
         filters.teams = [...allTeams];
       }
     }
-    else if (type === 'user')     { filters.user = null; $('userInput').value = ''; }
+    else if (type === 'user') {
+      // PR #15: array semantics — pop the named user; collapse to null on empty
+      if (Array.isArray(filters.user)) {
+        const idx = filters.user.indexOf(v);
+        if (idx >= 0) filters.user.splice(idx, 1);
+        if (filters.user.length === 0) filters.user = null;
+      } else {
+        filters.user = null;
+      }
+      $('userInput').value = '';
+    }
     else if (type === 'activity') filters.activity = 'all';
     else if (type && type.startsWith('role:')) {
       const role = type.slice(5);
@@ -3189,7 +3277,9 @@
   });
   $('userInput').addEventListener('input', () => {
     const v = $('userInput').value.trim();
-    if (!v) { filters.user = null; updateFilterUI(); renderContent(); }
+    // PR #15: typing in the search input doesn't change the filter — it
+    // only filters the visible list of checkboxes. The filter is set by
+    // checking/unchecking, or by Select all / Clear actions.
     buildUserPanel(v);
   });
 
