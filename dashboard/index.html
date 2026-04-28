@@ -592,7 +592,10 @@
                 <input type="text" id="userInput" placeholder="Type to filter…" autocomplete="off"
                        style="flex:1; border:1px solid var(--border); border-radius:6px; padding:5px 8px; font-size:13px;">
               </div>
-              <div class="ac-panel" id="userPanel" style="position: static; box-shadow: none; border: 0;"></div>
+              <!-- NOT using .ac-panel class — its CSS hides it unless parent
+                   is .ac.open. We want this panel visible whenever the
+                   wrapping .multi.open shows the panel. -->
+              <div id="userPanel" style="max-height: 280px; overflow-y: auto;"></div>
             </div>
           </div>
         </div>
