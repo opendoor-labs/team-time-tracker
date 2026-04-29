@@ -2010,6 +2010,204 @@ function consolidateUtilities() {
   return report;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// PR #27 — One-click diagnostic for "where did my data go for date X?"
+// ═══════════════════════════════════════════════════════════════════════
+// Run from Apps Script editor. Returns a full report:
+//   • For each team: rows in active sheet for date X + rows in Drive
+//     archive file for date X (with file existence check)
+//   • Sessions: same — active count + archive count
+//   • Attendance: same
+//   • ArchiveLog: any rows logged for date X (so we can see what the
+//     daily trigger actually did)
+//
+// To use: open Functions dropdown → diagnoseDate → Run.
+// IMPORTANT: edit the const targetDate below before running, since the
+// editor's Run button can't pass arguments.
+
+function diagnoseDate() {
+  var targetDate = '2026-04-28';   // ← edit this if testing a different day
+  return _diagnoseDateImpl_(targetDate);
+}
+
+function _diagnoseDateImpl_(targetDate) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+    return { ok: false, error: 'targetDate must be YYYY-MM-DD' };
+  }
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var report = {
+    targetDate: targetDate,
+    todayPST:   todayPST_(),
+    teams:      {},
+    sessions:   {},
+    attendance: {},
+    archiveLog: { rowsForTargetDate: [] },
+    summary:    {}
+  };
+
+  var rootId = _getArchiveRootId_();
+  var root   = rootId ? DriveApp.getFolderById(rootId) : null;
+
+  // ── 1. Per-team active + archive counts ──────────────────────────────
+  Object.keys(TEAM_TO_TAB).forEach(function (team) {
+    var tabName = TEAM_TO_TAB[team];
+    var entry = { activeRows: 0, archiveRows: 0, archiveFile: null };
+
+    // Active sheet count
+    var sh = ss.getSheetByName(tabName);
+    if (sh) {
+      var lastRow = sh.getLastRow();
+      if (lastRow >= 2) {
+        var rng = sh.getRange(2, 1, lastRow - 1, 1);
+        var disp = rng.getDisplayValues();
+        for (var i = 0; i < disp.length; i++) {
+          var d = String(disp[i][0] || '').slice(0, 10);
+          if (d === targetDate) entry.activeRows++;
+        }
+      }
+    } else {
+      entry.activeTab = 'MISSING';
+    }
+
+    // Archive file lookup
+    if (root) {
+      try {
+        var folder = _findOrCreateChild_(root, _folderNameForTeam_(team));
+        var basePrefix = tabName.replace(/_Log$/, '') + '_Log';
+        var file = _findArchiveFileByDate_(folder, basePrefix, targetDate);
+        if (file) {
+          entry.archiveFile = file.getName();
+          var archSs = SpreadsheetApp.openById(file.getId());
+          var archSh = archSs.getSheets()[0];
+          var lr = archSh.getLastRow();
+          if (lr >= 2) {
+            var arng = archSh.getRange(2, 1, lr - 1, 1);
+            var adisp = arng.getDisplayValues();
+            for (var j = 0; j < adisp.length; j++) {
+              var d2 = String(adisp[j][0] || '').slice(0, 10);
+              if (d2 === targetDate) entry.archiveRows++;
+            }
+          }
+        }
+      } catch (err) {
+        entry.archiveError = String(err);
+      }
+    }
+
+    if (entry.activeRows || entry.archiveRows || entry.activeTab === 'MISSING') {
+      report.teams[team] = entry;
+    }
+  });
+
+  // ── 2. Sessions active + archive ─────────────────────────────────────
+  var sessSh = ss.getSheetByName('Sessions');
+  if (sessSh) {
+    var lr = sessSh.getLastRow();
+    var ac = 0;
+    if (lr >= 2) {
+      var d = sessSh.getRange(2, 2, lr - 1, 1).getDisplayValues();  // col B = Date
+      for (var i = 0; i < d.length; i++) {
+        if (String(d[i][0] || '').slice(0, 10) === targetDate) ac++;
+      }
+    }
+    report.sessions.activeRows = ac;
+  }
+  if (root) {
+    try {
+      var sysFolder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+      var sFile = _findArchiveFileByDate_(sysFolder, 'Sessions', targetDate);
+      if (sFile) {
+        report.sessions.archiveFile = sFile.getName();
+        var sArch = SpreadsheetApp.openById(sFile.getId()).getSheets()[0];
+        var sLr = sArch.getLastRow();
+        var ar = 0;
+        if (sLr >= 2) {
+          var sd = sArch.getRange(2, 2, sLr - 1, 1).getDisplayValues();
+          for (var k = 0; k < sd.length; k++) {
+            if (String(sd[k][0] || '').slice(0, 10) === targetDate) ar++;
+          }
+        }
+        report.sessions.archiveRows = ar;
+      }
+    } catch (err) { report.sessions.archiveError = String(err); }
+  }
+
+  // ── 3. Attendance active + archive ───────────────────────────────────
+  var attSh = ss.getSheetByName('Attendance');
+  if (attSh) {
+    var alr = attSh.getLastRow();
+    var aac = 0;
+    if (alr >= 2) {
+      var ad = attSh.getRange(2, 1, alr - 1, 1).getDisplayValues();
+      for (var i = 0; i < ad.length; i++) {
+        if (String(ad[i][0] || '').slice(0, 10) === targetDate) aac++;
+      }
+    }
+    report.attendance.activeRows = aac;
+  }
+  if (root) {
+    try {
+      var sysFolder2 = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+      var aFile = _findArchiveFileByDate_(sysFolder2, 'Attendance', targetDate);
+      if (aFile) {
+        report.attendance.archiveFile = aFile.getName();
+        var aArch = SpreadsheetApp.openById(aFile.getId()).getSheets()[0];
+        var aLr = aArch.getLastRow();
+        var aar = 0;
+        if (aLr >= 2) {
+          var aad = aArch.getRange(2, 1, aLr - 1, 1).getDisplayValues();
+          for (var k = 0; k < aad.length; k++) {
+            if (String(aad[k][0] || '').slice(0, 10) === targetDate) aar++;
+          }
+        }
+        report.attendance.archiveRows = aar;
+      }
+    } catch (err) { report.attendance.archiveError = String(err); }
+  }
+
+  // ── 4. ArchiveLog rows for target date ───────────────────────────────
+  var alSh = ss.getSheetByName('ArchiveLog');
+  if (alSh) {
+    var alLr = alSh.getLastRow();
+    if (alLr >= 2) {
+      var alVals = alSh.getRange(2, 1, alLr - 1, alSh.getLastColumn()).getValues();
+      var alDisp = alSh.getRange(2, 1, alLr - 1, alSh.getLastColumn()).getDisplayValues();
+      for (var i = 0; i < alVals.length; i++) {
+        var rowDate = String(alDisp[i][0] || '').slice(0, 10);
+        if (rowDate === targetDate) {
+          report.archiveLog.rowsForTargetDate.push({
+            team:   alVals[i][4],
+            moved:  alVals[i][5],
+            kept:   alVals[i][6],
+            file:   alVals[i][7],
+            error:  alVals[i][8]
+          });
+        }
+      }
+    }
+  }
+
+  // ── 5. Plain-English summary ─────────────────────────────────────────
+  var totalActive = 0, totalArchive = 0, teamsWithData = [];
+  Object.keys(report.teams).forEach(function (t) {
+    var e = report.teams[t];
+    totalActive += e.activeRows || 0;
+    totalArchive += e.archiveRows || 0;
+    if (e.activeRows || e.archiveRows) teamsWithData.push(t);
+  });
+  report.summary = {
+    totalTeamLogRows_active:    totalActive,
+    totalTeamLogRows_archive:   totalArchive,
+    teamsWithDataOnTargetDate:  teamsWithData,
+    sessionsTotal:              (report.sessions.activeRows || 0) + (report.sessions.archiveRows || 0),
+    attendanceTotal:            (report.attendance.activeRows || 0) + (report.attendance.archiveRows || 0),
+    archiveLogEntries:          report.archiveLog.rowsForTargetDate.length
+  };
+
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
 // Sync Drive permissions from Whitelist — run daily or when TL roster changes.
 //
 // Permission model (strict):
