@@ -27,6 +27,14 @@
 var SHEET_ID = '1mNOj9MWZAAVNEaWvnNjIkHkoUG1rMWHg0HWM1m47OXs';
 var TZ       = 'Asia/Calcutta';
 
+// PR #22 — Employee roster sheet (admin-controlled master list of who can
+// use the Mac app). Mac app first-launch flow looks up the user's email
+// here, sends OTP, receives canonical Full Name. Sheet schema:
+// Sheet1 col A = Name, col B = Email.
+var EMPLOYEE_ROSTER_SHEET_ID = '1dqbnwu03rMA73Yr6F1q0IJVGFjnGZE4oDg-1G-vsRmI';
+var EMP_OTP_TTL_SEC          = 600;       // 10 min — OTP code TTL
+var EMP_RATE_LIMIT           = 3;         // max OTP requests per email per 10 min
+
 // Listings team — screenshot uploads land here. The folder must exist and the
 // Apps Script-running account must have edit access. Files are renamed using
 // the "Ticket Link/Property Address" field (sanitized) + PST date + IST time.
@@ -152,9 +160,12 @@ function doGet(e) {
       case 'tlDashboard':     return json_(tlDashboard_(ss, p));
       case 'liveActivity':    return json_(liveActivity_(ss, p));
       case 'whoami':          return json_(whoami_(ss, p.email));
-      // Email-OTP auth (browser flow)
+      // Email-OTP auth (browser flow — Whitelist sheet)
       case 'requestOtp':      return json_(requestOtp_(ss, p.email));
       case 'verifyOtp':       return json_(verifyOtp_(ss, p.email, p.code));
+      // Mac app first-launch OTP (Employee roster sheet) — PR #22
+      case 'requestEmpOtp':   return json_(requestEmpOtp_(ss, p.email));
+      case 'verifyEmpOtp':    return json_(verifyEmpOtp_(ss, p.email, p.code));
       case 'myStats':         return json_(myStats_(ss, p));
       // GET fallback for Mac app — avoids POST→GET body-drop on 302 redirect
       case 'myDashboardToken': return json_(myDashboardToken_(ss, { user: p.user }));
@@ -3118,6 +3129,135 @@ function verifyOtp_(ss, email, code) {
     // QC reviewers see all teams; TLs see only their assigned teams.
     teams: (wl.isAdmin || wl.isQC) ? Object.keys(TEAM_TO_TAB) : wl.teams
   };
+}
+
+// ─── PR #22 — Employee roster OTP (Mac app first-launch flow) ──────────
+// Mac app no longer trusts NSFullUserName. On first launch the user enters
+// their work email, we look it up in the Employee roster sheet
+// (EMPLOYEE_ROSTER_SHEET_ID, col A=Name, col B=Email), email a 6-digit OTP,
+// and bind {name, email} into Mac app localStorage on verify. Subsequent
+// launches read from localStorage and skip the modal.
+//
+// Why a separate flow from requestOtp_/verifyOtp_:
+//   • requestOtp_ checks the *Whitelist* tab (TL/admin dashboard auth).
+//   • requestEmpOtp_ checks the *Employee roster* (everyone who can clock in).
+//   • Whitelist is for browser dashboard access; roster is for Mac app users.
+//   • Verify response includes the canonical Full Name from the roster
+//     so the Mac app stops depending on macOS account name.
+
+function _lookupEmployeeRoster_(email) {
+  email = String(email || '').toLowerCase().trim();
+  if (!email) return null;
+  try {
+    var rss = SpreadsheetApp.openById(EMPLOYEE_ROSTER_SHEET_ID);
+    var sh  = rss.getSheets()[0];                 // Sheet1
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return null;
+    // A = Name, B = Email
+    var rng = sh.getRange(2, 1, lastRow - 1, 2).getDisplayValues();
+    for (var i = 0; i < rng.length; i++) {
+      var name = String(rng[i][0] || '').trim();
+      var em   = String(rng[i][1] || '').toLowerCase().trim();
+      if (em && em === email) return { name: name, email: em };
+    }
+  } catch (err) {
+    // Don't leak the exception to the client — log and return null.
+    try { console.log('roster_lookup_failed', email, String(err)); } catch (e) {}
+  }
+  return null;
+}
+
+function requestEmpOtp_(ss, email) {
+  email = String(email || '').toLowerCase().trim();
+  if (!email) return { ok: false, error: 'email_required' };
+
+  // Must be on the employee roster — never email OTPs to random addresses
+  var emp = _lookupEmployeeRoster_(email);
+  if (!emp) return { ok: false, error: 'not_on_roster',
+                     message: 'This email is not on the employee roster. Contact your TL.' };
+
+  // Rate limit
+  var cache = CacheService.getScriptCache();
+  var rlKey = 'emp_otp_rl:' + email;
+  var count = Number(cache.get(rlKey) || 0);
+  if (count >= EMP_RATE_LIMIT) {
+    return { ok: false, error: 'rate_limited',
+             message: 'Too many codes requested. Wait 10 minutes.' };
+  }
+  cache.put(rlKey, String(count + 1), EMP_OTP_TTL_SEC);
+
+  // Generate 6-digit code
+  var code = '';
+  for (var i = 0; i < 6; i++) code += Math.floor(Math.random() * 10);
+  cache.put('emp_otp:' + email, code, EMP_OTP_TTL_SEC);
+
+  try {
+    MailApp.sendEmail({
+      to: email,
+      subject: 'Team Tracker — your sign-in code: ' + code,
+      htmlBody:
+        '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:480px;padding:24px;background:#0f1420;color:#e6edf5;border-radius:12px">' +
+        '<h2 style="margin:0 0 12px">Team Tracker — First Launch</h2>' +
+        '<p style="color:#9aa7b8;margin:0 0 12px">Hi ' + (emp.name || 'there') + ',</p>' +
+        '<p style="color:#9aa7b8;margin:0 0 24px">Enter this code in the Mac app to verify your identity. Expires in 10 minutes.</p>' +
+        '<div style="font-size:42px;letter-spacing:8px;font-weight:700;color:#4f8cff;background:#1a2133;padding:20px;border-radius:8px;text-align:center;font-family:monospace">' + code + '</div>' +
+        '<p style="color:#6b7a8f;font-size:13px;margin:24px 0 0">Didn\'t open the app? Ignore this email and tell your TL — your account is safe.</p>' +
+        '</div>'
+    });
+  } catch (err) {
+    return { ok: false, error: 'mail_failed', message: String(err) };
+  }
+
+  return { ok: true, message: 'Code sent. Check your email.' };
+}
+
+function verifyEmpOtp_(ss, email, code) {
+  email = String(email || '').toLowerCase().trim();
+  code  = String(code  || '').trim();
+  if (!email || !code) return { ok: false, error: 'missing_fields' };
+
+  var cache = CacheService.getScriptCache();
+  var stored = cache.get('emp_otp:' + email);
+  if (!stored) return { ok: false, error: 'code_expired_or_invalid' };
+  if (stored !== code) return { ok: false, error: 'code_mismatch' };
+
+  // Single-use — consume now
+  cache.remove('emp_otp:' + email);
+
+  // Re-check roster (in case admin removed the user since requestEmpOtp_)
+  var emp = _lookupEmployeeRoster_(email);
+  if (!emp) return { ok: false, error: 'not_on_roster' };
+
+  // Log the verification to the Users tab so TL/admins can see who has
+  // ever launched the Mac app and when they last verified
+  try { _logUserVerification_(ss, emp.email, emp.name); } catch (e) {}
+
+  return { ok: true, name: emp.name, email: emp.email };
+}
+
+function _logUserVerification_(ss, email, name) {
+  var sh = ss.getSheetByName('Users');
+  if (!sh) {
+    sh = ss.insertSheet('Users');
+    sh.getRange(1, 1, 1, 4).setValues([['Email', 'Name', 'First Verified (IST)', 'Last Login (IST)']]);
+    sh.setFrozenRows(1);
+  }
+  var now = nowIST_();
+  var lastRow = sh.getLastRow();
+  if (lastRow >= 2) {
+    var emails = sh.getRange(2, 1, lastRow - 1, 1).getDisplayValues();
+    for (var i = 0; i < emails.length; i++) {
+      if (String(emails[i][0] || '').toLowerCase() === email) {
+        // Existing — bump Last Login only
+        sh.getRange(i + 2, 4).setValue(now);
+        // Refresh Name in case roster was edited
+        sh.getRange(i + 2, 2).setValue(name);
+        return;
+      }
+    }
+  }
+  // New verification
+  sh.appendRow([email, name, now, now]);
 }
 
 // ─── Session token helpers ─────────────────────────────────────────────
