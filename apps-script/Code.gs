@@ -1677,14 +1677,26 @@ function _findOrCreateChild_(parent, name) {
   return parent.createFolder(name);
 }
 
-// PR #18 — find archive file by full date with monthly-naming fallback.
-// New writes use full date (e.g. "BRN_Log_2026-04-28"). Old archives
-// (pre-PR #18) used monthly naming (e.g. "BRN_Log_2026_04"). On read,
-// try the new daily file first; if absent, fall back to the legacy
-// monthly file so historical data isn't lost.
+// PR #18 — find archive file by full date with multi-format fallback.
+// PR #28 — accept ALL three naming conventions seen in the wild:
+//
+//   1. "BRN_Log_2026-04-28"  (dashes — what the latest code creates)
+//   2. "BRN_Log_2026_04_28"  (underscores — what was actually produced
+//      on 4/28 by an interim dailyArchive run; difference unknown but
+//      the files exist and we can't lose them)
+//   3. "BRN_Log_2026_04"     (legacy monthly — pre-PR #18)
+//
+// Try each format in order, return the first match. Without (2), any
+// dashboard read for 4/27 or 4/28 returns 0 rows even though Drive
+// has the file — exactly the bug you saw.
 function _findArchiveFileByDate_(folder, basePrefix, date) {
+  // 1. Daily with dashes (canonical post-PR #18)
   var daily = _findFileInFolder_(folder, basePrefix + '_' + date);
   if (daily) return daily;
+  // 2. Daily with underscores (alternate seen in wild on 2026-04-28)
+  var dailyU = _findFileInFolder_(folder, basePrefix + '_' + date.replace(/-/g, '_'));
+  if (dailyU) return dailyU;
+  // 3. Legacy monthly (pre-PR #18)
   var monthKey = date.slice(0, 7).replace('-', '_');  // "2026_04"
   return _findFileInFolder_(folder, basePrefix + '_' + monthKey);
 }
