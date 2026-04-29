@@ -1516,6 +1516,30 @@
         header = (source && source.header) || [];
         rows = (source && source.rows) || [];
       }
+      // PR #31 — Sessions schema gained two columns over time (PR #10 added
+      // Auto Break, PR #16 added Task Duration). Older archive files have
+      // only the original 11-column header but rows have 13 columns of
+      // data. Without this pad, AUTO BREAK + TASK DURATION values appear
+      // in the table as numeric cells with no column label above them.
+      if (key === 'sessions') {
+        const SESS_HEADER = ['Name', 'Date', 'Start', 'End',
+          'Production (min)', 'Break (min)', 'Dinner (min)', 'Meeting (min)',
+          'Training (min)', 'Idle (min)', 'Break Exceeded (min)',
+          'Auto Break (min)', 'Task Duration (min)'];
+        // Find max column count across all rows
+        let maxCols = header.length;
+        for (let i = 0; i < rows.length; i++) {
+          if (rows[i] && rows[i].length > maxCols) maxCols = rows[i].length;
+        }
+        if (header.length < maxCols) {
+          // Use canonical names for any missing columns
+          const padded = header.slice();
+          for (let i = padded.length; i < maxCols; i++) {
+            padded.push(SESS_HEADER[i] || ('Col ' + (i + 1)));
+          }
+          header = padded;
+        }
+      }
     } else {
       title = sel;
       const entry = (data.logs && data.logs[sel]) || { header: [], rows: [] };
