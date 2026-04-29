@@ -3165,6 +3165,17 @@ function renderForm(teamKey) {
   // Starts the task timer when user touches ANY field for the first time
   body.querySelectorAll('input, select, textarea').forEach(el => {
     const go = () => {
+      // PR #26 — Skip starting the main task timer when Utilities team is
+      // in Turn On parallel-channel mode. The 3 channel timers own their
+      // own state; the big top timer must stay at 00:00:00 until the user
+      // explicitly clicks ▶ Start on a channel card. Without this guard,
+      // the Task Type dropdown's `change` event itself triggers `go()` →
+      // main timer starts before user has done any actual work.
+      if (state.team === 'Utilities' && _utilTaskTypeIs('Turn On')) {
+        // Still keep snapshot dirty so field changes persist
+        if (typeof markSnapshotDirty === 'function') markSnapshotDirty();
+        return;
+      }
       if (!state.taskStartedAt) {
         state.taskStartedAt = Date.now();
         document.getElementById('formSub').textContent = '⏱ Timer running…';
@@ -3185,6 +3196,14 @@ function renderForm(teamKey) {
     el.addEventListener('input', go);
     el.addEventListener('change', go);
   });
+}
+
+// PR #26 helper — used by both the renderForm input listener (to skip
+// starting the main timer) and the channels-toggle visibility handler
+// (to know whether to reset state when entering Turn On mode).
+function _utilTaskTypeIs(value) {
+  const sel = document.querySelector('#formBody [data-field="Task Type"]');
+  return !!(sel && sel.value === value);
 }
 
 function truncate(s, n) { return s.length > n ? s.slice(0, n-1) + '…' : s; }
@@ -3286,12 +3305,34 @@ function _wireUtilityTaskTypeToggle(formBody) {
       }
     });
 
-    // Hide the standard ✓ Log Task button + the big task timer label when
-    // in Turn On mode — channel buttons + per-channel timers replace them.
+    // Hide the standard ✓ Log Task button + dim the big task timer card
+    // when in Turn On mode — channel buttons + per-channel timers replace
+    // it. Re-show on any other Task Type.
     const logBtn = document.getElementById('logTaskBtn');
     if (logBtn) logBtn.style.display = isTurnOn ? 'none' : '';
     const timerCard = document.getElementById('timerCard') || document.querySelector('.timer-card');
     if (timerCard) timerCard.style.opacity = isTurnOn ? '0.35' : '1';
+
+    // PR #26 — When entering Turn On mode, reset any in-progress main
+    // timer so the big "00:00:00" stays at zero. Update labels so the
+    // user understands the channel timers below own the work. When
+    // leaving Turn On mode, restore the standard "Current Task" UI.
+    const tLabel = document.getElementById('timerLabel');
+    const tDisp  = document.getElementById('timerDisplay');
+    const tLine  = document.getElementById('currentTaskLine');
+    const tSub   = document.getElementById('formSub');
+    if (isTurnOn) {
+      state.taskStartedAt = null;
+      if (tDisp)  tDisp.textContent = '00:00:00';
+      if (tLabel) tLabel.textContent = 'Channel timers';
+      if (tLine)  tLine.innerHTML = '<span style="color: var(--dim);">Use ▶ Start on a Call / Email / Online Form card to begin</span>';
+      if (tSub)   tSub.textContent = 'Each channel runs its own timer. Multiple can run in parallel.';
+    } else {
+      if (tLabel) tLabel.textContent = 'Current Task';
+      if (tSub)   tSub.textContent = 'Timer starts when you fill the first field';
+      // Don't auto-reset the timer here — user may have already touched a
+      // field for Turn Off / NST etc. and we shouldn't wipe their progress.
+    }
   }
 
   taskTypeSel.addEventListener('change', applyVisibility);
