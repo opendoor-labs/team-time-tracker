@@ -1874,6 +1874,37 @@
   </div>
 </div>
 
+<!-- ═══ First-launch OTP gate (PR #22) ═══ -->
+<!-- Sits at z-index 1000 so it can't be dismissed without verifying. Replaces -->
+<!-- the old NSFullUserName flow: user enters work email → receives 6-digit OTP -->
+<!-- → on verify, name + email locked into localStorage forever (until QC clears it). -->
+<div class="overlay" id="otpGateModal" style="z-index: 1000;">
+  <div class="modal" style="width: 460px; max-width: 94vw;">
+    <div class="icon-circle ok">🔐</div>
+    <h3>Welcome to Team Tracker</h3>
+    <p id="otpGateSubtitle">Enter your <b>Opendoor email</b> to get started. We'll send you a one-time code to verify it's you.</p>
+    <!-- Step 1: email -->
+    <div id="otpStep1" style="display: block;">
+      <input id="otpEmailInput" type="email" autocomplete="email" placeholder="you@opendoor.com"
+             style="width: 100%; padding: 14px 16px; border-radius: 11px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.04); color: #fff; font-size: 15px; font-family: inherit; outline: none; margin-bottom: 14px; box-sizing: border-box;" />
+      <div class="modal-actions" style="margin-top: 4px;">
+        <button class="btn-primary" id="otpSendBtn" onclick="otpRequestCode()">Send Code</button>
+      </div>
+    </div>
+    <!-- Step 2: code -->
+    <div id="otpStep2" style="display: none;">
+      <p style="margin-bottom: 14px;">We emailed a 6-digit code to <b id="otpEmailEcho"></b>.<br/>Check your inbox (and spam) — it's valid for 10 minutes.</p>
+      <input id="otpCodeInput" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"
+             style="width: 100%; padding: 16px; border-radius: 11px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.04); color: #fff; font-size: 24px; font-family: 'JetBrains Mono', monospace; letter-spacing: 8px; text-align: center; outline: none; margin-bottom: 14px; box-sizing: border-box;" />
+      <div class="modal-actions" style="margin-top: 4px;">
+        <button class="btn-ghost" onclick="otpResetToEmail()">← Change email</button>
+        <button class="btn-primary" id="otpVerifyBtn" onclick="otpVerifyCode()">Verify</button>
+      </div>
+    </div>
+    <p id="otpGateError" style="color: #ff6b6b; font-size: 13px; margin-top: 14px; min-height: 18px;"></p>
+  </div>
+</div>
+
 <!-- ═══ Welcome back modal (manual break ≥ 5 min OR after auto-break unlock) ═══ -->
 <div class="overlay welcome-back" id="welcomeModal">
   <div class="modal">
@@ -2014,6 +2045,162 @@ function nativeCall(op, payload) {
 function nativeFire(op, payload) {
   if (!IS_NATIVE) return;
   window.webkit.messageHandlers.native.postMessage({ op, payload: payload || {} });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PR #22 — First-launch OTP gate (replaces NSFullUserName)
+// ═══════════════════════════════════════════════════════════════════
+// On first launch, the user enters their work email. We check it against
+// the Employee roster sheet, mail a 6-digit OTP, then bind {name, email}
+// into localStorage. Subsequent launches read from localStorage and skip
+// the modal entirely. To force a re-verify (e.g. wrong person logged in),
+// admin can wipe localStorage via Swift menu OR we can add a "switch user"
+// button later.
+//
+// Why direct fetch instead of nativeCall: Swift bridge maps a fixed set
+// of op names to Apps Script actions. Adding new ops requires shipping a
+// new Swift binary. Direct fetch from JS works because WKWebView allows
+// cross-origin GET, and our verifyEmpOtp/requestEmpOtp endpoints are
+// idempotent doGet handlers.
+const TTK_API_URL = 'https://script.google.com/macros/s/AKfycbxkBAtowwxWuKkaga-aR93ssyxuygFZC-zYXsdm22aVKhXWB45E4YKMKVmc0Ty_ByFk/exec';
+const LS_VERIFIED_NAME  = 'ttk_verified_name';
+const LS_VERIFIED_EMAIL = 'ttk_verified_email';
+
+function getVerifiedUser() {
+  try {
+    const name  = localStorage.getItem(LS_VERIFIED_NAME);
+    const email = localStorage.getItem(LS_VERIFIED_EMAIL);
+    if (name && email) return { name: name, email: email };
+  } catch (e) {}
+  return null;
+}
+
+function setVerifiedUser(name, email) {
+  try {
+    localStorage.setItem(LS_VERIFIED_NAME, name);
+    localStorage.setItem(LS_VERIFIED_EMAIL, email);
+  } catch (e) {}
+}
+
+function clearVerifiedUser() {
+  try {
+    localStorage.removeItem(LS_VERIFIED_NAME);
+    localStorage.removeItem(LS_VERIFIED_EMAIL);
+  } catch (e) {}
+}
+
+function _otpSetError(msg) {
+  const el = document.getElementById('otpGateError');
+  if (el) el.textContent = msg || '';
+}
+
+function _otpSetBusy(buttonId, busy, idleLabel) {
+  const btn = document.getElementById(buttonId);
+  if (!btn) return;
+  btn.disabled = !!busy;
+  btn.style.opacity = busy ? '0.6' : '1';
+  btn.textContent = busy ? 'Working…' : idleLabel;
+}
+
+async function otpRequestCode() {
+  const input = document.getElementById('otpEmailInput');
+  const email = String(input.value || '').toLowerCase().trim();
+  _otpSetError('');
+  if (!email || email.indexOf('@') < 0) {
+    _otpSetError('Please enter a valid email address.');
+    return;
+  }
+  _otpSetBusy('otpSendBtn', true, 'Send Code');
+  try {
+    const res  = await fetch(TTK_API_URL + '?action=requestEmpOtp&email=' + encodeURIComponent(email),
+                             { method: 'GET', redirect: 'follow' });
+    const data = await res.json();
+    if (data.ok) {
+      document.getElementById('otpEmailEcho').textContent = email;
+      document.getElementById('otpStep1').style.display = 'none';
+      document.getElementById('otpStep2').style.display = 'block';
+      setTimeout(() => { document.getElementById('otpCodeInput').focus(); }, 100);
+    } else {
+      _otpSetError(data.message || _humanizeOtpError(data.error));
+    }
+  } catch (err) {
+    _otpSetError('Network error. Check your connection and try again.');
+  }
+  _otpSetBusy('otpSendBtn', false, 'Send Code');
+}
+
+async function otpVerifyCode() {
+  const email = String(document.getElementById('otpEmailInput').value || '').toLowerCase().trim();
+  const code  = String(document.getElementById('otpCodeInput').value || '').trim();
+  _otpSetError('');
+  if (!code || code.length < 6) {
+    _otpSetError('Enter the 6-digit code from your email.');
+    return;
+  }
+  _otpSetBusy('otpVerifyBtn', true, 'Verify');
+  try {
+    const res  = await fetch(TTK_API_URL + '?action=verifyEmpOtp&email=' + encodeURIComponent(email) +
+                             '&code=' + encodeURIComponent(code),
+                             { method: 'GET', redirect: 'follow' });
+    const data = await res.json();
+    if (data.ok && data.name && data.email) {
+      setVerifiedUser(data.name, data.email);
+      const overlay = document.getElementById('otpGateModal');
+      if (overlay) overlay.classList.remove('show');
+      // Hand off to bootNative — fire its body now that we have creds
+      _applyVerifiedUserToUI(data.name, data.email);
+    } else {
+      _otpSetError(data.message || _humanizeOtpError(data.error));
+    }
+  } catch (err) {
+    _otpSetError('Network error. Check your connection and try again.');
+  }
+  _otpSetBusy('otpVerifyBtn', false, 'Verify');
+}
+
+function otpResetToEmail() {
+  document.getElementById('otpStep2').style.display = 'none';
+  document.getElementById('otpStep1').style.display = 'block';
+  document.getElementById('otpCodeInput').value = '';
+  _otpSetError('');
+  setTimeout(() => { document.getElementById('otpEmailInput').focus(); }, 100);
+}
+
+function _humanizeOtpError(code) {
+  switch (code) {
+    case 'not_on_roster':           return 'This email isn\'t on the employee roster. Contact your TL.';
+    case 'rate_limited':            return 'Too many codes requested. Wait 10 minutes and try again.';
+    case 'mail_failed':              return 'We couldn\'t send the email. Try again in a moment.';
+    case 'code_expired_or_invalid': return 'Code expired. Request a new one.';
+    case 'code_mismatch':            return 'That code doesn\'t match. Double-check and retry.';
+    case 'missing_fields':           return 'Please enter the code.';
+    case 'email_required':           return 'Please enter your email.';
+    default:                          return 'Something went wrong. Try again.';
+  }
+}
+
+function _applyVerifiedUserToUI(fullName, email) {
+  state.user = fullName;
+  if (!state.email) state.email = email;
+  const firstName = (fullName.split(/\s+/)[0] || fullName);
+  const hr = new Date().getHours();
+  const greet = hr < 12 ? 'Good morning' : (hr < 17 ? 'Good afternoon' : 'Good evening');
+  const setText = (id, text) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+  setText('userName', fullName);
+  setText('greetHead', `${greet}, ${firstName}`);
+  setText('headName', fullName);
+  setText('welcomeTitle', `Welcome back, ${firstName}!`);
+  const initials = fullName.split(/\s+/).map(w => w[0] || '').join('').slice(0, 2).toUpperCase();
+  document.querySelectorAll('.avatar').forEach(a => {
+    if (a.textContent && a.textContent.length <= 3) a.textContent = initials;
+  });
+  // After verify, attempt restoreSnapshot in case there was an in-flight session
+  try {
+    if (typeof restoreSnapshot === 'function') restoreSnapshot('post-verify');
+  } catch (e) {}
 }
 
 // ── Error telemetry ──────────────────────────────────────────────────
@@ -4117,54 +4304,42 @@ async function confirmEndShiftFinal() {
   toast('🏁', 'Shift ended — rest up!');
 }
 
-// On launch, ask Swift for the real Mac full name and override state.user
+// PR #22 — On launch, identity comes from the Employee roster (verified via OTP).
+// Order of precedence:
+//   1. localStorage verified_name + verified_email — already verified on this Mac
+//   2. NSFullUserName from Swift (fallback ONLY if user opens demo / browser preview;
+//      production Mac app users always go through OTP gate first)
+//   3. Show OTP modal — block until verified, then set localStorage and continue
 (async function bootNative() {
-  if (!IS_NATIVE) return;
-  const u = await nativeCall('getUser', {});
-  if (u && u.fullName) {
-    const fullName = u.fullName;
-    // Seed state.user early so restoreSnapshot (below) uses the right name
-    // even before the UI setText calls run.
-    state.user = fullName;
-    const firstName = (fullName.split(/\s+/)[0] || fullName);
-    // Greeting of the hour
-    const hr = new Date().getHours();
-    const greet = hr < 12 ? 'Good morning' : (hr < 17 ? 'Good afternoon' : 'Good evening');
-    state.user = fullName;
-    // Replace all hardcoded placeholder names with the real Mac user
-    const setText = (id, text) => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = text;
-    };
-    setText('userName', fullName);
-    setText('greetHead', `${greet}, ${firstName}`);
-    setText('headName', fullName);
-    setText('welcomeTitle', `Welcome back, ${firstName}!`);
-    // Avatar initials (e.g. "Arun Mohan" → "AM")
-    const initials = fullName.split(/\s+/).map(w => w[0] || '').join('').slice(0, 2).toUpperCase();
-    document.querySelectorAll('.avatar').forEach(a => {
-      if (a.textContent && a.textContent.length <= 3) a.textContent = initials;
-    });
-  }
-  // Hide demo panel in production — it's only for local testing
+  // Hide demo panel always (production-only build)
   const dp = document.getElementById('demoPanel');
   if (dp) dp.style.display = 'none';
   const sd = document.getElementById('showDemoBtn');
   if (sd) sd.style.display = 'none';
 
-  // ── Auto-restore on launch ─────────────────────────────────────────
-  // If a fresh snapshot exists and the user was on the tracker screen
-  // when it saved, resume them seamlessly. Covers: force-quit, crash,
-  // laptop-closed-reopened, normal relaunch.
-  //
-  // If today's shift already ended: restoreSnapshot() will see
-  // ttk_shiftEnded === today, clear any stale snapshot, and return
-  // false — so the default Start Your Day screen stays visible. This
-  // is what the user wants: reopen after End Shift = fresh Start Day,
-  // not a memorial End-of-Day screen that sticks around all day.
-  try {
-    if (typeof restoreSnapshot === 'function') restoreSnapshot('relaunch');
-  } catch (e) { console.warn('[snapshot] boot-restore failed', e); }
+  // Step 1: prefer verified creds from localStorage
+  const verified = getVerifiedUser();
+  if (verified) {
+    _applyVerifiedUserToUI(verified.name, verified.email);
+    // ── Auto-restore on launch (only after identity is known) ────────
+    try {
+      if (typeof restoreSnapshot === 'function') restoreSnapshot('relaunch');
+    } catch (e) { console.warn('[snapshot] boot-restore failed', e); }
+    return;
+  }
+
+  // Step 2: not verified yet — show the OTP gate. Block until success.
+  // We still ask Swift for the macOS full name so we can pre-fill nothing
+  // (we deliberately do NOT auto-trust it). This is just for telemetry if
+  // the user enters a different email than their Mac account.
+  const overlay = document.getElementById('otpGateModal');
+  if (overlay) overlay.classList.add('show');
+  setTimeout(() => {
+    const ei = document.getElementById('otpEmailInput');
+    if (ei) ei.focus();
+  }, 200);
+  // No restoreSnapshot here — UI is gated until OTP passes.
+  // _applyVerifiedUserToUI() (called from otpVerifyCode) will fire restoreSnapshot.
 })();
 
 // Mirror attendance + session lifecycle to backend
