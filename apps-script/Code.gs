@@ -554,7 +554,7 @@ function closeSession_(ss, b) {
         var aVals = aRng.getValues();
         var aDisp = aRng.getDisplayValues();
         for (var ai = 1; ai < aVals.length; ai++) {
-          var attDate = String(aDisp[ai][0] || aVals[ai][0] || '').slice(0, 10);
+          var attDate = String(aDisp[ai][0] || aVals[ai][0] || '').slice(0, 10).replace(/_/g, '-');
           var attUser = String(aVals[ai][1] || '').toLowerCase().trim();
           if (attDate === today && attUser === userLc) {
             var rawMarked = String(aDisp[ai][4] || aVals[ai][4] || '').trim();
@@ -1144,7 +1144,7 @@ function readLog_(ss, p) {
       var block = rng.getValues();
       var disp  = rng.getDisplayValues();
       for (var i = block.length - 1; i >= 0; i--) {
-        var rowDate = String(disp[i][0] || '').slice(0, 10);
+        var rowDate = String(disp[i][0] || '').slice(0, 10).replace(/_/g, '-');
         if (rowDate === date) {
           block[i][0] = String(disp[i][0] || '');
           matched.unshift(block[i]);
@@ -1293,7 +1293,7 @@ function readByDate_(ss, tabName, date, teamFilter) {
 
   var activeRows = [];
   for (var i = 0; i < vals.length; i++) {
-    var d = String(disp[i][0] || vals[i][0] || '').slice(0, 10);
+    var d = String(disp[i][0] || vals[i][0] || '').slice(0, 10).replace(/_/g, '-');
     if (date && d !== date) continue;
     if (teamFilter && teamFilter.length &&
         teamFilter.indexOf(String(vals[i][2] || '')) < 0) continue;
@@ -1363,7 +1363,7 @@ function readSessionsByDate_(ss, date, teamFilter) {
     disp.shift();
     if (!header.length) header = activeHeader;
     for (var ri = 0; ri < vals.length; ri++) {
-      var d = String(disp[ri][1] || vals[ri][1] || '').slice(0, 10);
+      var d = String(disp[ri][1] || vals[ri][1] || '').slice(0, 10).replace(/_/g, '-');
       if (d !== date) continue;
       vals[ri][1] = String(disp[ri][1] || vals[ri][1] || '');
       vals[ri][2] = String(disp[ri][2] || vals[ri][2] || '');
@@ -1405,7 +1405,7 @@ function readSessionsByDate_(ss, date, teamFilter) {
     var aVals = aRng.getValues();
     var aDisp = aRng.getDisplayValues();
     for (var i = 1; i < aVals.length; i++) {
-      var aDate = String(aDisp[i][0] || aVals[i][0] || '').slice(0, 10);
+      var aDate = String(aDisp[i][0] || aVals[i][0] || '').slice(0, 10).replace(/_/g, '-');
       if (aDate !== date) continue;
       attRows.push(aVals[i]);
     }
@@ -1432,7 +1432,7 @@ function readSessionsByDate_(ss, date, teamFilter) {
         var block = rng2.getValues();
         var blockDisp = rng2.getDisplayValues();
         for (var j = 0; j < block.length; j++) {
-          var rowDate = String(blockDisp[j][0] || block[j][0] || '').slice(0, 10);
+          var rowDate = String(blockDisp[j][0] || block[j][0] || '').slice(0, 10).replace(/_/g, '-');
           if (rowDate !== date) continue;
           teamRows.push(block[j]);
         }
@@ -1505,7 +1505,7 @@ function _toYMD_(v) {
       return Utilities.formatDate(v, 'America/Los_Angeles', 'yyyy-MM-dd');
     }
   }
-  return String(v || '').slice(0, 10);
+  return String(v || '').slice(0, 10).replace(/_/g, '-');
 }
 
 // Parse TaskStartedAt cell value back to ms-epoch for the dashboard.
@@ -1677,6 +1677,31 @@ function _findOrCreateChild_(parent, name) {
   return parent.createFolder(name);
 }
 
+// PR #29 — Manual cache-flush helper. Run from Apps Script editor when
+// archive read paths change (e.g. after deploying a fix) — Apps Script
+// CacheService entries from BEFORE the deploy can mask the new behavior
+// for up to 10 min. Calling this clears all archive read keys so the
+// very next dashboard hit triggers fresh lookups against Drive.
+//
+// Run: Functions dropdown → flushArchiveCache → ▶ Run.
+function flushArchiveCache() {
+  var cache = CacheService.getScriptCache();
+  // Build a sweep of plausible keys for the last 60 days × all teams.
+  // CacheService.removeAll requires an explicit list; there's no wildcard.
+  var keys = [];
+  var teams = Object.keys(TEAM_TO_TAB);
+  var today = new Date();
+  for (var d = 0; d < 60; d++) {
+    var dt = new Date(today.getTime() - d * 86400000);
+    var ymd = Utilities.formatDate(dt, 'America/Los_Angeles', 'yyyy-MM-dd');
+    keys.push('archSess:' + ymd);
+    keys.push('archAtt:'  + ymd);
+    teams.forEach(function (t) { keys.push('arch:' + t + ':' + ymd); });
+  }
+  cache.removeAll(keys);
+  return { ok: true, removed: keys.length, note: 'Next dashboard hit will re-read from Drive.' };
+}
+
 // PR #18 — find archive file by full date with multi-format fallback.
 // PR #28 — accept ALL three naming conventions seen in the wild:
 //
@@ -1758,7 +1783,7 @@ function migrateLegacyArchiveNames() {
       // Group rows by date (YYYY-MM-DD)
       var byDay = {};
       for (var i = 0; i < values.length; i++) {
-        var d = String(disp[i][dateColIdx] || values[i][dateColIdx] || '').slice(0, 10);
+        var d = String(disp[i][dateColIdx] || values[i][dateColIdx] || '').slice(0, 10).replace(/_/g, '-');
         if (!d || d.length !== 10 || d.charAt(4) !== '-') continue;
         // Coerce date col to display string (avoid Date-object archive bug)
         values[i][dateColIdx] = String(disp[i][dateColIdx] || values[i][dateColIdx] || '');
@@ -2073,7 +2098,7 @@ function _diagnoseDateImpl_(targetDate) {
         var rng = sh.getRange(2, 1, lastRow - 1, 1);
         var disp = rng.getDisplayValues();
         for (var i = 0; i < disp.length; i++) {
-          var d = String(disp[i][0] || '').slice(0, 10);
+          var d = String(disp[i][0] || '').slice(0, 10).replace(/_/g, '-');
           if (d === targetDate) entry.activeRows++;
         }
       }
@@ -2096,7 +2121,7 @@ function _diagnoseDateImpl_(targetDate) {
             var arng = archSh.getRange(2, 1, lr - 1, 1);
             var adisp = arng.getDisplayValues();
             for (var j = 0; j < adisp.length; j++) {
-              var d2 = String(adisp[j][0] || '').slice(0, 10);
+              var d2 = String(adisp[j][0] || '').slice(0, 10).replace(/_/g, '-');
               if (d2 === targetDate) entry.archiveRows++;
             }
           }
@@ -2185,7 +2210,7 @@ function _diagnoseDateImpl_(targetDate) {
       var alVals = alSh.getRange(2, 1, alLr - 1, alSh.getLastColumn()).getValues();
       var alDisp = alSh.getRange(2, 1, alLr - 1, alSh.getLastColumn()).getDisplayValues();
       for (var i = 0; i < alVals.length; i++) {
-        var rowDate = String(alDisp[i][0] || '').slice(0, 10);
+        var rowDate = String(alDisp[i][0] || '').slice(0, 10).replace(/_/g, '-');
         if (rowDate === targetDate) {
           report.archiveLog.rowsForTargetDate.push({
             team:   alVals[i][4],
@@ -2517,7 +2542,7 @@ function _archiveTeamDay_(ss, team, cutoff, dateKey) {
   var toArchive = [];
   var toKeep = [];
   for (var i = 0; i < values.length; i++) {
-    var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
+    var d = String(disp[i][0] || values[i][0] || '').slice(0, 10).replace(/_/g, '-');
     if (d === cutoff) {
       // Coerce col A to display string before archiving so the archive
       // file doesn't get Date-typed cells (which would re-introduce the
@@ -2632,7 +2657,7 @@ function _forceArchiveTeamUpTo_(ss, team, targetDate) {
   var byMonth = {};
   var toKeep  = [];
   for (var i = 0; i < values.length; i++) {
-    var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
+    var d = String(disp[i][0] || values[i][0] || '').slice(0, 10).replace(/_/g, '-');
     if (d && d.length === 10 && d.charAt(4) === '-' && d <= targetDate) {
       values[i][0] = String(disp[i][0] || values[i][0] || '');
       // PR #18 — daily archive files: bucket by full date, not month
@@ -2691,7 +2716,7 @@ function _forceArchiveSystemUpTo_(ss, tabName, dateColIdx, targetDate) {
   var byMonth = {};
   var toKeep  = [];
   for (var i = 0; i < values.length; i++) {
-    var d = String(disp[i][dateColIdx] || values[i][dateColIdx] || '').slice(0, 10);
+    var d = String(disp[i][dateColIdx] || values[i][dateColIdx] || '').slice(0, 10).replace(/_/g, '-');
     if (d && d.length === 10 && d.charAt(4) === '-' && d <= targetDate) {
       // Coerce all string-formatted cells to display strings so archive
       // doesn't get Date-typed cells.
@@ -2785,7 +2810,7 @@ function _archiveSessionsPreToday_(ss) {
   var toKeep  = [];
   var perMonthOriginal = {};  // for stable display values per month
   for (var i = 0; i < values.length; i++) {
-    var d = String(disp[i][1] || values[i][1] || '').slice(0, 10);
+    var d = String(disp[i][1] || values[i][1] || '').slice(0, 10).replace(/_/g, '-');
     if (d && d.length === 10 && d.charAt(4) === '-' && d < today) {
       // PR #18 — daily files
       // Replace col B/C/D with display strings so archive doesn't get
@@ -2855,7 +2880,7 @@ function _archiveAttendancePreToday_(ss) {
   var byMonth = {};
   var toKeep  = [];
   for (var i = 0; i < values.length; i++) {
-    var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
+    var d = String(disp[i][0] || values[i][0] || '').slice(0, 10).replace(/_/g, '-');
     if (d && d.length === 10 && d.charAt(4) === '-' && d < today) {
       // PR #18 — daily files: bucket by full date
       values[i][0] = String(disp[i][0] || values[i][0] || '');
@@ -2929,7 +2954,7 @@ function readArchiveSessions_(date) {
     var disp   = rng.getDisplayValues();
     var rows = [];
     for (var i = 0; i < values.length; i++) {
-      var d = String(disp[i][1] || values[i][1] || '').slice(0, 10);
+      var d = String(disp[i][1] || values[i][1] || '').slice(0, 10).replace(/_/g, '-');
       if (d !== date) continue;
       values[i][1] = String(disp[i][1] || values[i][1] || '');
       values[i][2] = String(disp[i][2] || values[i][2] || '');
@@ -2972,7 +2997,7 @@ function readArchiveAttendance_(date) {
     var disp   = rng.getDisplayValues();
     var rows = [];
     for (var i = 0; i < values.length; i++) {
-      var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
+      var d = String(disp[i][0] || values[i][0] || '').slice(0, 10).replace(/_/g, '-');
       if (d !== date) continue;
       values[i][0] = String(disp[i][0] || values[i][0] || '');
       values[i][4] = String(disp[i][4] || values[i][4] || '');
@@ -3035,7 +3060,7 @@ function _readUserSessionsArchiveRange_(user, fromDate, toDate) {
       for (var i = 0; i < values.length; i++) {
         var n = String(values[i][0] || '').toLowerCase().trim();
         if (n !== userLc) continue;
-        var d = String(disp[i][1] || values[i][1] || '').slice(0, 10);
+        var d = String(disp[i][1] || values[i][1] || '').slice(0, 10).replace(/_/g, '-');
         if (d < fromDate || d > toDate) continue;
         values[i][1] = String(disp[i][1] || values[i][1] || '');
         rows.push(values[i]);
@@ -3097,7 +3122,7 @@ function _readUserAttendanceArchiveRange_(user, fromDate, toDate) {
       for (var i = 0; i < values.length; i++) {
         var n = String(values[i][1] || '').toLowerCase().trim();
         if (n !== userLc) continue;
-        var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
+        var d = String(disp[i][0] || values[i][0] || '').slice(0, 10).replace(/_/g, '-');
         if (d < fromDate || d > toDate) continue;
         values[i][0] = String(disp[i][0] || values[i][0] || '');
         rows.push(values[i]);
@@ -3228,7 +3253,7 @@ function autoCloseStaleShifts_() {
   var sessIndex = {};
   for (var s = 1; s < sessVals.length; s++) {
     var sName = String(sessVals[s][0] || '').toLowerCase().trim();
-    var sDate = String(sessDisp[s][1] || '').slice(0, 10);
+    var sDate = String(sessDisp[s][1] || '').slice(0, 10).replace(/_/g, '-');
     if (sName && sDate) sessIndex[sName + '|' + sDate] = s + 1;
   }
 
@@ -3247,7 +3272,7 @@ function autoCloseStaleShifts_() {
     var taskDurMin    = Number(liveVals[i][13]) || 0;  // N (PR #16)
 
     // PST date for the Sessions row = first 10 chars of shiftStartAt.
-    var pstDate  = shiftStartStr.slice(0, 10);
+    var pstDate  = shiftStartStr.slice(0, 10).replace(/_/g, '-');
     var startTm  = shiftStartStr.slice(11) || timeIST_();
     // Effective end = last heartbeat. If empty, fall back to now.
     var endTm    = updatedAtStr.slice(11) || timeIST_();
@@ -3338,7 +3363,7 @@ function readArchiveLog_(team, date) {
     var disp = rng.getDisplayValues();
     var rows = [];
     for (var i = 0; i < values.length; i++) {
-      var d = String(disp[i][0] || '').slice(0, 10);
+      var d = String(disp[i][0] || '').slice(0, 10).replace(/_/g, '-');
       if (d !== date) continue;
       values[i][0] = String(disp[i][0] || '');
       rows.push(values[i]);
@@ -3816,7 +3841,7 @@ function _readUserTeamLogRange_(ss, team, user, fromDate, toDate) {
     // corner cases by reading the string exactly as the sheet renders it.
     var disp = rng.getDisplayValues();
     for (var i = block.length - 1; i >= 0; i--) {
-      var rowDate = String(disp[i][0] || '').slice(0, 10);
+      var rowDate = String(disp[i][0] || '').slice(0, 10).replace(/_/g, '-');
       if (rowDate < fromDate) { passed = true; break; }
       if (rowDate > toDate) continue;
       var rowUser = String(block[i][1] || '').toLowerCase().trim();
@@ -3902,7 +3927,7 @@ function _readUserArchiveRange_(team, user, fromDate, toDate) {
       var values = rng.getValues();
       var disp   = rng.getDisplayValues();
       for (var i = 0; i < values.length; i++) {
-        var d = String(disp[i][0] || '').slice(0, 10);
+        var d = String(disp[i][0] || '').slice(0, 10).replace(/_/g, '-');
         if (d < fromDate || d > toDate) continue;
         var u = String(values[i][1] || '').toLowerCase().trim();
         if (u !== userLc) continue;
@@ -3955,7 +3980,7 @@ function _readUserSessionsRange_(ss, user, fromDate, toDate) {
       for (var i = 0; i < vals.length; i++) {
         var n = String(vals[i][0] || '').toLowerCase().trim();
         if (n !== userLc) continue;
-        var d = String(disp[i][1] || '').slice(0, 10);
+        var d = String(disp[i][1] || '').slice(0, 10).replace(/_/g, '-');
         if (d >= fromDate && d <= toDate) {
           rows.push(vals[i]);
           startEnd.push([ String(disp[i][2] || ''), String(disp[i][3] || '') ]);
@@ -4018,7 +4043,7 @@ function _readUserAttendanceRange_(ss, user, fromDate, toDate) {
       for (var i = 0; i < vals.length; i++) {
         var n = String(vals[i][1] || '').toLowerCase().trim();
         if (n !== userLc) continue;
-        var d = String(disp[i][0] || '').slice(0, 10);
+        var d = String(disp[i][0] || '').slice(0, 10).replace(/_/g, '-');
         if (d >= fromDate && d <= toDate) {
           // Coerce col A (Date) and col E (MarkedAt) to display strings so
           // time-only Date cells don't serialise as 1899-12-30T... on the
@@ -4074,8 +4099,8 @@ function myStats_(ss, p) {
   var user = v.user;
 
   var today = todayPST_();
-  var fromDate = String(p.fromDate || today).slice(0, 10);
-  var toDate   = String(p.toDate   || today).slice(0, 10);
+  var fromDate = String(p.fromDate || today).slice(0, 10).replace(/_/g, '-');
+  var toDate   = String(p.toDate   || today).slice(0, 10).replace(/_/g, '-');
   if (fromDate > toDate) { var tmp = fromDate; fromDate = toDate; toDate = tmp; }
 
   // Sessions — source of truth for CLOSED shift totals & utilization
