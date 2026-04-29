@@ -240,7 +240,7 @@
     <div class="card">
       <div class="k">Utilization</div>
       <div class="v" id="statUtil">—</div>
-      <div class="sub" id="statUtilSub">production ÷ wall-clock shift</div>
+      <div class="sub" id="statUtilSub">task hours ÷ 8 hrs</div>
     </div>
     <div class="card">
       <div class="k">Throughput</div>
@@ -620,18 +620,15 @@
 
     // Utilization — server-computed (production-only ÷ wall-clock shift),
     // matches Mac app + TL dashboard formula exactly.
+    // PR #16: util = task durations ÷ 8 hrs × 100. taskDurMin returned
+    // by myStats_ = sum across team logs (closed shifts) + Live row
+    // (today, mid-shift).
     var util = Number(totals.utilization || 0);
-    var denomMin = Number(totals.denomMin || 0);
+    var taskDurMin = Number(totals.taskDurMin || 0);
     var utilEl = document.getElementById('statUtil');
     var utilSub = document.getElementById('statUtilSub');
-    if (denomMin > 0) {
-      utilEl.textContent = util + '%';
-      utilSub.textContent = 'Production ' + minToHM(totals.productionMin || 0) +
-                            ' ÷ ' + minToHM(denomMin) + ' shift';
-    } else {
-      utilEl.textContent = '—';
-      utilSub.textContent = 'production ÷ wall-clock shift';
-    }
+    utilEl.textContent = util + '%';
+    utilSub.textContent = 'Task hrs ' + minToHM(taskDurMin) + ' ÷ 8h 00m';
   }
 
   // Throughput = Tasks ÷ Production hours. Same formula as TL leaderboard.

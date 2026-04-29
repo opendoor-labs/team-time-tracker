@@ -1736,7 +1736,7 @@
           <div class="perf-card">
             <div class="perf-head">
               <span>⚡ My Performance · Today</span>
-              <span class="perf-hint">Utilization = Production ÷ Total Logged</span>
+              <span class="perf-hint">Utilization = Task hours ÷ 8 hrs</span>
             </div>
             <div class="perf-grid">
               <div class="perf-tile">
@@ -2273,7 +2273,7 @@ let state = {
   startedAt: null,
   taskStartedAt: null,
   breakStartedAt: null,
-  totals: { production: 0, break: 0, auto_break: 0, meeting: 0, training: 0, dinner: 0 },
+  totals: { production: 0, break: 0, auto_break: 0, meeting: 0, training: 0, dinner: 0, taskDuration: 0 },
   tasksDone: 0,
   // Idle tracking — separate metric
   idleStreakSec: 0,         // current streak of inactivity
@@ -2639,7 +2639,7 @@ function resetToStart() {
     breakWasManual: false,
     task: 'Photo Review',
     startedAt: null, taskStartedAt: null, breakStartedAt: null,
-    totals: { production: 0, break: 0, auto_break: 0, meeting: 0, training: 0, dinner: 0 },
+    totals: { production: 0, break: 0, auto_break: 0, meeting: 0, training: 0, dinner: 0, taskDuration: 0 },
     tasksDone: 0,
     idleStreakSec: 0,
     idleTotalMs: 0,
@@ -3084,6 +3084,9 @@ async function logTask() {
     _isNew: true,
   });
   state.tasksDone += 1;
+  // PR #16: accumulate sum of logged task durations — used as the
+  // numerator in the new utilization formula (taskDuration / 8 hrs).
+  state.totals.taskDuration = (state.totals.taskDuration || 0) + (elapsed || 0);
   // Production: ship to Apps Script (attachments[] only present when files picked)
   nativeFire('logTask', {
     team: state.team,
@@ -3276,6 +3279,9 @@ function sendHeartbeat() {
     // its own field (server stores in Live col M / Sessions col L).
     breakMin:      Math.round((state.totals.break || 0) / 60000),
     autoBreakMin:  Math.round((state.totals.auto_break || 0) / 60000),
+    // PR #16: taskDurMin = sum of logged task durations. Used as
+    // numerator in util formula (taskDur ÷ 8 hrs × 100).
+    taskDurMin:    Math.round((state.totals.taskDuration || 0) / 60000),
     idleMin:       Math.round((state.idleTotalMs || 0) / 60000),
     taskStartedAt: state.taskStartedAt || 0,
     shiftStartAt:  state.shiftStartedAt || '',
@@ -3985,26 +3991,33 @@ function fmtHM(ms) {
 //       because they're "logged-in but not producing."
 // Fallback (shiftStartMs missing on legacy snapshots): sum every bucket
 // + idle so the denominator still represents full logged time.
-function computeUtilization(endMs) {
+// PR #16 — Utilization = sum of logged task durations ÷ 8hrs × 100.
+// Numerator uses state.totals.taskDurationMs which accumulates each
+// time logTask runs (see logTask wire in startClock). Denominator is
+// fixed at 480 min so a TL can immediately see "what % of an 8-hr
+// standard day did this user actually log work for?".
+//
+// Allow >100% (overtime visible — a user logging 10 hrs of tasks shows
+// 125%). Caller can cap if rendering wants.
+var UTIL_DENOM_MS = 8 * 60 * 60 * 1000;  // 8 hrs in ms
+function computeUtilization(/* endMs unused now — formula no longer
+                                depends on wall-clock shift duration */) {
   const t = state.totals || {};
-  const productionMs = t.production || 0;
-  let totalLoggedMs = 0;
-  const end = endMs || state.shiftEndTime || Date.now();
-  if (state.shiftStartMs && end > state.shiftStartMs) {
-    // Primary path — 99%+ of calls land here
-    totalLoggedMs = end - state.shiftStartMs;
-  } else {
-    // Legacy snapshot fallback: sum every tracked bucket, incl. idle
-    totalLoggedMs = (t.production || 0) + (t.break || 0) + (t.auto_break || 0) +
-                    (t.meeting || 0)    + (t.dinner || 0) + (t.training || 0) +
-                    (state.idleTotalMs || 0);
-  }
-  // Clamp to [0, 100] — wall-clock can briefly lag bucket sums during
-  // a running timer tick, producing >100% for a split second otherwise.
-  const raw = totalLoggedMs > 0 ? (productionMs / totalLoggedMs) * 100 : 0;
-  const pct = Math.max(0, Math.min(100, Math.round(raw)));
-  // Return legacy field names for existing callers; add new aliases.
-  return { productiveMs: productionMs, productionMs, totalMs: totalLoggedMs, totalLoggedMs, pct };
+  const productionMs   = t.production || 0;     // legacy field, still returned
+  const taskDurationMs = t.taskDuration || 0;
+  const raw = (taskDurationMs / UTIL_DENOM_MS) * 100;
+  const pct = Math.max(0, Math.round(raw));     // no upper cap — show overtime
+  return {
+    // Legacy aliases callers still read
+    productiveMs: productionMs,
+    productionMs,
+    // New canonical fields
+    taskDurationMs,
+    denomMs: UTIL_DENOM_MS,
+    totalMs: UTIL_DENOM_MS,
+    totalLoggedMs: UTIL_DENOM_MS,
+    pct
+  };
 }
 
 function confirmEndShift() {
@@ -4054,6 +4067,7 @@ async function confirmEndShiftFinal() {
     meetingMin:    toMin(t.meeting),
     trainingMin:   toMin(t.training),
     idleMin:       toMin(state.idleTotalMs),
+    taskDurMin:    toMin(t.taskDuration),           // PR #16 — for util numerator
     endedAt:       new Date().toISOString()
   });
 
