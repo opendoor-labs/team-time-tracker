@@ -1823,6 +1823,193 @@ function migrateLegacyArchiveNames() {
   return report;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// PR #25 — One-shot Utilities consolidation migration
+// ═══════════════════════════════════════════════════════════════════════
+// PR #17 changed the code to use a single 'Utilities' team. This function
+// migrates the SHEET + DRIVE state to match:
+//
+//   1. Creates the `Utilities_Log` tab if missing (with canonical headers)
+//   2. Migrates rows from any old `Utilities*_Log` tab into Utilities_Log,
+//      stamping Task Type with 'Turn On' / 'NST' / 'Blocked Cases' based
+//      on the old tab name
+//   3. Renames old tabs to `<oldname>_OLD_<date>` so the app stops writing
+//      to them but data is preserved (idempotent — re-runs skip rows
+//      already moved because the rename hides them from this regex)
+//   4. Trashes the 3 empty Utilities* Drive folders (only if empty —
+//      safety check)
+//   5. Ensures a fresh `Utilities/` Drive folder exists for new archives
+//
+// Run ONCE from the Apps Script editor → Functions dropdown →
+// consolidateUtilities → Run. Inspect the return value in the Execution
+// log to see what moved. Idempotent.
+
+function consolidateUtilities() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var report = {
+    started: nowIST_(),
+    sheet:   { foundOldTabs: [], migratedRows: 0, renamedTabs: [], created: false },
+    drive:   { trashedFolders: [], skippedFolders: [] },
+    errors:  []
+  };
+
+  // Canonical Utilities_Log header (must match logTask_ Utilities case)
+  var NEW_HEADER = ['Time','User','HomeTeam','Team','Activity',
+                    'Ticket Link/Property Address','Productivity Type',
+                    'Task Type','Turn On Filter','Case / Ticket #',
+                    'Comment','Duration'];
+
+  // 1. Create Utilities_Log if missing
+  var newSh = ss.getSheetByName('Utilities_Log');
+  if (!newSh) {
+    newSh = ss.insertSheet('Utilities_Log');
+    newSh.getRange(1, 1, 1, NEW_HEADER.length).setValues([NEW_HEADER]);
+    newSh.setFrozenRows(1);
+    try { newSh.getRange('A:A').setNumberFormat('@'); } catch (e) {}
+    report.sheet.created = true;
+  }
+
+  // 2. Find all old Utilities-prefix log tabs (not the new one, not already
+  //    archived). Tolerant of underscores, spaces, and casing.
+  var allSheets = ss.getSheets();
+  var oldTabs = [];
+  allSheets.forEach(function (sh) {
+    var name = sh.getName();
+    if (name === 'Utilities_Log') return;             // skip new tab
+    if (/_OLD_\d{4}-\d{2}-\d{2}$/.test(name)) return; // skip already-archived
+    if (/^utilities[\s_]/i.test(name) && /_log$/i.test(name)) {
+      oldTabs.push(sh);
+    }
+  });
+  report.sheet.foundOldTabs = oldTabs.map(function (s) { return s.getName(); });
+
+  // 3. Migrate rows from each old tab → Utilities_Log
+  oldTabs.forEach(function (oldSh) {
+    var oldName = oldSh.getName();
+    try {
+      var lastRow = oldSh.getLastRow();
+      var lastCol = oldSh.getLastColumn();
+      if (lastRow >= 2 && lastCol >= 1) {
+        var headerVals = oldSh.getRange(1, 1, 1, lastCol).getValues()[0];
+        var rng    = oldSh.getRange(2, 1, lastRow - 1, lastCol);
+        var values = rng.getValues();
+        var disp   = rng.getDisplayValues();
+
+        // Detect sub-task type from tab name
+        var inferredTaskType = '';
+        if (/turn[\s_]on/i.test(oldName))         inferredTaskType = 'Turn On';
+        else if (/turn[\s_]off/i.test(oldName))   inferredTaskType = 'Turn Off';
+        else if (/verification/i.test(oldName))   inferredTaskType = 'Verification';
+        else if (/nst/i.test(oldName))            inferredTaskType = 'NST';
+        else if (/blocked/i.test(oldName))        inferredTaskType = 'Blocked Cases';
+
+        // Build header → col-index map (case-insensitive, trim-tolerant)
+        function colIdx() {
+          for (var a = 0; a < arguments.length; a++) {
+            var target = String(arguments[a] || '').toLowerCase().trim();
+            for (var h = 0; h < headerVals.length; h++) {
+              var hh = String(headerVals[h] || '').toLowerCase().trim();
+              if (hh === target) return h;
+            }
+          }
+          return -1;
+        }
+        var iTime    = colIdx('Time','Timestamp');
+        var iUser    = colIdx('User','Name');
+        var iHome    = colIdx('HomeTeam','Home Team');
+        var iAct     = colIdx('Activity');
+        var iAddr    = colIdx('Ticket Link/Property Address','Ticket Link / Property Address','Ticket','Property Address');
+        var iProd    = colIdx('Productivity Type');
+        var iFilter  = colIdx('Turn On Filter','Filter');
+        var iCase    = colIdx('Case / Ticket #','Case/Ticket #','Case Number','Ticket #');
+        var iComment = colIdx('Comment','Comments','Notes');
+        var iDur     = colIdx('Duration');
+
+        var migrated = [];
+        for (var r = 0; r < values.length; r++) {
+          var row = values[r];
+          var rdisp = disp[r];
+          // Skip blank rows
+          if (!String(row[iUser >= 0 ? iUser : 1] || '').trim()) continue;
+          var newRow = [
+            iTime    >= 0 ? String(rdisp[iTime] || row[iTime] || '') : '',
+            iUser    >= 0 ? row[iUser]    : '',
+            iHome    >= 0 ? (row[iHome] || 'Utilities') : 'Utilities',
+            'Utilities',                              // canonical team
+            iAct     >= 0 ? (row[iAct]   || 'production') : 'production',
+            iAddr    >= 0 ? row[iAddr]    : '',
+            iProd    >= 0 ? row[iProd]    : '',
+            inferredTaskType,                          // Task Type
+            iFilter  >= 0 ? row[iFilter]  : '',
+            iCase    >= 0 ? row[iCase]    : '',
+            iComment >= 0 ? row[iComment] : '',
+            iDur     >= 0 ? row[iDur]     : ''
+          ];
+          migrated.push(newRow);
+        }
+        if (migrated.length > 0) {
+          var startRow = newSh.getLastRow() + 1;
+          newSh.getRange(startRow, 1, migrated.length, NEW_HEADER.length).setValues(migrated);
+          report.sheet.migratedRows += migrated.length;
+        }
+      }
+
+      // Rename old tab so app stops writing to it AND so re-runs skip it
+      var archivedName = oldName + '_OLD_' + todayPST_();
+      try {
+        oldSh.setName(archivedName);
+        report.sheet.renamedTabs.push(oldName + ' → ' + archivedName);
+      } catch (renameErr) {
+        // Name conflict (re-run with same date) — just log
+        report.errors.push('rename ' + oldName + ': ' + renameErr);
+      }
+    } catch (err) {
+      report.errors.push(oldName + ' migrate: ' + String(err));
+    }
+  });
+
+  // 4. Drive cleanup — trash the 3 old empty Utilities folders
+  try {
+    var rootId = _getArchiveRootId_();
+    if (rootId) {
+      var root = DriveApp.getFolderById(rootId);
+      // Match common variants
+      var oldFolderNames = [
+        'Utilities Turn On', 'Utilities_Turn_On',
+        'Utilities NST',     'Utilities_NST',
+        'Utilities Blocked Cases', 'Utilities Blocked', 'Utilities_Blocked_Cases',
+        'Utilities Verification', 'Utilities Turn Off'
+      ];
+      oldFolderNames.forEach(function (name) {
+        var it = root.getFoldersByName(name);
+        while (it.hasNext()) {
+          var f = it.next();
+          // Safety: only trash if the folder has no files (subfolders ok to ignore)
+          if (!f.getFiles().hasNext()) {
+            try {
+              f.setTrashed(true);
+              report.drive.trashedFolders.push(name);
+            } catch (trashErr) {
+              report.errors.push('trash ' + name + ': ' + trashErr);
+            }
+          } else {
+            report.drive.skippedFolders.push(name + ' (not empty)');
+          }
+        }
+      });
+      // Ensure new Utilities folder exists
+      _findOrCreateChild_(root, 'Utilities');
+      report.drive.utilitiesFolder = 'ready';
+    }
+  } catch (err) {
+    report.errors.push('drive cleanup: ' + String(err));
+  }
+
+  report.finished = nowIST_();
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
 // Sync Drive permissions from Whitelist — run daily or when TL roster changes.
 //
 // Permission model (strict):
