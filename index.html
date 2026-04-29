@@ -1594,9 +1594,7 @@
               <option value="HOC_WO">HOC WO</option>
               <option value="LWO">LWO</option>
               <option value="TP_Sourcing">TP Sourcing</option>
-              <option value="Utilities_TurnOn">Utilities — Turn On</option>
-              <option value="Utilities_NST">Utilities — NST</option>
-              <option value="Utilities_Blocked">Utilities — Blocked Cases</option>
+              <option value="Utilities">Utilities</option>
               <option value="TC">TC</option>
               <option value="TS">TS</option>
               <option value="VA">VA</option>
@@ -2441,26 +2439,19 @@ const TEAMS = {
       'Sending rating emails','Non-compliance calling','Non-compliance Email'
     ]},
   ]},
-  Utilities_TurnOn: { fields: [
-    { type: 'text', label: 'Ticket Link/Property Address', required: true },
+  // PR #17 — consolidated Utilities team. All 5 task types in one form,
+  // matches server's single Utilities_Log tab. Turn On Filter (Call/Email/
+  // Online Form) is a separate dropdown that's meaningful when Task Type=
+  // Turn On. V2 will add parallel timers per channel.
+  Utilities: { fields: [
+    { type: 'select', label: 'Task Type', required: true, options: [
+      'Turn On','Turn Off','Verification','NST','Blocked Cases'
+    ]},
+    { type: 'text',   label: 'Ticket Link/Property Address', required: true },
     { type: 'select', label: 'Productivity Type', required: true, options: ['New','Follow-Up','Resolved'] },
-    { type: 'select', label: 'Task Type', required: true, options: ['Turn On','Verification'] },
-    { type: 'text', label: 'Case /Ticket number', required: false },
-    { type: 'text', label: 'Comment', required: false, full: true },
-  ]},
-  Utilities_NST: { fields: [
-    { type: 'text', label: 'Ticket Link/Property Address', required: true },
-    { type: 'select', label: 'Productivity Type', required: true, options: ['New','Follow-Up','Resolved'] },
-    { type: 'select', label: 'Task Type', required: true, options: ['NST','Verification'] },
-    { type: 'text', label: 'Case /Ticket number', required: false },
-    { type: 'text', label: 'Comment', required: false, full: true },
-  ]},
-  Utilities_Blocked: { fields: [
-    { type: 'text', label: 'Ticket Link/Property Address', required: true },
-    { type: 'select', label: 'Productivity Type', required: true, options: ['New','Follow-Up','Resolved'] },
-    { type: 'select', label: 'Task Type', required: true, options: ['Blocked Cases'] },
-    { type: 'text', label: 'Case /Ticket number', required: false },
-    { type: 'text', label: 'Comment', required: false, full: true },
+    { type: 'select', label: 'Turn On Filter', required: false, options: ['Call','Email','Online Form'] },
+    { type: 'text',   label: 'Case /Ticket number', required: false },
+    { type: 'text',   label: 'Comment', required: false, full: true },
   ]},
   TC: { fields: [
     { type: 'text', label: 'Ticket Link/Property Address', required: true },
@@ -2529,8 +2520,8 @@ const TEAMS = {
 const TASK_FIELD_LABEL = {
   Listings: 'Task', SD: 'Task', BRN: 'Productivity Type', HQI: 'Sub Task / Action Taken',
   HOA: 'Project/Task', HOC_WO: 'Project/Task', LWO: 'Sub Type',
-  TP_Sourcing: 'Productivity Type', Utilities_TurnOn: 'Task Type', Utilities_NST: 'Task Type',
-  Utilities_Blocked: 'Task Type', TC: 'Task type', TS: 'Task type', VA: 'Task Type',
+  TP_Sourcing: 'Productivity Type', Utilities: 'Task Type',
+  TC: 'Task type', TS: 'Task type', VA: 'Task Type',
   HOC_Permits: 'Productivity Type', Maintenance: 'Process', Trust_Safety: 'Process',
 };
 
