@@ -909,16 +909,31 @@
     // base.logs[team] = { header, rows }  ← accumulate rows from each day
     if (!day || !day.logs) return base;
     if (!base) {
-      // First day becomes the baseline — clone to avoid mutating the source
+      // First day becomes the baseline — clone to avoid mutating the source.
+      // PR #30 — also clone attendance/sessions/whitelist/config so the
+      // multi-day path renders the same tabs as single-day mode. Previously
+      // these fields were dropped → Attendance, Sessions, Whitelist, Config
+      // tabs silently disappeared the moment user picked a Custom range.
       return {
         ok: true,
         teams: [...(day.teams || [])],
         role: day.role,
+        isAdmin: day.isAdmin,
+        isQC: day.isQC,
         email: day.email,
         logs: Object.fromEntries(Object.entries(day.logs).map(([t, v]) => [
           t,
           { header: [...(v.header || [])], rows: [...(v.rows || [])] }
         ])),
+        attendance: day.attendance
+          ? { header: [...(day.attendance.header || [])], rows: [...(day.attendance.rows || [])] }
+          : { header: [], rows: [] },
+        sessions: day.sessions
+          ? { header: [...(day.sessions.header || [])], rows: [...(day.sessions.rows || [])] }
+          : { header: [], rows: [] },
+        // Whitelist + config don't change day-to-day — keep the first day's copy
+        whitelist: day.whitelist,
+        config:    day.config,
       };
     }
     // Merge: add any new teams, append rows for existing teams
@@ -932,6 +947,21 @@
         base.logs[team].rows = base.logs[team].rows.concat(src.rows || []);
       }
     });
+    // PR #30 — also append attendance + sessions rows
+    if (day.attendance && day.attendance.rows && day.attendance.rows.length) {
+      if (!base.attendance) base.attendance = { header: [...(day.attendance.header || [])], rows: [] };
+      base.attendance.rows = base.attendance.rows.concat(day.attendance.rows);
+      if (!base.attendance.header.length && day.attendance.header) {
+        base.attendance.header = [...day.attendance.header];
+      }
+    }
+    if (day.sessions && day.sessions.rows && day.sessions.rows.length) {
+      if (!base.sessions) base.sessions = { header: [...(day.sessions.header || [])], rows: [] };
+      base.sessions.rows = base.sessions.rows.concat(day.sessions.rows);
+      if (!base.sessions.header.length && day.sessions.header) {
+        base.sessions.header = [...day.sessions.header];
+      }
+    }
     return base;
   }
 

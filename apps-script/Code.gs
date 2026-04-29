@@ -3368,7 +3368,11 @@ function readArchiveLog_(team, date) {
       values[i][0] = String(disp[i][0] || '');
       rows.push(values[i]);
     }
-    var result = { ok: true, header: header, rows: rows, source: 'archive', file: baseName };
+    // PR #30: was `file: baseName` — `baseName` is undefined in this scope,
+    // throws ReferenceError, caught by outer try/catch, returns {ok:false}.
+    // That single typo silently broke EVERY archive read for team logs,
+    // making the TL dashboard show 0 rows even when files have data.
+    var result = { ok: true, header: header, rows: rows, source: 'archive', file: file.getName() };
     // Cache 10 min — plenty for multiple TL hits on same date
     cache.put(key, JSON.stringify(result), 600);
     return result;
