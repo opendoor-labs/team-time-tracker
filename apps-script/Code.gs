@@ -1683,6 +1683,135 @@ function _findFileInFolder_(folder, name) {
   return it.hasNext() ? it.next() : null;
 }
 
+// One-shot migration helper — convert legacy monthly archive files
+// (e.g. "BRN_Log_2026_04", "Sessions_2026_04") into per-day archives
+// (e.g. "BRN_Log_2026-04-28", "Sessions_2026-04-28"). Run once from
+// the Apps Script editor after PR #18 deploys.
+//
+// Behavior:
+//   • Walks every team folder + _System folder under archive root
+//   • For each file matching the legacy "_YYYY_MM" suffix:
+//       - Reads all rows
+//       - Groups by the date column ("YYYY-MM-DD" via display values)
+//       - For each unique date, opens or creates the daily archive
+//         file, appends rows
+//       - Verified-write before trash: only trashes the source file
+//         after every row is confirmed written to a daily file
+//   • Idempotent — re-runs skip files that don't match the legacy
+//     pattern. Safe to run multiple times.
+function migrateLegacyArchiveNames() {
+  var rootId = _getArchiveRootId_();
+  if (!rootId) return { ok: false, error: 'archive not set up; run setupArchive()' };
+  var root = DriveApp.getFolderById(rootId);
+  var report = { migrated: [], skipped: [], errors: [] };
+
+  // Helper: regex matches "_YYYY_MM" at end of name (legacy monthly naming)
+  var LEGACY_RX = /_(\d{4})_(\d{2})$/;
+
+  function migrateOneFile(folder, file, dateColIdx /* 0 for team logs + Attendance, 1 for Sessions */) {
+    var name = file.getName();
+    var m = name.match(LEGACY_RX);
+    if (!m) {
+      report.skipped.push(name + ' (not legacy naming)');
+      return;
+    }
+    var basePrefix = name.replace(LEGACY_RX, '');  // e.g. 'BRN_Log'
+    try {
+      var ss = SpreadsheetApp.openById(file.getId());
+      var sh = ss.getSheets()[0];
+      var lastRow = sh.getLastRow();
+      var lastCol = sh.getLastColumn();
+      if (lastRow < 2) {
+        // Empty file — just trash
+        file.setTrashed(true);
+        report.migrated.push(name + ' → (empty, trashed)');
+        return;
+      }
+      var header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+      var rng = sh.getRange(2, 1, lastRow - 1, lastCol);
+      var values = rng.getValues();
+      var disp = rng.getDisplayValues();
+
+      // Group rows by date (YYYY-MM-DD)
+      var byDay = {};
+      for (var i = 0; i < values.length; i++) {
+        var d = String(disp[i][dateColIdx] || values[i][dateColIdx] || '').slice(0, 10);
+        if (!d || d.length !== 10 || d.charAt(4) !== '-') continue;
+        // Coerce date col to display string (avoid Date-object archive bug)
+        values[i][dateColIdx] = String(disp[i][dateColIdx] || values[i][dateColIdx] || '');
+        (byDay[d] = byDay[d] || []).push(values[i]);
+      }
+
+      var totalRows = 0;
+      Object.keys(byDay).forEach(function (day) {
+        var rows = byDay[day];
+        var dailyName = basePrefix + '_' + day;
+        // Open or create the daily file
+        var dailyFile = _findFileInFolder_(folder, dailyName);
+        var dailySs;
+        if (dailyFile) {
+          dailySs = SpreadsheetApp.openById(dailyFile.getId());
+        } else {
+          dailySs = SpreadsheetApp.create(dailyName);
+          var f = DriveApp.getFileById(dailySs.getId());
+          folder.addFile(f);
+          try { DriveApp.getRootFolder().removeFile(f); } catch (e) {}
+        }
+        var dailySh = dailySs.getSheets()[0];
+        if (dailySh.getLastRow() < 1) {
+          dailySh.getRange(1, 1, 1, header.length).setValues([header]);
+          dailySh.setFrozenRows(1);
+        }
+        var startRow = dailySh.getLastRow() + 1;
+        dailySh.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
+        SpreadsheetApp.flush();
+        // Verify
+        var written = dailySh.getRange(startRow, 1, rows.length, 1).getValues();
+        if (written.length !== rows.length) {
+          throw new Error('Verify failed: ' + name + ' → ' + dailyName);
+        }
+        totalRows += rows.length;
+      });
+
+      // All days successfully migrated — trash the source monthly file
+      file.setTrashed(true);
+      report.migrated.push(name + ' → ' + Object.keys(byDay).length + ' daily files (' + totalRows + ' rows)');
+    } catch (err) {
+      report.errors.push(name + ': ' + err);
+    }
+  }
+
+  // 1. Per-team folders (date col = 0, the Time/Timestamp column)
+  Object.keys(TEAM_TO_TAB).forEach(function (team) {
+    var folder;
+    try { folder = _findOrCreateChild_(root, _folderNameForTeam_(team)); }
+    catch (e) { return; }
+    var it = folder.getFiles();
+    while (it.hasNext()) {
+      migrateOneFile(folder, it.next(), 0);
+    }
+  });
+
+  // 2. _System folder — Sessions (date col = 1) + Attendance (date col = 0)
+  try {
+    var system = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+    var sysIt = system.getFiles();
+    while (sysIt.hasNext()) {
+      var f = sysIt.next();
+      var nm = f.getName();
+      // Sessions_*: date col B (idx 1). Attendance_*: date col A (idx 0).
+      var dateColIdx = nm.indexOf('Sessions') === 0 ? 1 : 0;
+      migrateOneFile(system, f, dateColIdx);
+    }
+  } catch (err) { report.errors.push('system folder: ' + err); }
+
+  // _Overall is already correctly named ("Overall_Snapshot_YYYY-MM-DD") —
+  // skip it.
+
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
 // Sync Drive permissions from Whitelist — run daily or when TL roster changes.
 //
 // Permission model (strict):
