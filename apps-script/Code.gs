@@ -159,6 +159,8 @@ function doGet(e) {
       case 'readLog':         return json_(readLog_(ss, p));
       case 'tlDashboard':     return json_(tlDashboard_(ss, p));
       case 'liveActivity':    return json_(liveActivity_(ss, p));
+      // PR #33 — DailyAggregates fast-path range query
+      case 'aggregatesRange': return json_(aggregatesRange_(ss, p));
       case 'whoami':          return json_(whoami_(ss, p.email));
       // Email-OTP auth (browser flow — Whitelist sheet)
       case 'requestOtp':      return json_(requestOtp_(ss, p.email));
@@ -2602,6 +2604,18 @@ function dailyArchive() {
     log.errors.push('live sweep: ' + err);
   }
 
+  // PR #33 — compute daily aggregates for the date that was just archived.
+  // Reads from the archive files we just wrote → groups by (Team, User) →
+  // writes one row per group to DailyAggregates. Dashboard queries hit
+  // that single sheet instead of opening 30+ Drive files.
+  try {
+    var aggResult = computeDailyAggregates_(cutoff, ss);
+    log.aggregates = aggResult;
+  } catch (err) {
+    log.errors.push('aggregates: ' + err);
+    log.aggregates = { ok: false, error: String(err) };
+  }
+
   log.finished = istNow_();
   _writeArchiveLog_(ss, log);
   if (!log.ok) _alertArchiveFailure_(log);
@@ -3114,6 +3128,353 @@ function readArchiveAttendance_(date) {
     Logger.log('readArchiveAttendance_ failed: ' + err);
     return { header: [], rows: [] };
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PR #33 — DailyAggregates: pre-computed per-day rollups
+// ═══════════════════════════════════════════════════════════════════════
+// Single-sheet rollup of every (Date, Team, User) tuple. Eliminates the
+// 30-90 Drive file opens that range-query dashboards used to do — they
+// now read one sheet with a date+team filter, returning rows in <1 sec.
+//
+// Lifecycle:
+//   1. dailyArchive (8 AM IST) → computeDailyAggregates_(yesterdayPST)
+//   2. backfillDailyAggregates() → one-shot for historical migration
+//   3. readDailyAggregates_() → fast-path read for dashboard
+//
+// Schema (18 columns):
+//   A=Date B=Team C=User D=HomeTeam E=Tasks F=TaskDurMin G=ProductionMin
+//   H=BreakMin I=AutoBreakMin J=DinnerMin K=MeetingMin L=TrainingMin
+//   M=IdleMin N=BreakExceededMin O=ShiftStart P=ShiftEnd Q=Util R=Source
+
+var DAILY_AGG_HEADER = ['Date', 'Team', 'User', 'HomeTeam', 'Tasks', 'TaskDurMin',
+  'ProductionMin', 'BreakMin', 'AutoBreakMin', 'DinnerMin', 'MeetingMin',
+  'TrainingMin', 'IdleMin', 'BreakExceededMin', 'ShiftStart', 'ShiftEnd',
+  'Util', 'Source'];
+
+function _ensureDailyAggregatesSheet_(ss) {
+  var sh = ss.getSheetByName('DailyAggregates');
+  if (sh) return sh;
+  sh = ss.insertSheet('DailyAggregates');
+  sh.getRange(1, 1, 1, DAILY_AGG_HEADER.length).setValues([DAILY_AGG_HEADER]);
+  sh.setFrozenRows(1);
+  // Lock string columns to plain text so Sheets doesn't auto-coerce
+  sh.getRange('A:A').setNumberFormat('@');  // Date
+  sh.getRange('O:O').setNumberFormat('@');  // ShiftStart
+  sh.getRange('P:P').setNumberFormat('@');  // ShiftEnd
+  return sh;
+}
+
+// Parse a fmtDur_ string ("5m 30s", "1h 23m 45s") back to seconds.
+function _parseDurStr_(s) {
+  s = String(s || '').trim();
+  if (!s) return 0;
+  var sec = 0;
+  var h = s.match(/(\d+)\s*h/);
+  var m = s.match(/(\d+)\s*m/);
+  var sm = s.match(/(\d+)\s*s/);
+  if (h) sec += Number(h[1]) * 3600;
+  if (m) sec += Number(m[1]) * 60;
+  if (sm) sec += Number(sm[1]);
+  return sec;
+}
+
+// Find duration in a team_Log row by scanning for any cell matching
+// fmtDur_ output. Each team has its own column ordering, so we find the
+// duration cell by content rather than fixed index.
+function _extractDurationSec_(row) {
+  for (var i = 0; i < row.length; i++) {
+    var s = String(row[i] || '').trim();
+    if (/^\d+h\s+\d+m\s+\d+s$/.test(s) || /^\d+m\s+\d+s$/.test(s) || /^\d+s$/.test(s)) {
+      return _parseDurStr_(s);
+    }
+  }
+  return 0;
+}
+
+// Find a user's team from Attendance for a given date.
+// Checks active sheet first, then archive.
+function _findUserTeamFromAttendance_(ss, user, date) {
+  var userLc = String(user || '').toLowerCase().trim();
+  if (!userLc || !date) return null;
+  var att = ss.getSheetByName('Attendance');
+  if (att) {
+    var lr = att.getLastRow();
+    if (lr >= 2) {
+      var rng = att.getRange(2, 1, lr - 1, 3);
+      var disp = rng.getDisplayValues();
+      var vals = rng.getValues();
+      for (var i = 0; i < vals.length; i++) {
+        var d = String(disp[i][0] || '').slice(0, 10).replace(/_/g, '-');
+        if (d !== date) continue;
+        var u = String(vals[i][1] || '').toLowerCase().trim();
+        if (u === userLc) return String(vals[i][2] || '').trim();
+      }
+    }
+  }
+  var attArch = readArchiveAttendance_(date);
+  if (attArch && attArch.rows) {
+    for (var j = 0; j < attArch.rows.length; j++) {
+      var u2 = String(attArch.rows[j][1] || '').toLowerCase().trim();
+      if (u2 === userLc) return String(attArch.rows[j][2] || '').trim();
+    }
+  }
+  return null;
+}
+
+// Compute aggregates for a single date and write/replace rows in
+// DailyAggregates. Reads from raw archives — pass past dates only.
+// Idempotent: re-runs delete existing rows for `date` before writing new.
+function computeDailyAggregates_(date, ss) {
+  ss = ss || SpreadsheetApp.openById(SHEET_ID);
+  var sh = _ensureDailyAggregatesSheet_(ss);
+
+  // ── 1. Walk every team's archive log → group rows by (team, user) ────
+  var byKey = {};   // 'team|userLc' → entry
+  function getEntry(team, user, homeTeam) {
+    var key = team + '|' + String(user).toLowerCase().trim();
+    if (!byKey[key]) {
+      byKey[key] = {
+        team: team, user: user, homeTeam: homeTeam || team,
+        tasks: 0, taskDurMin: 0,
+        productionMin: 0, breakMin: 0, autoBreakMin: 0,
+        dinnerMin: 0, meetingMin: 0, trainingMin: 0,
+        idleMin: 0, breakExceededMin: 0,
+        shiftStart: '', shiftEnd: '', source: ''
+      };
+    }
+    return byKey[key];
+  }
+
+  Object.keys(TEAM_TO_TAB).forEach(function (team) {
+    var arch = readArchiveLog_(team, date);
+    if (!arch || !arch.ok || !arch.rows || arch.rows.length === 0) return;
+    arch.rows.forEach(function (row) {
+      // Team-log schema: A=Time B=User C=HomeTeam D=Team E=Activity ... Duration
+      var user = String(row[1] || '').trim();
+      if (!user) return;
+      var homeTeam = String(row[2] || '').trim() || team;
+      var actualTeam = String(row[3] || '').trim() || team;
+      var act = String(row[4] || '').trim().toLowerCase();
+      // System tasks have 'TRUE' somewhere or 'System' in completion col
+      var isSystem = row.some(function (c) { return String(c) === 'TRUE'; });
+      var durSec = _extractDurationSec_(row);
+      var e = getEntry(actualTeam, user, homeTeam);
+      if (act === 'production' && !isSystem) e.tasks += 1;
+      e.taskDurMin += durSec / 60;
+    });
+  });
+
+  // ── 2. Sessions → enrich primary (homeTeam) row per user ─────────────
+  var sessArch = readArchiveSessions_(date);
+  (sessArch.rows || []).forEach(function (sr) {
+    var user = String(sr[0] || '').trim();
+    if (!user) return;
+    var userLc = user.toLowerCase();
+
+    // Session has no team column — derive from Attendance
+    var attTeam = _findUserTeamFromAttendance_(ss, user, date);
+    var primaryKey = attTeam ? (attTeam + '|' + userLc) : null;
+
+    // Fallback: pick first team this user appears in (for tasks)
+    if (!primaryKey || !byKey[primaryKey]) {
+      var matching = Object.keys(byKey).filter(function (k) {
+        return k.indexOf('|' + userLc) === k.length - userLc.length - 1;
+      });
+      if (matching.length > 0) primaryKey = matching[0];
+    }
+
+    // No team found anywhere → bucket under 'Unknown' so we don't lose data
+    if (!primaryKey || !byKey[primaryKey]) {
+      var teamForKey = attTeam || 'Unknown';
+      primaryKey = teamForKey + '|' + userLc;
+      getEntry(teamForKey, user, teamForKey);
+    }
+
+    var e = byKey[primaryKey];
+    e.productionMin    = Number(sr[4]) || 0;
+    e.breakMin         = Number(sr[5]) || 0;
+    e.dinnerMin        = Number(sr[6]) || 0;
+    e.meetingMin       = Number(sr[7]) || 0;
+    e.trainingMin      = Number(sr[8]) || 0;
+    e.idleMin          = Number(sr[9]) || 0;
+    e.breakExceededMin = Number(sr[10]) || 0;
+    e.autoBreakMin     = Number(sr[11]) || 0;
+    // sr[12] = TaskDurMin from Sessions — already counted from team logs
+    e.shiftStart       = String(sr[2] || '').trim();
+    e.shiftEnd         = String(sr[3] || '').trim();
+    e.source           = 'session';
+  });
+
+  // ── 3. Attendance → ensure users with attendance but no logs included ─
+  var attArch = readArchiveAttendance_(date);
+  (attArch.rows || []).forEach(function (ar) {
+    var user = String(ar[1] || '').trim();
+    var team = String(ar[2] || '').trim();
+    if (!user || !team) return;
+    var key = team + '|' + user.toLowerCase();
+    if (!byKey[key]) {
+      var e = getEntry(team, user, team);
+      e.shiftStart = String(ar[4] || '').trim();
+      e.source = 'logs-only';
+    } else if (!byKey[key].shiftStart) {
+      byKey[key].shiftStart = String(ar[4] || '').trim();
+    }
+  });
+
+  // ── 4. Set Source flag for entries without one ────────────────────────
+  Object.keys(byKey).forEach(function (k) {
+    if (!byKey[k].source) byKey[k].source = 'logs-only';
+  });
+
+  // ── 5. Build rows ────────────────────────────────────────────────────
+  var newRows = [];
+  Object.keys(byKey).forEach(function (k) {
+    var e = byKey[k];
+    var taskDur = Math.round(e.taskDurMin || 0);
+    var util = Math.round((taskDur / UTIL_DENOM_MIN) * 100);
+    if (util > 100) util = 100;
+    if (util < 0) util = 0;
+    newRows.push([
+      date,
+      e.team,
+      e.user,
+      e.homeTeam || e.team,
+      e.tasks || 0,
+      taskDur,
+      Math.round(e.productionMin || 0),
+      Math.round(e.breakMin || 0),
+      Math.round(e.autoBreakMin || 0),
+      Math.round(e.dinnerMin || 0),
+      Math.round(e.meetingMin || 0),
+      Math.round(e.trainingMin || 0),
+      Math.round(e.idleMin || 0),
+      Math.round(e.breakExceededMin || 0),
+      e.shiftStart || '',
+      e.shiftEnd || '',
+      util,
+      e.source
+    ]);
+  });
+
+  // ── 6. Idempotent write — delete existing rows for date, then append ─
+  var lastRow = sh.getLastRow();
+  if (lastRow >= 2) {
+    var existing = sh.getRange(2, 1, lastRow - 1, 1).getDisplayValues();
+    var rowsToDelete = [];
+    for (var i = 0; i < existing.length; i++) {
+      var d = String(existing[i][0] || '').slice(0, 10).replace(/_/g, '-');
+      if (d === date) rowsToDelete.push(i + 2);
+    }
+    rowsToDelete.sort(function (a, b) { return b - a; });
+    for (var j = 0; j < rowsToDelete.length; j++) {
+      sh.deleteRow(rowsToDelete[j]);
+    }
+  }
+  if (newRows.length > 0) {
+    var startRow = sh.getLastRow() + 1;
+    sh.getRange(startRow, 1, newRows.length, DAILY_AGG_HEADER.length).setValues(newRows);
+  }
+
+  return { ok: true, date: date, rowsWritten: newRows.length };
+}
+
+// One-shot backfill for historical migration. Edit the dates at the top
+// before running, then Functions dropdown → backfillDailyAggregates → ▶ Run.
+// Idempotent — re-runs replace existing rows for affected dates.
+function backfillDailyAggregates() {
+  var fromDate = '2026-04-01';   // ← edit before running
+  var toDate   = '2026-04-29';   // ← edit before running
+  return _backfillImpl_(fromDate, toDate);
+}
+
+function _backfillImpl_(fromDate, toDate) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+    return { ok: false, error: 'dates must be YYYY-MM-DD' };
+  }
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  _ensureDailyAggregatesSheet_(ss);
+  var report = { fromDate: fromDate, toDate: toDate, started: nowIST_(),
+                 days: [], totalRows: 0, errors: [] };
+  var days = _dateRange_(fromDate, toDate);
+  for (var i = 0; i < days.length; i++) {
+    try {
+      var r = computeDailyAggregates_(days[i], ss);
+      report.days.push({ date: days[i], rowsWritten: r.rowsWritten });
+      report.totalRows += r.rowsWritten;
+    } catch (err) {
+      report.errors.push(days[i] + ': ' + err);
+      report.days.push({ date: days[i], error: String(err) });
+    }
+  }
+  report.finished = nowIST_();
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
+// Read aggregates for a date range with optional team filter.
+// teamFilter null/undefined → super_admin path (no filter).
+function readDailyAggregates_(fromDate, toDate, teamFilter) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = ss.getSheetByName('DailyAggregates');
+  if (!sh) return { header: DAILY_AGG_HEADER.slice(), rows: [] };
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return { header: DAILY_AGG_HEADER.slice(), rows: [] };
+
+  var allowed = null;
+  if (teamFilter && teamFilter.length) {
+    allowed = {};
+    teamFilter.forEach(function (t) { allowed[t] = true; });
+  }
+
+  var rng = sh.getRange(2, 1, lastRow - 1, DAILY_AGG_HEADER.length);
+  var vals = rng.getValues();
+  var disp = rng.getDisplayValues();
+
+  var rows = [];
+  for (var i = 0; i < vals.length; i++) {
+    var d = String(disp[i][0] || '').slice(0, 10).replace(/_/g, '-');
+    if (d < fromDate || d > toDate) continue;
+    var team = String(vals[i][1] || '').trim();
+    if (allowed && !allowed[team]) continue;
+    vals[i][0] = d;  // normalize date col to display string
+    rows.push(vals[i]);
+  }
+  return { header: DAILY_AGG_HEADER.slice(), rows: rows };
+}
+
+// New GET endpoint — fast-path range query for dashboards.
+// Replaces 30+ Drive opens with 1 sheet read. Frontend opt-in via PR #34.
+function aggregatesRange_(ss, p) {
+  var who = _resolveCaller_(p);
+  if (!who.ok) return { ok: false, error: who.error === 'expired' ? 'session_expired' : 'forbidden' };
+  var wl = lookupWhitelist_(ss, who.email);
+  if (!wl.ok) return { ok: false, error: 'forbidden' };
+  // QC role doesn't get aggregates (existing tasks-only contract)
+  if (wl.isQC) return { ok: true, header: [], rows: [], note: 'qc role: no aggregates' };
+
+  var fromDate = String(p.fromDate || '').trim();
+  var toDate   = String(p.toDate   || fromDate).trim();
+  if (!fromDate || !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+    return { ok: false, error: 'fromDate required (YYYY-MM-DD)' };
+  }
+  // Cap range at 365 days to protect against runaway queries
+  var span = _dateRange_(fromDate, toDate).length;
+  if (span > 365) {
+    return { ok: false, error: 'range too large (>365 days)' };
+  }
+
+  var teamFilter = wl.isAdmin ? null : wl.teams;
+  var data = readDailyAggregates_(fromDate, toDate, teamFilter);
+  return {
+    ok: true,
+    fromDate: fromDate,
+    toDate: toDate,
+    teams: wl.isAdmin ? Object.keys(TEAM_TO_TAB) : wl.teams,
+    isAdmin: wl.isAdmin,
+    header: data.header,
+    rows: data.rows
+  };
 }
 
 // Range read across archived Sessions for a given user. Walks each month
