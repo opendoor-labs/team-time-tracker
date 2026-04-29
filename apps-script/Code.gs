@@ -1216,7 +1216,13 @@ function tlDashboard_(ss, p) {
     ok: true, email: wl.email, role: wl.role,
     isAdmin: wl.isAdmin, isQC: false,
     teams: teams, date: date,
-    logs: logs, attendance: attendance, sessions: sessions
+    logs: logs, attendance: attendance, sessions: sessions,
+    // PR #32 — cumulative team-scoped user list for the filter dropdown.
+    // Built from Attendance (active + last 60 days of archive), filtered
+    // to TL's allowed teams. Stays the same regardless of selected date
+    // range, so the dropdown doesn't go empty when picking days with no
+    // data. Cached 30 min server-side per team set.
+    availableUsers: _availableUsersForTeams_(ss, teams, wl.isAdmin)
   };
   // Admin-only extras
   if (wl.isAdmin) {
@@ -1224,6 +1230,104 @@ function tlDashboard_(ss, p) {
     result.config    = getConfig_(ss);
   }
   return result;
+}
+
+// PR #32 — Returns sorted unique user names that the caller can see.
+// Source: union of Attendance (active + recent archive) + Users tab,
+// filtered to the caller's allowed teams. Cached for 30 min.
+//
+// teamSet: array of canonical team keys (caller's wl.teams). null/undefined
+// or isAdmin=true → no team filter (super_admin sees everyone).
+function _availableUsersForTeams_(ss, teamSet, isAdmin) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var allowedKey = isAdmin ? '__ALL__' : (teamSet || []).slice().sort().join('|');
+    var cacheKey = 'availUsers:' + allowedKey;
+    var hit = cache.get(cacheKey);
+    if (hit) return JSON.parse(hit);
+
+    var allowed = null;
+    if (!isAdmin && teamSet && teamSet.length) {
+      allowed = {};
+      teamSet.forEach(function (t) { allowed[t] = true; });
+    }
+
+    var users = {};   // name (lowercased) → display name (preserves original casing)
+
+    // 1. Active Attendance tab — col B=Name, col C=Team
+    var att = ss.getSheetByName('Attendance');
+    if (att) {
+      var lr = att.getLastRow();
+      if (lr >= 2) {
+        var rng = att.getRange(2, 1, lr - 1, 3);
+        var vals = rng.getValues();
+        for (var i = 0; i < vals.length; i++) {
+          var nm   = String(vals[i][1] || '').trim();
+          var team = String(vals[i][2] || '').trim();
+          if (!nm) continue;
+          if (allowed && !allowed[team]) continue;
+          users[nm.toLowerCase()] = nm;
+        }
+      }
+    }
+
+    // 2. Last 60 days of archive Attendance files — same shape
+    try {
+      var rootId = _getArchiveRootId_();
+      if (rootId) {
+        var root = DriveApp.getFolderById(rootId);
+        var sysFolder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
+        var today = new Date();
+        var seenFileIds = {};
+        for (var d = 0; d < 60; d++) {
+          var dt = new Date(today.getTime() - d * 86400000);
+          var ymd = Utilities.formatDate(dt, 'America/Los_Angeles', 'yyyy-MM-dd');
+          var f = _findArchiveFileByDate_(sysFolder, 'Attendance', ymd);
+          if (!f || seenFileIds[f.getId()]) continue;
+          seenFileIds[f.getId()] = true;
+          try {
+            var arch = SpreadsheetApp.openById(f.getId()).getSheets()[0];
+            var alr = arch.getLastRow();
+            if (alr < 2) continue;
+            var avals = arch.getRange(2, 1, alr - 1, 3).getValues();
+            for (var j = 0; j < avals.length; j++) {
+              var an = String(avals[j][1] || '').trim();
+              var at = String(avals[j][2] || '').trim();
+              if (!an) continue;
+              if (allowed && !allowed[at]) continue;
+              users[an.toLowerCase()] = an;
+            }
+          } catch (e) { /* skip unreadable file */ }
+        }
+      }
+    } catch (e) { /* archive scan failed — keep active-tab results */ }
+
+    // 3. Users tab (OTP audit log) — has Email + Name but NO team. Only
+    //    safe to add when caller is super_admin (no team filter); otherwise
+    //    we'd leak names from other teams.
+    if (isAdmin) {
+      var uTab = ss.getSheetByName('Users');
+      if (uTab) {
+        var ulr = uTab.getLastRow();
+        if (ulr >= 2) {
+          var uvals = uTab.getRange(2, 1, ulr - 1, 2).getValues();  // A=Email, B=Name
+          for (var k = 0; k < uvals.length; k++) {
+            var un = String(uvals[k][1] || '').trim();
+            if (un) users[un.toLowerCase()] = un;
+          }
+        }
+      }
+    }
+
+    var list = Object.keys(users).map(function (k) { return users[k]; }).sort(function (a, b) {
+      return a.localeCompare(b);
+    });
+    cache.put(cacheKey, JSON.stringify(list), 1800);  // 30 min
+    return list;
+  } catch (err) {
+    Logger.log('_availableUsersForTeams_ failed: ' + err);
+    return [];
+  }
 }
 
 // ─── Privacy helpers ───────────────────────────────────────────────────
