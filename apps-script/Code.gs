@@ -2007,28 +2007,20 @@ function _getMonthlyArchiveFile_(team, dateKey) {
 function dailyArchive() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var cutoff = todayPST_();              // PR #19 — inclusive cutoff
-  var report = forceArchiveAllPast(cutoff);
   var log = {
-    date:       cutoff,
-    started:    report.started || istNow_(),
-    teams:      report.teams || {},
-    sessions:   report.sessions   || { ok: true, moved: 0 },
-    attendance: report.attendance || { ok: true, moved: 0 },
-    ok:         !(report.errors && report.errors.length),
-    errors:     report.errors || []
+    date:    cutoff,
+    started: istNow_(),
+    teams:   {},
+    ok:      true,
+    errors:  []
   };
-  // Surface per-team file names for the ArchiveLog tab. forceArchive
-  // returns months[]: ['2026-04-28(14)']; flatten into archiveFile.
-  Object.keys(log.teams).forEach(function (team) {
-    var t = log.teams[team];
-    if (t && t.months && !t.archiveFile) {
-      t.archiveFile = (t.months || []).join(',');
-    }
-  });
 
-  // Full-sheet daily snapshot → admin-only folder.
-  // This is a copy of the whole spreadsheet (every tab as-of this moment)
-  // so super_admins can always reconstruct any day even if team moves fail.
+  // ── STEP 1: Full-sheet snapshot FIRST (BEFORE clear) ──────────────
+  // PR #21 — the snapshot must be taken while the active sheet still
+  // has all the day's data. Previously we ran forceArchiveAllPast first
+  // (which clears the active sheet), THEN took the snapshot — result:
+  // a snapshot of an empty sheet. Now ordered correctly so the snapshot
+  // captures every tab as-of the moment archiving begins.
   try {
     var snap = _archiveFullSheet_(ss, cutoff);
     log.overall = snap;
@@ -2037,6 +2029,24 @@ function dailyArchive() {
     log.errors.push('overall: ' + err);
     log.overall = { ok: false, error: String(err) };
   }
+
+  // ── STEP 2: Per-team / Sessions / Attendance archive (clears active) ─
+  var report = forceArchiveAllPast(cutoff);
+  log.teams      = report.teams || {};
+  log.sessions   = report.sessions   || { ok: true, moved: 0 };
+  log.attendance = report.attendance || { ok: true, moved: 0 };
+  if (report.errors && report.errors.length) {
+    log.ok = false;
+    log.errors = log.errors.concat(report.errors);
+  }
+  // Surface per-team file names for the ArchiveLog tab. forceArchive
+  // returns months[]: ['2026-04-28(14)']; flatten into archiveFile.
+  Object.keys(log.teams).forEach(function (team) {
+    var t = log.teams[team];
+    if (t && t.months && !t.archiveFile) {
+      t.archiveFile = (t.months || []).join(',');
+    }
+  });
 
   // After archiving, sweep the Live tab — any rows still there at
   // 8 AM IST belong to users who never clicked End Shift. Their
