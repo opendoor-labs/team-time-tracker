@@ -968,6 +968,28 @@
     return base;
   }
 
+  // PR #34 — fetch the DailyAggregates rollup (1 sheet read) instead of
+  // fetchOneDay × N (30+ Drive opens). Returns null on failure so caller
+  // can fallback to old slow path.
+  async function fetchAggregatesRange(from, to) {
+    try {
+      const url = `${API_URL}?action=aggregatesRange&token=${encodeURIComponent(state.token || '')}` +
+                  `&fromDate=${encodeURIComponent(from)}&toDate=${encodeURIComponent(to)}`;
+      const res = await fetch(url, { method: 'GET' });
+      if (!res.ok) return null;
+      const json = await res.json();
+      if (!json.ok) {
+        if (json.error === 'session_expired' || json.error === 'forbidden') {
+          window.__signOut('Your session expired. Please sign in again.');
+        }
+        return null;
+      }
+      return json;
+    } catch (err) {
+      return null;
+    }
+  }
+
   async function fetchData() {
     state.loading = true;
     setRefreshLoading(true);
@@ -1006,41 +1028,79 @@
         }
         state.data = json;
       } else {
-        // Multi-day range: fetch sequentially so we don't hammer Apps Script
+        // PR #34 — Multi-day path: try aggregates first (1 sheet read,
+        // <1 sec). On any failure, fall back to existing fetchOneDay loop.
+        // Aggregates power summary cards + leaderboard instantly. Tab
+        // tables (Listings, Sessions, Attendance) lazy-load on click.
+        bannerText.textContent = `Loading range ${from} → ${to}…`;
         const days = enumerateDays(from, to);
-        let merged = null;
-        let failures = 0;
-        for (let i = 0; i < days.length; i++) {
-          bannerText.textContent = `Loading range ${from} → ${to} · day ${i + 1} of ${days.length}…`;
-          try {
-            const json = await fetchOneDay(days[i]);
-            if (!json.ok) {
-              if (json.error === 'session_expired' || json.error === 'forbidden') {
-                window.__signOut('Your session expired. Please sign in again.');
-                return;
+        const agg = await fetchAggregatesRange(from, to);
+
+        if (agg && Array.isArray(agg.rows)) {
+          // FAST PATH — aggregates available
+          state.date = to;
+          state.data = {
+            ok: true,
+            teams: Array.isArray(agg.teams) ? agg.teams : [],
+            role: agg.isAdmin ? 'super_admin' : 'tl',
+            isAdmin: !!agg.isAdmin,
+            isQC: false,
+            email: agg.email,
+            rangeFrom: from,
+            rangeTo: to,
+            rangeDays: days.length,
+            rangeFailures: 0,
+            _aggregates: agg.rows,
+            _aggregatesHeader: agg.header,
+            _multiDayLazy: true,
+            // Empty placeholders — populated when user clicks a tab
+            logs: {},
+            attendance: { header: [], rows: [] },
+            sessions: { header: [], rows: [] }
+          };
+        } else {
+          // FALLBACK — aggregates unavailable: use existing fetchOneDay loop
+          let merged = null;
+          let failures = 0;
+          for (let i = 0; i < days.length; i++) {
+            bannerText.textContent = `Loading range ${from} → ${to} · day ${i + 1} of ${days.length}…`;
+            try {
+              const json = await fetchOneDay(days[i]);
+              if (!json.ok) {
+                if (json.error === 'session_expired' || json.error === 'forbidden') {
+                  window.__signOut('Your session expired. Please sign in again.');
+                  return;
+                }
+                failures++;
+                continue;
               }
+              merged = mergeDayIntoData(merged, json);
+            } catch (e) {
               failures++;
-              continue;
             }
-            merged = mergeDayIntoData(merged, json);
-          } catch (e) {
-            failures++;
           }
+          if (!merged) {
+            renderApiError('range_fetch_failed');
+            return;
+          }
+          merged.rangeFrom = from;
+          merged.rangeTo   = to;
+          merged.rangeDays = days.length;
+          merged.rangeFailures = failures;
+          state.date = to;
+          state.data = merged;
         }
-        if (!merged) {
-          renderApiError('range_fetch_failed');
-          return;
-        }
-        // Stamp the merged payload with range metadata so downstream rendering can show it
-        merged.rangeFrom = from;
-        merged.rangeTo   = to;
-        merged.rangeDays = days.length;
-        merged.rangeFailures = failures;
-        state.date = to;           // top datePicker reflects the end of range
-        state.data = merged;
       }
 
       state.lastFetchAt = new Date();
+
+      // PR #34 — In multi-day fast path, aggregates power the summary cards
+      // immediately. Tab tables need raw row data, which we fetch in the
+      // BACKGROUND so the user sees cards in <1 sec while details fill in.
+      if (state.data && state.data._multiDayLazy && !state.data._tabsLoaded
+          && !state.data._tabsLoadingPromise) {
+        _lazyFetchTabData();  // fire-and-forget; renderContent re-runs when done
+      }
 
       const validTabs = getAllTabKeys(state.data);
       if (!state.selectedTab || !validTabs.includes(state.selectedTab)) {
@@ -1150,11 +1210,84 @@
     return hr * 3600 + mn * 60 + sc;
   }
 
+  // PR #34 — fast-path summary card render using DailyAggregates rollup.
+  // Used when state.data._aggregates is populated (multi-day mode).
+  // Single sheet read → 18-column rows → simple sums in JS.
+  function renderSummaryCardsFromAggregates() {
+    const data = state.data;
+    const rows = data._aggregates || [];
+    // DailyAggregates schema (cols 0..17):
+    //   0=Date 1=Team 2=User 3=HomeTeam 4=Tasks 5=TaskDurMin 6=ProductionMin
+    //   7=BreakMin 8=AutoBreakMin 9=DinnerMin 10=MeetingMin 11=TrainingMin
+    //   12=IdleMin 13=BreakExceededMin 14=ShiftStart 15=ShiftEnd 16=Util 17=Source
+    let totalTasks = 0;
+    let prodMin = 0, breakMin = 0, autoBreakMin = 0;
+    let taskDurMin = 0;
+    const userSet = new Set();
+    const dayCount = new Set();
+    rows.forEach(r => {
+      const team = String(r[1] || '').trim();
+      if (!teamInFilter(team)) return;
+      // User filter (multi-select array, null = all)
+      const user = String(r[2] || '').trim();
+      if (filters.user !== null) {
+        if (!filters.user || filters.user.length === 0) return;  // empty selection
+        const matchSet = new Set(filters.user.map(s => String(s).toLowerCase().trim()));
+        if (!matchSet.has(user.toLowerCase())) return;
+      }
+      totalTasks += Number(r[4]) || 0;
+      taskDurMin += Number(r[5]) || 0;
+      prodMin += Number(r[6]) || 0;
+      breakMin += Number(r[7]) || 0;
+      autoBreakMin += Number(r[8]) || 0;
+      if (user) userSet.add(user.toLowerCase());
+      dayCount.add(String(r[0] || '').slice(0, 10));
+    });
+    const days = Math.max(1, dayCount.size);
+    const denomMin = 480 * days;  // 8 hrs × dayCount
+    const utilization = denomMin > 0
+      ? Math.max(0, Math.min(100, Math.round((taskDurMin / denomMin) * 100)))
+      : 0;
+    const prodHours = (prodMin / 60).toFixed(1);
+    const breakHours = ((breakMin + autoBreakMin) / 60).toFixed(1);
+    const teamsCount = (data.teams || []).filter(t => teamInFilter(t)).length;
+
+    cardsEl.classList.remove('hidden');
+    cardsEl.innerHTML = `
+      <div class="card" data-c="tasks">
+        <div class="k"><span class="icon">✓</span>Total Tasks</div>
+        <div class="v">${totalTasks.toLocaleString()}</div>
+        <div class="sub">Across ${teamsCount} teams · ${days} day${days>1?'s':''}</div>
+      </div>
+      <div class="card" data-c="prod">
+        <div class="k"><span class="icon">⚡</span>Productive Hours</div>
+        <div class="v">${prodHours}<span class="unit">hrs</span></div>
+        <div class="sub">From ${userSet.size} active users</div>
+      </div>
+      <div class="card" data-c="break">
+        <div class="k"><span class="icon">☕</span>Break Hours</div>
+        <div class="v">${breakHours}<span class="unit">hrs</span></div>
+        <div class="sub">Manual ${breakMin}m · Auto ${autoBreakMin}m</div>
+      </div>
+      <div class="card" data-c="util">
+        <div class="k"><span class="icon">%</span>Avg Utilization</div>
+        <div class="v">${utilization}<span class="unit">%</span></div>
+        <div class="sub">Task hrs ÷ ${days * 8} hrs</div>
+      </div>
+    `;
+  }
+
   function renderSummaryCards() {
     const data = state.data;
     if (!data || !data.logs) {
       cardsEl.classList.add('hidden');
       return;
+    }
+
+    // PR #34 — fast path: if aggregates are loaded, use them
+    if (data._aggregates && Array.isArray(data._aggregates)) {
+      try { return renderSummaryCardsFromAggregates(); }
+      catch (e) { /* fall through to slow path */ }
     }
 
     // QC mode — tasks-only summary. No prod hours, no break hours, no util.
@@ -1481,6 +1614,49 @@
     else if (prev === '__live' && key !== '__live') stopLivePolling();
     renderTabs();
     renderContent();
+    // PR #34 — lazy-load raw tab data when in multi-day fast path mode.
+    // Aggregates power cards/leaderboard, but tab tables need raw rows.
+    if (state.data && state.data._multiDayLazy && !state.data._tabsLoaded && key !== '__live') {
+      _lazyFetchTabData();
+    }
+  }
+
+  // PR #34 — populate state.data.logs/attendance/sessions on first tab
+  // click in multi-day mode. Uses the existing fetchOneDay loop to gather
+  // raw rows, then reruns renderContent so the active tab updates.
+  async function _lazyFetchTabData() {
+    if (!state.data || state.data._tabsLoadingPromise) return state.data._tabsLoadingPromise;
+    const from = state.data.rangeFrom;
+    const to   = state.data.rangeTo;
+    if (!from || !to) return;
+    // Show loading state in the content pane
+    contentEl.innerHTML = `<div class="data-card"><div class="state"><p>Loading detail rows for ${escapeHtml(from)} → ${escapeHtml(to)}…</p></div></div>`;
+    const days = enumerateDays(from, to);
+    state.data._tabsLoadingPromise = (async () => {
+      let merged = null;
+      let failures = 0;
+      for (let i = 0; i < days.length; i++) {
+        try {
+          const json = await fetchOneDay(days[i]);
+          if (!json.ok) { failures++; continue; }
+          merged = mergeDayIntoData(merged, json);
+        } catch (e) { failures++; }
+      }
+      if (merged) {
+        // Splice raw data into state.data (preserve aggregates fast path)
+        state.data.logs = merged.logs || {};
+        state.data.attendance = merged.attendance || { header: [], rows: [] };
+        state.data.sessions = merged.sessions || { header: [], rows: [] };
+        if (merged.whitelist) state.data.whitelist = merged.whitelist;
+        if (merged.config)    state.data.config    = merged.config;
+        state.data._tabsLoaded = true;
+      }
+      state.data._tabsLoadingPromise = null;
+      // Rebuild tab counts + active tab content
+      renderTabs();
+      renderContent();
+    })();
+    return state.data._tabsLoadingPromise;
   }
 
   function getAdminRowCount(source) {
@@ -1505,6 +1681,26 @@
     }
 
     if (sel === '__live') { renderLiveView(); return; }
+
+    // PR #34 — In multi-day fast path, raw tab data hasn't loaded yet.
+    // Show a clear loading state instead of "No entries logged" while
+    // _lazyFetchTabData is in flight.
+    if (state.data && state.data._multiDayLazy
+        && !state.data._tabsLoaded
+        && state.data._tabsLoadingPromise) {
+      const dateStr = (state.data.rangeFrom && state.data.rangeTo)
+        ? `${state.data.rangeFrom} → ${state.data.rangeTo} · ${state.data.rangeDays} days`
+        : '';
+      contentEl.innerHTML = `
+        <div class="data-card">
+          <div class="state">
+            <h2>📊 Loading detail rows…</h2>
+            <p>Fetching raw rows for <b>${escapeHtml(dateStr)}</b>. Summary cards above are already up-to-date from the daily rollup.</p>
+            <p style="color:var(--text-3); font-size:13px;">This is a one-time wait per range — data is cached for the next 10 minutes.</p>
+          </div>
+        </div>`;
+      return;
+    }
 
     let title, header, rows;
 
