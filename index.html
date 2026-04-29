@@ -775,6 +775,119 @@
     box-shadow: 0 0 0 3px rgba(255,69,58,0.18);
     animation: shake 0.35s ease;
   }
+
+  /* ── PR #23 — Utilities Turn On parallel-channel panel ─────────────── */
+  .utility-channels {
+    grid-column: 1 / -1;
+    margin-top: 8px;
+    padding: 16px;
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(10,132,255,0.06), rgba(10,132,255,0.02));
+    border: 1px solid rgba(10,132,255,0.18);
+  }
+  .util-channels-head {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 12px;
+    letter-spacing: 0.02em;
+  }
+  .util-channels-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  @media (max-width: 1100px) {
+    .util-channels-grid { grid-template-columns: 1fr; }
+  }
+  .util-channel {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .util-channel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .util-channel-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: rgba(255,255,255,0.92);
+  }
+  .util-channel-timer {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--blue);
+    background: rgba(10,132,255,0.12);
+    padding: 4px 10px;
+    border-radius: 8px;
+    letter-spacing: 0.04em;
+  }
+  .util-channel-fields { display: flex; flex-direction: column; gap: 6px; }
+  .util-channel-fields label {
+    font-size: 11px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 4px;
+  }
+  .util-channel-fields input {
+    background: rgba(0,0,0,0.28);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.95);
+    border-radius: 8px;
+    padding: 9px 11px;
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+  }
+  .util-channel-fields input:focus {
+    border-color: rgba(10,132,255,0.5);
+    box-shadow: 0 0 0 2px rgba(10,132,255,0.15);
+  }
+  .util-channel-fields input.field-invalid {
+    border-color: rgba(255,69,58,0.75) !important;
+    box-shadow: 0 0 0 3px rgba(255,69,58,0.18);
+  }
+  .util-channel-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .util-btn {
+    flex: 1;
+    padding: 10px 12px;
+    border-radius: 9px;
+    border: none;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .util-btn:hover { transform: translateY(-1px); }
+  .util-btn-start {
+    background: linear-gradient(135deg, var(--blue), var(--indigo));
+    color: white;
+    box-shadow: 0 4px 12px rgba(10,132,255,0.28);
+  }
+  .util-btn-log {
+    background: linear-gradient(135deg, var(--green), #2da94f);
+    color: white;
+    box-shadow: 0 4px 12px rgba(48,209,88,0.28);
+  }
   @keyframes shake {
     0%, 100% { transform: translateX(0); }
     25% { transform: translateX(-3px); }
@@ -2466,6 +2579,17 @@ let state = {
   // Mac lock tracking
   macLocked: false,
   macLockedAt: null,
+  // PR #23 — Utilities Turn On parallel-channel timers.
+  // Each channel runs its OWN timer independently. Multiple can run at
+  // once (rep dialing customer = call timer + waiting on hold drafting
+  // email = email timer also). All 3 pause when activity !== 'production'
+  // (same rule as the main task timer). Logging one channel only resets
+  // that channel; the others keep running.
+  utilityChannels: {
+    call:  { running: false, totalMs: 0, ticket: '', caseNum: '', comment: '' },
+    email: { running: false, totalMs: 0, ticket: '', caseNum: '', comment: '' },
+    form:  { running: false, totalMs: 0, ticket: '', caseNum: '', comment: '' },
+  },
 };
 
 let clockInterval = null;
@@ -3024,6 +3148,20 @@ function renderForm(teamKey) {
   });
   body.innerHTML = html;
 
+  // ── PR #23 — Utilities Turn On parallel-channel mode ────────────────
+  // For the Utilities team, the standard fields above are kept (rendered
+  // by the schema), but when the user picks Task Type = "Turn On" we
+  // overlay a 3-channel panel (Call / Email / Online Form) and hide the
+  // single-form fields. Each channel has its own timer + ticket + case +
+  // comment + log button. All 3 timers can run simultaneously.
+  //
+  // For Task Type = Turn Off / Verification / NST / Blocked Cases, the
+  // standard single-form flow runs unchanged.
+  if (teamKey === 'Utilities') {
+    _injectUtilityChannelsPanel(body);
+    _wireUtilityTaskTypeToggle(body);
+  }
+
   // Starts the task timer when user touches ANY field for the first time
   body.querySelectorAll('input, select, textarea').forEach(el => {
     const go = () => {
@@ -3050,6 +3188,256 @@ function renderForm(teamKey) {
 }
 
 function truncate(s, n) { return s.length > n ? s.slice(0, n-1) + '…' : s; }
+
+// ═══════════════════════════════════════════════════════════════════════
+// PR #23 — Utilities multi-channel parallel timers (Turn On only)
+// ═══════════════════════════════════════════════════════════════════════
+// Three channels: call / email / form. Each has independent state:
+//   running   — true if its timer is ticking
+//   totalMs   — accumulated wall-clock ms (only ticks while running AND
+//               state.activity === 'production' AND !state.macLocked)
+//   ticket    — Ticket Link/Property Address (per channel)
+//   caseNum   — Case/Ticket #
+//   comment   — free-text comment
+//
+// UI is built inline (not via the schema) so we control layout precisely.
+
+const UTIL_CHANNELS = [
+  { key: 'call',  label: 'Call',        emoji: '📞', prodType: 'Call' },
+  { key: 'email', label: 'Email',       emoji: '✉️', prodType: 'Email' },
+  { key: 'form',  label: 'Online Form', emoji: '🌐', prodType: 'Online Form' },
+];
+
+function _injectUtilityChannelsPanel(formBody) {
+  // Remove any prior panel (re-render safety)
+  const old = document.getElementById('utilityChannelsPanel');
+  if (old) old.remove();
+
+  const panel = document.createElement('div');
+  panel.id = 'utilityChannelsPanel';
+  panel.className = 'utility-channels';
+  panel.style.display = 'none'; // shown by toggle when Task Type = Turn On
+  panel.innerHTML = `
+    <div class="util-channels-head">
+      Turn On — log each channel as you finish it. All 3 timers can run in parallel.
+    </div>
+    <div class="util-channels-grid">
+      ${UTIL_CHANNELS.map(c => `
+        <div class="util-channel" data-channel="${c.key}">
+          <div class="util-channel-head">
+            <span class="util-channel-title">${c.emoji} ${c.label}</span>
+            <span class="util-channel-timer" id="utilTimer_${c.key}">00:00:00</span>
+          </div>
+          <div class="util-channel-fields">
+            <label>Ticket Link/Property Address <span class="req">*</span></label>
+            <input type="text" data-util-field="ticket" data-util-channel="${c.key}" placeholder="Ticket URL or address" />
+            <label>Case/Ticket #</label>
+            <input type="text" data-util-field="caseNum" data-util-channel="${c.key}" placeholder="Optional" />
+            <label>Comment</label>
+            <input type="text" data-util-field="comment" data-util-channel="${c.key}" placeholder="Optional" />
+          </div>
+          <div class="util-channel-actions">
+            <button type="button" class="util-btn util-btn-start" id="utilStart_${c.key}" onclick="startUtilityChannel('${c.key}')">▶ Start ${c.label}</button>
+            <button type="button" class="util-btn util-btn-log"   id="utilLog_${c.key}"   onclick="logUtilityChannel('${c.key}')" style="display:none">✓ Log ${c.label}</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  formBody.appendChild(panel);
+
+  // Wire input persistence (so a snapshot restore can recover field values)
+  panel.querySelectorAll('[data-util-field]').forEach(el => {
+    el.addEventListener('input', () => {
+      const ch = el.getAttribute('data-util-channel');
+      const fld = el.getAttribute('data-util-field');
+      if (state.utilityChannels[ch]) state.utilityChannels[ch][fld] = el.value;
+      if (typeof markSnapshotDirty === 'function') markSnapshotDirty();
+    });
+  });
+}
+
+// Hide the standard fields (Ticket Link, Productivity Type, Turn On Filter,
+// Case#, Comment) when Task Type = Turn On — replaced by the channels
+// panel. Show them back for any other Task Type. Task Type dropdown
+// itself stays visible at all times.
+function _wireUtilityTaskTypeToggle(formBody) {
+  const taskTypeSel = formBody.querySelector('[data-field="Task Type"]');
+  if (!taskTypeSel) return;
+
+  function applyVisibility() {
+    const isTurnOn = taskTypeSel.value === 'Turn On';
+    const panel = document.getElementById('utilityChannelsPanel');
+    if (panel) panel.style.display = isTurnOn ? 'block' : 'none';
+
+    // Standard form fields to toggle. Task Type itself stays visible.
+    const HIDE_LABELS = [
+      'Ticket Link/Property Address',
+      'Productivity Type',
+      'Turn On Filter',
+      'Case /Ticket number',
+      'Comment',
+    ];
+    HIDE_LABELS.forEach(lbl => {
+      const el = formBody.querySelector(`[data-field="${lbl}"]`);
+      if (el) {
+        const wrap = el.closest('.form-field');
+        if (wrap) wrap.style.display = isTurnOn ? 'none' : '';
+      }
+    });
+
+    // Hide the standard ✓ Log Task button + the big task timer label when
+    // in Turn On mode — channel buttons + per-channel timers replace them.
+    const logBtn = document.getElementById('logTaskBtn');
+    if (logBtn) logBtn.style.display = isTurnOn ? 'none' : '';
+    const timerCard = document.getElementById('timerCard') || document.querySelector('.timer-card');
+    if (timerCard) timerCard.style.opacity = isTurnOn ? '0.35' : '1';
+  }
+
+  taskTypeSel.addEventListener('change', applyVisibility);
+  // Initial state — important on form re-render (team switch, snapshot restore)
+  applyVisibility();
+}
+
+// Start a channel's timer. Independent of the main task timer.
+function startUtilityChannel(key) {
+  if (state.activity !== 'production') {
+    toast('⚠️', 'Switch to Production to start a channel timer');
+    return;
+  }
+  const ch = state.utilityChannels[key];
+  if (!ch) return;
+  if (ch.running) return; // already running
+  ch.running = true;
+  // Capture current field values into state (so snapshot restore can recover)
+  const ticket  = document.querySelector(`[data-util-channel="${key}"][data-util-field="ticket"]`);
+  const caseNum = document.querySelector(`[data-util-channel="${key}"][data-util-field="caseNum"]`);
+  const comment = document.querySelector(`[data-util-channel="${key}"][data-util-field="comment"]`);
+  if (ticket)  ch.ticket  = ticket.value || '';
+  if (caseNum) ch.caseNum = caseNum.value || '';
+  if (comment) ch.comment = comment.value || '';
+  // Toggle button visibility
+  const startBtn = document.getElementById('utilStart_' + key);
+  const logBtn   = document.getElementById('utilLog_' + key);
+  if (startBtn) startBtn.style.display = 'none';
+  if (logBtn)   logBtn.style.display   = 'inline-flex';
+  if (typeof markSnapshotDirty === 'function') markSnapshotDirty();
+}
+
+// Log a channel: validate ticket present, fire logTask with this channel's
+// data + Productivity Type baked in, then reset ONLY this channel.
+async function logUtilityChannel(key) {
+  if (state.activity !== 'production') {
+    toast('⚠️', 'Switch to Production to log a task');
+    return;
+  }
+  const ch = state.utilityChannels[key];
+  const meta = UTIL_CHANNELS.find(c => c.key === key);
+  if (!ch || !meta) return;
+  if (!ch.running) return;
+
+  // Pull latest field values
+  const ticket  = document.querySelector(`[data-util-channel="${key}"][data-util-field="ticket"]`);
+  const caseNum = document.querySelector(`[data-util-channel="${key}"][data-util-field="caseNum"]`);
+  const comment = document.querySelector(`[data-util-channel="${key}"][data-util-field="comment"]`);
+  const ticketVal  = ticket  ? (ticket.value  || '').trim() : '';
+  const caseVal    = caseNum ? (caseNum.value || '').trim() : '';
+  const commentVal = comment ? (comment.value || '').trim() : '';
+
+  if (!ticketVal) {
+    if (ticket) ticket.classList.add('field-invalid');
+    toast('⚠️', `${meta.label}: Ticket Link/Property Address is required`);
+    return;
+  }
+  if (ticket) ticket.classList.remove('field-invalid');
+
+  const elapsed = ch.totalMs;
+  if (elapsed < 1000) {
+    toast('⚠️', `${meta.label}: timer is at 0 — let it run a bit before logging`);
+    return;
+  }
+
+  // Fire logTask. Apps Script Utilities case maps these exact keys:
+  //   data['Ticket Link/Property Address'], data['Productivity Type'],
+  //   data['Task Type'], data['Turn On Filter'] (legacy, empty),
+  //   data['Case / Ticket #'], data['Comment']
+  const data = {
+    'Ticket Link/Property Address': ticketVal,
+    'Productivity Type': meta.prodType,
+    'Task Type': 'Turn On',
+    'Turn On Filter': '',           // legacy; channel info now in Productivity Type
+    'Case / Ticket #': caseVal,
+    'Comment': commentVal,
+  };
+
+  // Update local task list + counters
+  const isCrossTeam = state.team !== state.homeTeam;
+  loggedTasks.forEach(t => t._isNew = false);
+  loggedTasks.unshift({
+    time: nowTimeLabel(),
+    type: 'Turn On — ' + meta.label,
+    addr: truncate(ticketVal, 50),
+    durationMs: elapsed,
+    data,
+    team: state.team,
+    homeTeam: state.homeTeam,
+    crossTeam: isCrossTeam,
+    attachmentCount: 0,
+    _isNew: true,
+  });
+  state.tasksDone += 1;
+  state.totals.taskDuration = (state.totals.taskDuration || 0) + (elapsed || 0);
+
+  nativeFire('logTask', {
+    team: state.team,
+    homeTeam: state.homeTeam,
+    crossTeam: isCrossTeam,
+    taskType: 'Turn On — ' + meta.label,
+    data,
+    durationMs: elapsed,
+    activity: state.activity,
+    system: false,
+    attachments: [],
+  });
+
+  // Reset ONLY this channel — others keep running.
+  ch.running = false;
+  ch.totalMs = 0;
+  ch.ticket = '';
+  ch.caseNum = '';
+  ch.comment = '';
+  if (ticket)  ticket.value  = '';
+  if (caseNum) caseNum.value = '';
+  if (comment) comment.value = '';
+  const startBtn = document.getElementById('utilStart_' + key);
+  const logBtn   = document.getElementById('utilLog_' + key);
+  if (startBtn) startBtn.style.display = 'inline-flex';
+  if (logBtn)   logBtn.style.display   = 'none';
+  const tEl = document.getElementById('utilTimer_' + key);
+  if (tEl) tEl.textContent = '00:00:00';
+
+  renderRecentList();
+  document.getElementById('sCount').textContent = state.tasksDone;
+  toast('✓', `${meta.label} logged · ${fmtHM(elapsed)}`);
+  if (typeof markSnapshotDirty === 'function') markSnapshotDirty();
+}
+
+// Tick all running utility channels by `delta` ms. Called from
+// startClock's interval. Pause rules match the main task timer:
+// only tick when production && !macLocked && !idle-past-threshold.
+function _tickUtilityChannels(delta) {
+  if (!state.utilityChannels) return;
+  const isIdleProduction = state.activity === 'production'
+    && state.idleStreakSec > RULES.IDLE_THRESHOLD_SEC;
+  if (state.activity !== 'production' || state.macLocked || isIdleProduction) return;
+  Object.keys(state.utilityChannels).forEach(key => {
+    const ch = state.utilityChannels[key];
+    if (!ch.running) return;
+    ch.totalMs += delta;
+    const tEl = document.getElementById('utilTimer_' + key);
+    if (tEl) tEl.textContent = fmtHMS(ch.totalMs);
+  });
+}
 
 // ── Attachment field helpers ───────────────────────────────────────────────
 // User picks files via the hidden <input type="file"> → we stash File objects
@@ -3304,6 +3692,20 @@ function clearForm() {
   document.getElementById('formSub').textContent = 'Timer starts when you fill the first field';
   document.getElementById('timerDisplay').textContent = '00:00:00';
   document.getElementById('currentTaskLine').innerHTML = `<span style="color: var(--dim);">Fill the form to start a task</span>`;
+  // PR #23 — also reset all 3 utility channel timers (Clear is per-form intent)
+  if (state.utilityChannels) {
+    Object.keys(state.utilityChannels).forEach(key => {
+      const ch = state.utilityChannels[key];
+      ch.running = false; ch.totalMs = 0;
+      ch.ticket = ''; ch.caseNum = ''; ch.comment = '';
+      const tEl = document.getElementById('utilTimer_' + key);
+      if (tEl) tEl.textContent = '00:00:00';
+      const startBtn = document.getElementById('utilStart_' + key);
+      const logBtn   = document.getElementById('utilLog_' + key);
+      if (startBtn) startBtn.style.display = 'inline-flex';
+      if (logBtn)   logBtn.style.display   = 'none';
+    });
+  }
 }
 
 function nowTimeLabel() {
@@ -3397,6 +3799,10 @@ function startClock() {
       const bucket = (state.activity === 'break' && state.autoBreak) ? 'auto_break' : state.activity;
       state.totals[bucket] = (state.totals[bucket] || 0) + delta;
     }
+
+    // PR #23 — tick Utilities Turn On parallel-channel timers. Same pause
+    // rules as the main task timer (production + not locked + not idle).
+    _tickUtilityChannels(delta);
 
     // Persist snapshot to localStorage every tick so update/crash/force-quit
     // can all restore without data loss. Marked dirty by form input, activity
