@@ -1327,9 +1327,15 @@
     }
 
     // ── Step 3: Compute the four cards ─────────────────────────────
-    const prodHrs = (prodMin / 60).toFixed(1);
-    const brkHrs  = (breakMin / 60).toFixed(1);
-    const avgUtil = wallMin > 0 ? Math.min(100, Math.round((prodMin / wallMin) * 100)) : null;
+    // PR #16: Productive Hours card now shows sum of logged task
+    // durations (taskDurSec) and Avg Utilization = taskDur ÷ 8 hrs × 100.
+    // Old wall-clock-based formula retired — TLs wanted "did they put
+    // in 8 hrs of logged work?" not "what % of logged time was prod".
+    const taskDurMin   = Math.round(taskDurSec / 60);
+    const prodHrs      = (taskDurMin / 60).toFixed(1);          // task-duration hrs
+    const brkHrs       = (breakMin / 60).toFixed(1);
+    const UTIL_DENOM   = 8 * 60;                                // 480 min
+    const avgUtil      = Math.max(0, Math.round((taskDurMin / UTIL_DENOM) * 100));
 
     const sourceTag = utilSource === 'sessions' ? 'From end-of-shift data'
                     : utilSource === 'live'     ? 'Live (mid-shift)'
@@ -1609,44 +1615,16 @@
 
     const list = Object.keys(users).map(u => {
       const { tasks, prodSec, taskMs } = users[u];
-      // Canonical Production Hours — prefer Sessions (closed shifts) →
-      // Live (active shifts) → task-duration baseline (last resort).
-      let prodMin = Math.round(prodSec / 60);  // task-duration baseline
-      let util = null, utilSource = null;
-
-      // 1. End-of-shift Sessions row — canonical truth.
+      // PR #16: Util = task durations ÷ 8 hrs × 100. Numerator is the
+      // sum of logged task durations (prodSec from team logs). Denominator
+      // is fixed at 480 min. No more wall-clock fallback chain needed.
+      const prodMin = Math.round(prodSec / 60);
+      const UTIL_DENOM = 8 * 60;
+      const util = prodMin > 0 ? Math.max(0, Math.round((prodMin / UTIL_DENOM) * 100)) : 0;
+      // Source label kept for backward compat (subscript on the cell)
       const sess = sessMap[u];
-      if (sess && sess.wallMin > 0) {
-        prodMin = sess.prodMin;
-        util = Math.min(100, Math.round((sess.prodMin / sess.wallMin) * 100));
-        utilSource = 'session';
-      } else {
-        // 2. Live row — heartbeat ProdMin + server-computed wall-clock.
-        const live = liveByUser[u];
-        if (live) {
-          const wallMin = Number(live.shiftMinutesElapsed) ||
-                          (live.shiftStartAt ? wallMinutesSinceIst_(live.shiftStartAt) : 0);
-          const livePm  = Number(live.prodMin) || 0;
-          if (livePm > prodMin) prodMin = livePm;
-          if (wallMin > 0 && livePm >= 0) {
-            util = Math.min(100, Math.round((livePm / wallMin) * 100));
-            utilSource = 'live';
-          }
-        }
-      }
-
-      // 3. Approx fallback — task-span (already overnight-cross adjusted).
-      //    Use chronological min/max of taskMs (NOT lex compare), so
-      //    overnight shifts compute correctly.
-      if (util === null && taskMs && taskMs.length >= 2 && prodMin > 0) {
-        const fMs = Math.min.apply(null, taskMs);
-        const lMs = Math.max.apply(null, taskMs);
-        const span = (lMs - fMs) / 60000;
-        if (span > 0) {
-          util = Math.min(100, Math.round((prodMin / span) * 100));
-          utilSource = 'approx';
-        }
-      }
+      const live = liveByUser[u];
+      const utilSource = sess ? 'session' : (live ? 'live' : (tasks > 0 ? 'tasks' : null));
 
       const prodHrs = prodMin / 60;
       // Productivity Rate uses the SAME prodMin as Utilization, so the

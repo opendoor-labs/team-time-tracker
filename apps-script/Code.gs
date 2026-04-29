@@ -428,14 +428,19 @@ function markAttendance_(ss, b) {
   });
 }
 
-// Sessions schema (12 cols, post PR #10):
+// Sessions schema (13 cols, post PR #16):
 //   A=Name | B=Date | C=Start | D=End | E=Production(min) | F=Break(min)
 //   G=Dinner(min) | H=Meeting(min) | I=Training(min) | J=Idle(min)
-//   K=Break Exceeded(min) | L=Auto Break(min)
+//   K=Break Exceeded(min) | L=Auto Break(min) | M=Task Duration(min)
 //
-// Backward compat: rows / archive files written before PR #10 have only
-// 11 cols. Read paths treat missing col L as 0.
+// PR #16: Task Duration = sum of every logged task's duration for that
+// shift. Used as the numerator for the new util formula
+// (taskDur ÷ 480 min × 100).
+//
+// Backward compat: rows / archive files written before PR #10 have 11
+// cols. Pre-PR-#16 have 12. Read paths treat missing cols as 0.
 var BREAK_ALLOWANCE_MIN = 60;  // 1 hour break allowance per day
+var UTIL_DENOM_MIN      = 8 * 60;  // PR #16 — utilization denominator
 
 function closeSession_(ss, b) {
   return _withLock_(function () {
@@ -449,11 +454,15 @@ function closeSession_(ss, b) {
       sh.getRange('C:C').setNumberFormat('@');
       sh.getRange('D:D').setNumberFormat('@');
     } catch (e) {}
-    // Self-heal Sessions header to include col L on first call after deploy
+    // Self-heal Sessions header to include col L (Auto Break) and
+    // col M (Task Duration) on first call after deploy.
     try {
-      var hdr = sh.getRange(1, 1, 1, 12).getValues()[0];
+      var hdr = sh.getRange(1, 1, 1, 13).getValues()[0];
       if (!hdr[11] || String(hdr[11]).indexOf('Auto') < 0) {
         sh.getRange(1, 12).setValue('Auto Break (min)');
+      }
+      if (!hdr[12] || String(hdr[12]).indexOf('Task') < 0) {
+        sh.getRange(1, 13).setValue('Task Duration (min)');
       }
     } catch (e) {}
     // Date in PST (so a late-night IST shift stays on one date row)
@@ -469,6 +478,7 @@ function closeSession_(ss, b) {
     var trainingMin  = Number(b.trainingMin)   || 0;
     var idleMin      = Number(b.idleMin)       || 0;
     var autoBreakMin = Number(b.autoBreakMin)  || 0;
+    var taskDurMin   = Number(b.taskDurMin)    || 0;  // PR #16
     // Total break = manual + auto; "Break Exceeded" measured against total.
     var breakExceeded = Math.max(0, (breakMin + autoBreakMin) - BREAK_ALLOWANCE_MIN);
 
@@ -484,9 +494,9 @@ function closeSession_(ss, b) {
         sh.getRange(i + 1, 9).setValue(trainingMin);   // Training
         sh.getRange(i + 1, 10).setValue(idleMin);      // Idle
         sh.getRange(i + 1, 11).setValue(breakExceeded);// Break Exceeded
-        sh.getRange(i + 1, 12).setValue(autoBreakMin); // Auto Break
-        // Guard against Sheets auto-formatting these minute cells as DateTime.
-        sh.getRange(i + 1, 5, 1, 8).setNumberFormat('0');
+        sh.getRange(i + 1, 12).setValue(autoBreakMin); // L = Auto Break
+        sh.getRange(i + 1, 13).setValue(taskDurMin);   // M = Task Duration (PR #16)
+        sh.getRange(i + 1, 5, 1, 9).setNumberFormat('0');
         return { ok: true, updated: true, breakExceeded: breakExceeded };
       }
     }
@@ -550,9 +560,9 @@ function closeSession_(ss, b) {
 
     sh.appendRow([user, today, startTs, nowTs,
                   prodMin, breakMin, dinnerMin, meetingMin, trainingMin, idleMin,
-                  breakExceeded, autoBreakMin]);
-    // Force minute cols (E..L = 8 cols) to integer format
-    sh.getRange(sh.getLastRow(), 5, 1, 8).setNumberFormat('0');
+                  breakExceeded, autoBreakMin, taskDurMin]);
+    // Force minute cols (E..M = 9 cols) to integer format
+    sh.getRange(sh.getLastRow(), 5, 1, 9).setNumberFormat('0');
     // ── Drop the user's Live row when their shift closes ───────────
     // Otherwise the row lingers with stale data and TLs see a 'ghost'
     // on the Live Activity card (or Util computed from a Live row
@@ -720,13 +730,13 @@ function clearForceReset_(ss, b) {
 //   L=UpdatedAt (PST date + IST time)
 // Ensure Live sheet exists with the canonical header row.
 function ensureLiveSheet_(ss) {
-  // Schema (13 cols, post PR #10 — added AutoBreakMin at col M):
+  // Schema (14 cols, post PR #16):
   //   A=ShiftStartAt B=User C=HomeTeam D=Team E=Activity F=TasksDone
   //   G=ProdMin H=BreakMin I=IdleMin J=TaskStartedAt K=TaskEndedAt
-  //   L=UpdatedAt M=AutoBreakMin
+  //   L=UpdatedAt M=AutoBreakMin N=TaskDurMin
   var HEADER = ['ShiftStartAt','User','HomeTeam','Team','Activity','TasksDone',
                 'ProdMin','BreakMin','IdleMin','TaskStartedAt','TaskEndedAt',
-                'UpdatedAt','AutoBreakMin'];
+                'UpdatedAt','AutoBreakMin','TaskDurMin'];
   var sh = ss.getSheetByName('Live');
   if (!sh) {
     sh = ss.insertSheet('Live');
@@ -812,7 +822,8 @@ function heartbeat_(ss, b) {
         : existingTaskStarted,
       existingTaskEndedAt,                                    // K TaskEndedAt (preserved; only _bumpLiveAfterTask_ writes it)
       nowPSTdateISTtime_(),                                   // L UpdatedAt
-      Number(b.autoBreakMin || 0)                             // M AutoBreakMin (PR #10)
+      Number(b.autoBreakMin || 0),                            // M AutoBreakMin (PR #10)
+      Number(b.taskDurMin   || 0)                             // N TaskDurMin (PR #16)
     ];
     if (matchedRow > 0) {
       sh.getRange(matchedRow, 1, 1, row.length).setValues([row]);
@@ -1001,6 +1012,7 @@ function liveActivity_(ss, p) {
       prodMin:    Number(r[6] || 0),
       breakMin:   Number(r[7] || 0),         // manual only
       autoBreakMin: Number(r[12] || 0),      // M (PR #10) — Auto Break minutes
+      taskDurMin: Number(r[13] || 0),        // N (PR #16) — Task duration sum
       idleMin:    Number(r[8] || 0),
       taskStartedAt: parseTaskStartedAt_(r[9]),
       taskEndedAt: String(r[10] || ''),
@@ -2654,6 +2666,7 @@ function autoCloseStaleShifts_() {
     var breakMin      = Number(liveVals[i][7]) || 0;
     var idleMin       = Number(liveVals[i][8]) || 0;
     var autoBreakMin  = Number(liveVals[i][12]) || 0;  // M (PR #10)
+    var taskDurMin    = Number(liveVals[i][13]) || 0;  // N (PR #16)
 
     // PST date for the Sessions row = first 10 chars of shiftStartAt.
     var pstDate  = shiftStartStr.slice(0, 10);
@@ -2674,12 +2687,14 @@ function autoCloseStaleShifts_() {
       sessSh.getRange(rowIdx, 10).setValue(idleMin);
       sessSh.getRange(rowIdx, 11).setValue(breakExceeded);
       sessSh.getRange(rowIdx, 12).setValue(autoBreakMin);  // L = Auto Break
-      sessSh.getRange(rowIdx, 5, 1, 8).setNumberFormat('0');
+      sessSh.getRange(rowIdx, 13).setValue(taskDurMin);    // M = Task Duration (PR #16)
+      sessSh.getRange(rowIdx, 5, 1, 9).setNumberFormat('0');
     } else {
       // Append new Sessions row — auto-closed shift
       sessSh.appendRow([user, pstDate, startTm, endTm,
-                        prodMin, breakMin, 0, 0, 0, idleMin, breakExceeded, autoBreakMin]);
-      sessSh.getRange(sessSh.getLastRow(), 5, 1, 8).setNumberFormat('0');
+                        prodMin, breakMin, 0, 0, 0, idleMin, breakExceeded,
+                        autoBreakMin, taskDurMin]);
+      sessSh.getRange(sessSh.getLastRow(), 5, 1, 9).setNumberFormat('0');
     }
     processed++;
     processedUsers.push(user);
@@ -3331,6 +3346,7 @@ function _readUserLiveRow_(ss, user) {
         prodMin:      Number(vals[i][6]) || 0,
         breakMin:     Number(vals[i][7]) || 0,        // manual only
         autoBreakMin: Number(vals[i][12]) || 0,       // M (PR #10)
+        taskDurMin:   Number(vals[i][13]) || 0,       // N (PR #16)
         idleMin:      Number(vals[i][8]) || 0
       };
     }
@@ -3359,7 +3375,7 @@ function myStats_(ss, p) {
   // (Utilization = Productive ÷ logged-in time). Falls back to activity-
   // sum only if wall-clock duration can't be computed for any row.
   var totals = { production: 0, break_: 0, dinner: 0, meeting: 0, training: 0, idle: 0,
-                 shifts: 0, shiftMin: 0, autoBreak: 0 };
+                 shifts: 0, shiftMin: 0, autoBreak: 0, taskDur: 0 };
   var missedAnyShiftMin = false;
   for (var i = 0; i < sess.rows.length; i++) {
     var r = sess.rows[i];
@@ -3370,9 +3386,8 @@ function myStats_(ss, p) {
     totals.meeting    += Number(r[7]) || 0;
     totals.training   += Number(r[8]) || 0;
     totals.idle       += Number(r[9]) || 0;
-    // Col L = Auto Break (PR #10). Older rows / archives without col L
-    // return undefined → treated as 0.
     totals.autoBreak  += Number(r[11]) || 0;
+    totals.taskDur    += Number(r[12]) || 0;  // M (PR #16) — Task Duration
     var se = sess.startEnd && sess.startEnd[i];
     var dur = se ? _shiftDurationMin_(se[0], se[1]) : 0;
     if (dur > 0) totals.shiftMin += dur;
@@ -3399,6 +3414,7 @@ function myStats_(ss, p) {
         totals.production += live.prodMin;
         totals.break_     += live.breakMin;
         totals.autoBreak  += (live.autoBreakMin || 0);
+        totals.taskDur    += (live.taskDurMin || 0);  // PR #16
         totals.idle       += live.idleMin;
         // live.shiftStartAt normally "YYYY-MM-DD HH:mm:ss" (IST wall clock)
         // but may be "Sat Apr 25 2026 04:45:31 GMT+0530" if Sheets coerced
@@ -3419,15 +3435,15 @@ function myStats_(ss, p) {
     }
   }
 
-  // ── Canonical formula (matches Mac app + TL dashboard exactly) ──
-  //   Utilization % = Production min ÷ wall-clock shift min × 100
-  //   (Production-only numerator. Meeting + Training are tracked but
-  //    NOT counted as "production" — they're separate buckets, same
-  //    way TL leaderboard scores users on heads-down output.)
-  var activitySum   = totals.production + totals.meeting + totals.training +
-                      totals.break_ + totals.dinner + totals.idle;
-  var denomMin      = (totals.shiftMin > 0 && !missedAnyShiftMin) ? totals.shiftMin : activitySum;
-  var utilization   = denomMin > 0 ? Math.min(100, Math.round((totals.production / denomMin) * 100)) : 0;
+  // ── PR #16 — Utilization formula ──
+  //   Utilization % = Sum of logged task durations ÷ 8 hrs × 100
+  //   (Numerator = totals.taskDur — what was actually logged into team
+  //    log tabs. Denominator = fixed 480 min so a TL can immediately
+  //    see "% of an 8-hr standard day actually logged as task work".)
+  var denomMin     = UTIL_DENOM_MIN;  // 480
+  var utilization  = denomMin > 0
+    ? Math.max(0, Math.round((totals.taskDur / denomMin) * 100))
+    : 0;
   // Kept for backward compat (any legacy frontend reading productiveMin
   // gets the wider definition: production + meeting + training).
   var productiveMin = totals.production + totals.meeting + totals.training;
@@ -3477,16 +3493,15 @@ function myStats_(ss, p) {
       productionMin: totals.production,
       breakMin:      totals.break_,           // manual break only
       autoBreakMin:  totals.autoBreak,        // PR #10 — auto-break minutes
-      // Convenience field — total break = manual + auto. Frontends that
-      // want "total time on break" should use this rather than summing.
       totalBreakMin: totals.break_ + totals.autoBreak,
       dinnerMin:     totals.dinner,
       meetingMin:    totals.meeting,
       trainingMin:   totals.training,
       idleMin:       totals.idle,
+      taskDurMin:    totals.taskDur,          // PR #16 — sum of task durations
       productiveMin: productiveMin,
       denomMin:      denomMin,
-      utilization:   utilization
+      utilization:   utilization              // PR #16 — taskDur / 480 × 100
     },
     teams:    allTeams,
     selectedTeam: requestedTeam || null,
