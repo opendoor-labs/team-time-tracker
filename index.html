@@ -2175,8 +2175,11 @@ function _humanizeOtpError(code) {
     case 'code_mismatch':            return 'That code doesn\'t match. Double-check and retry.';
     case 'missing_fields':           return 'Please enter the code.';
     case 'email_required':           return 'Please enter your email.';
-    default:                          return 'Something went wrong. Try again.';
   }
+  // Surface the raw server message so we don't hide things like
+  // "unknown action: requestEmpOtp" (= Apps Script not redeployed yet).
+  if (code) return 'Server: ' + String(code);
+  return 'Something went wrong. Try again.';
 }
 
 function _applyVerifiedUserToUI(fullName, email) {
