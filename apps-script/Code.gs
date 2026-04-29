@@ -40,9 +40,7 @@ var TEAM_TO_TAB = {
   'HOC WO':                  'HOC_WO_Log',
   'LWO':                     'LWO_Log',
   'TP Sourcing':             'TP_Sourcing_Log',
-  'Utilities Turn On':       'Utilities_TurnOn_Log',
-  'Utilities NST':           'Utilities_NST_Log',
-  'Utilities Blocked Cases': 'Utilities_Blocked_Log',
+  'Utilities':               'Utilities_Log',
   'TC':                      'TC_Log',
   'TS':                      'TS_Log',
   'VA':                      'VA_Log',
@@ -72,12 +70,19 @@ function resolveTeam_(rawTeam) {
     });
     // Short aliases the dashboard sends for teams whose canonical names
     // include extra trailing words or connectors ('&', '/', 'Cases', etc.)
-    resolveTeam_.cache['utilitiesblocked']       = 'Utilities Blocked Cases';
-    resolveTeam_.cache['utilitiesblockedcases']  = 'Utilities Blocked Cases';
+    // PR #17: 3 old Utilities teams collapse into one. Any legacy
+    // Whitelist row or stale heartbeat from before the rollout still
+    // resolves to the canonical 'Utilities' key.
+    resolveTeam_.cache['utilitiesblocked']       = 'Utilities';
+    resolveTeam_.cache['utilitiesblockedcases']  = 'Utilities';
+    resolveTeam_.cache['utilitiesturnon']        = 'Utilities';
+    resolveTeam_.cache['utilitiesnst']           = 'Utilities';
+    resolveTeam_.cache['utilitiesturnoff']       = 'Utilities';
+    resolveTeam_.cache['utilitiesverification']  = 'Utilities';
+    resolveTeam_.cache['utilities']              = 'Utilities';
     resolveTeam_.cache['maintenance']            = 'Maintenance & Scheduling';
     resolveTeam_.cache['maintenancescheduling']  = 'Maintenance & Scheduling';
     resolveTeam_.cache['trustsafety']            = 'Trust / Safety';
-    resolveTeam_.cache['utilitiesturnon']        = 'Utilities Turn On';
   }
   return resolveTeam_.cache[norm] || null;
 }
@@ -239,13 +244,16 @@ function logTask_(ss, b) {
              data['Sub Type'] || '',
              durStr];
       break;
-    case 'Utilities Turn On':
-    case 'Utilities NST':
-    case 'Utilities Blocked Cases':
+    case 'Utilities':
+      // PR #17 — consolidated schema. Columns:
+      // Time | User | HomeTeam | Team | Activity |
+      // Ticket Link/Property Address | Productivity Type | Task Type |
+      // Turn On Filter | Case/Ticket # | Comment | Duration
       row = [now, user, home, team, act,
              data['Ticket Link/Property Address'] || data['Ticket Link / Property Address'] || '',
              data['Productivity Type'] || '',
              data['Task Type'] || '',
+             data['Turn On Filter'] || '',
              data['Case / Ticket #'] || data['Case/Ticket #'] || '',
              data['Comment'] || '',
              durStr];
