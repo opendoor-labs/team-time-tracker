@@ -1864,46 +1864,38 @@ function _getMonthlyArchiveFile_(team, dateKey) {
 }
 
 // Daily trigger entry point — install via installArchiveTrigger().
-// Moves yesterday's rows (PST date) from each team tab into its monthly
-// archive file, verifies the copy, then deletes the source rows.
+// Runs at IST 08:00 daily.
+//
+// PR #19 — archive everything dated ≤ today-PST (inclusive), so every
+// shift that completed during the PST day that just finished gets
+// archived this morning. (Old behavior used yesterday-PST as cutoff,
+// which left today-PST data sitting in the active sheet for an extra
+// 24 hours — confusing for TLs reviewing morning-after data.)
+//
+// Implementation: delegate to forceArchiveAllPast (which already
+// handles per-day file grouping + verified-write before clear), then
+// run the full-sheet snapshot + Live sweep on top.
 function dailyArchive() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var cutoff = _yesterdayPST_();        // "yyyy-mm-dd" — date BEING archived
-  var dateKey = cutoff;                  // PR #18 — daily files use full date
-  var log = { date: cutoff, started: istNow_(), teams: {}, ok: true, errors: [] };
-
-  Object.keys(TEAM_TO_TAB).forEach(function (team) {
-    try {
-      var res = _archiveTeamDay_(ss, team, cutoff, dateKey);
-      log.teams[team] = res;
-    } catch (err) {
-      log.ok = false;
-      log.errors.push(team + ': ' + err);
-      log.teams[team] = { ok: false, error: String(err) };
+  var cutoff = todayPST_();              // PR #19 — inclusive cutoff
+  var report = forceArchiveAllPast(cutoff);
+  var log = {
+    date:       cutoff,
+    started:    report.started || istNow_(),
+    teams:      report.teams || {},
+    sessions:   report.sessions   || { ok: true, moved: 0 },
+    attendance: report.attendance || { ok: true, moved: 0 },
+    ok:         !(report.errors && report.errors.length),
+    errors:     report.errors || []
+  };
+  // Surface per-team file names for the ArchiveLog tab. forceArchive
+  // returns months[]: ['2026-04-28(14)']; flatten into archiveFile.
+  Object.keys(log.teams).forEach(function (team) {
+    var t = log.teams[team];
+    if (t && t.months && !t.archiveFile) {
+      t.archiveFile = (t.months || []).join(',');
     }
   });
-
-  // Sessions archive — move ALL pre-today rows out of the active Sessions
-  // tab into per-month Drive files in `_System` folder. Read path falls
-  // through to these archives for any past-date query.
-  try {
-    var sessRes = _archiveSessionsPreToday_(ss);
-    log.sessions = sessRes;
-  } catch (err) {
-    log.ok = false;
-    log.errors.push('sessions: ' + err);
-    log.sessions = { ok: false, error: String(err) };
-  }
-
-  // Attendance archive — same pattern as Sessions.
-  try {
-    var attRes = _archiveAttendancePreToday_(ss);
-    log.attendance = attRes;
-  } catch (err) {
-    log.ok = false;
-    log.errors.push('attendance: ' + err);
-    log.attendance = { ok: false, error: String(err) };
-  }
 
   // Full-sheet daily snapshot → admin-only folder.
   // This is a copy of the whole spreadsheet (every tab as-of this moment)
