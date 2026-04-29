@@ -1666,6 +1666,18 @@ function _findOrCreateChild_(parent, name) {
   return parent.createFolder(name);
 }
 
+// PR #18 — find archive file by full date with monthly-naming fallback.
+// New writes use full date (e.g. "BRN_Log_2026-04-28"). Old archives
+// (pre-PR #18) used monthly naming (e.g. "BRN_Log_2026_04"). On read,
+// try the new daily file first; if absent, fall back to the legacy
+// monthly file so historical data isn't lost.
+function _findArchiveFileByDate_(folder, basePrefix, date) {
+  var daily = _findFileInFolder_(folder, basePrefix + '_' + date);
+  if (daily) return daily;
+  var monthKey = date.slice(0, 7).replace('-', '_');  // "2026_04"
+  return _findFileInFolder_(folder, basePrefix + '_' + monthKey);
+}
+
 function _findFileInFolder_(folder, name) {
   var it = folder.getFilesByName(name);
   return it.hasNext() ? it.next() : null;
@@ -1829,12 +1841,16 @@ function revokeQcDriveAccess() {
 }
 
 // Get or create the monthly rollup spreadsheet for a team, e.g. "BRN_Log_2026_04".
-function _getMonthlyArchiveFile_(team, yyyymm) {
+// PR #18 — archive file granularity is per-DAY, not per-month.
+// dateKey = 'YYYY-MM-DD'. The function name kept for compat; signature
+// extended to accept either format and treat the legacy yyyy_mm path
+// as a one-time-read fallback only.
+function _getMonthlyArchiveFile_(team, dateKey) {
   var rootId = _getArchiveRootId_();
   if (!rootId) throw new Error('archive not set up; run setupArchive()');
   var root = DriveApp.getFolderById(rootId);
   var folder = _findOrCreateChild_(root, _folderNameForTeam_(team));
-  var baseName = TEAM_TO_TAB[team].replace(/_Log$/, '') + '_Log_' + yyyymm;
+  var baseName = TEAM_TO_TAB[team].replace(/_Log$/, '') + '_Log_' + dateKey;
   var existing = _findFileInFolder_(folder, baseName);
   if (existing) {
     return SpreadsheetApp.openById(existing.getId());
@@ -1853,12 +1869,12 @@ function _getMonthlyArchiveFile_(team, yyyymm) {
 function dailyArchive() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var cutoff = _yesterdayPST_();        // "yyyy-mm-dd" — date BEING archived
-  var yyyymm = cutoff.slice(0, 7).replace('-', '_'); // "2026_04"
+  var dateKey = cutoff;                  // PR #18 — daily files use full date
   var log = { date: cutoff, started: istNow_(), teams: {}, ok: true, errors: [] };
 
   Object.keys(TEAM_TO_TAB).forEach(function (team) {
     try {
-      var res = _archiveTeamDay_(ss, team, cutoff, yyyymm);
+      var res = _archiveTeamDay_(ss, team, cutoff, dateKey);
       log.teams[team] = res;
     } catch (err) {
       log.ok = false;
@@ -1942,7 +1958,7 @@ function _archiveFullSheet_(ss, cutoff) {
   return { ok: true, file: name, id: copy.getId() };
 }
 
-function _archiveTeamDay_(ss, team, cutoff, yyyymm) {
+function _archiveTeamDay_(ss, team, cutoff, dateKey) {
   var tab = TEAM_TO_TAB[team];
   var sh = ss.getSheetByName(tab);
   if (!sh) return { ok: true, moved: 0, note: 'tab missing' };
@@ -1975,8 +1991,8 @@ function _archiveTeamDay_(ss, team, cutoff, yyyymm) {
   }
   if (toArchive.length === 0) return { ok: true, moved: 0, note: 'no rows for ' + cutoff };
 
-  // Write to monthly archive file
-  var archSs = _getMonthlyArchiveFile_(team, yyyymm);
+  // Write to per-day archive file (PR #18)
+  var archSs = _getMonthlyArchiveFile_(team, dateKey);
   var archSh = archSs.getSheets()[0];
   // Ensure archive header (only on first write)
   if (archSh.getLastRow() < 1) {
@@ -2080,8 +2096,8 @@ function _forceArchiveTeamUpTo_(ss, team, targetDate) {
     var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
     if (d && d.length === 10 && d.charAt(4) === '-' && d <= targetDate) {
       values[i][0] = String(disp[i][0] || values[i][0] || '');
-      var mo = d.slice(0, 7).replace('-', '_');
-      (byMonth[mo] = byMonth[mo] || []).push(values[i]);
+      // PR #18 — daily archive files: bucket by full date, not month
+      (byMonth[d] = byMonth[d] || []).push(values[i]);
     } else {
       toKeep.push(values[i]);
     }
@@ -2148,8 +2164,8 @@ function _forceArchiveSystemUpTo_(ss, tabName, dateColIdx, targetDate) {
         values[i][0] = String(disp[i][0] || values[i][0] || '');
         values[i][4] = String(disp[i][4] || values[i][4] || '');
       }
-      var mo = d.slice(0, 7).replace('-', '_');
-      (byMonth[mo] = byMonth[mo] || []).push(values[i]);
+      // PR #18 — daily archive files: bucket by full date, not month
+      (byMonth[d] = byMonth[d] || []).push(values[i]);
     } else {
       toKeep.push(values[i]);
     }
@@ -2232,13 +2248,13 @@ function _archiveSessionsPreToday_(ss) {
   for (var i = 0; i < values.length; i++) {
     var d = String(disp[i][1] || values[i][1] || '').slice(0, 10);
     if (d && d.length === 10 && d.charAt(4) === '-' && d < today) {
-      var mo = d.slice(0, 7).replace('-', '_');
+      // PR #18 — daily files
       // Replace col B/C/D with display strings so archive doesn't get
       // Date-typed cells (which would re-introduce the same date-coerce bug).
       values[i][1] = String(disp[i][1] || values[i][1] || '');
       values[i][2] = String(disp[i][2] || values[i][2] || '');
       values[i][3] = String(disp[i][3] || values[i][3] || '');
-      (byMonth[mo] = byMonth[mo] || []).push(values[i]);
+      (byMonth[d] = byMonth[d] || []).push(values[i]);
     } else {
       toKeep.push(values[i]);
     }
@@ -2302,11 +2318,10 @@ function _archiveAttendancePreToday_(ss) {
   for (var i = 0; i < values.length; i++) {
     var d = String(disp[i][0] || values[i][0] || '').slice(0, 10);
     if (d && d.length === 10 && d.charAt(4) === '-' && d < today) {
-      var mo = d.slice(0, 7).replace('-', '_');
-      // Col A = Date, col E = MarkedAt — clean both before archiving
+      // PR #18 — daily files: bucket by full date
       values[i][0] = String(disp[i][0] || values[i][0] || '');
       values[i][4] = String(disp[i][4] || values[i][4] || '');
-      (byMonth[mo] = byMonth[mo] || []).push(values[i]);
+      (byMonth[d] = byMonth[d] || []).push(values[i]);
     } else {
       toKeep.push(values[i]);
     }
@@ -2360,8 +2375,8 @@ function readArchiveSessions_(date) {
     if (!rootId) return { header: [], rows: [] };
     var root = DriveApp.getFolderById(rootId);
     var folder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
-    var yyyymm = date.slice(0, 7).replace('-', '_');
-    var file = _findFileInFolder_(folder, 'Sessions_' + yyyymm);
+    // PR #18 — daily file first, monthly fallback
+    var file = _findArchiveFileByDate_(folder, 'Sessions', date);
     if (!file) return { header: [], rows: [] };
 
     var archSs = SpreadsheetApp.openById(file.getId());
@@ -2403,8 +2418,8 @@ function readArchiveAttendance_(date) {
     if (!rootId) return { header: [], rows: [] };
     var root = DriveApp.getFolderById(rootId);
     var folder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
-    var yyyymm = date.slice(0, 7).replace('-', '_');
-    var file = _findFileInFolder_(folder, 'Attendance_' + yyyymm);
+    // PR #18 — daily file first, monthly fallback
+    var file = _findArchiveFileByDate_(folder, 'Attendance', date);
     if (!file) return { header: [], rows: [] };
 
     var archSs = SpreadsheetApp.openById(file.getId());
@@ -2448,18 +2463,27 @@ function _readUserSessionsArchiveRange_(user, fromDate, toDate) {
     if (!rootId) return { header: [], rows: [], startEnd: [] };
     var root = DriveApp.getFolderById(rootId);
     var folder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
-    var months = {};
+    // PR #18: walk days. Resolve each day to its archive file (daily
+    // preferred, monthly fallback). Dedupe by file ID so each file is
+    // opened at most once even when several days fall in the same
+    // legacy monthly archive.
     var days = _dateRange_(fromDate, toDate);
-    days.forEach(function (d) { months[d.slice(0, 7).replace('-', '_')] = true; });
+    var seenFileIds = {};
+    var filesToRead = [];
+    days.forEach(function (d) {
+      var f = _findArchiveFileByDate_(folder, 'Sessions', d);
+      if (f && !seenFileIds[f.getId()]) {
+        seenFileIds[f.getId()] = true;
+        filesToRead.push(f);
+      }
+    });
 
     var userLc = String(user || '').toLowerCase().trim();
     var header = [];
     var rows = [];
     var startEnd = [];
 
-    Object.keys(months).forEach(function (yyyymm) {
-      var file = _findFileInFolder_(folder, 'Sessions_' + yyyymm);
-      if (!file) return;
+    filesToRead.forEach(function (file) {
       var archSs = SpreadsheetApp.openById(file.getId());
       var sh = archSs.getSheets()[0];
       var lastRow = sh.getLastRow();
@@ -2504,17 +2528,24 @@ function _readUserAttendanceArchiveRange_(user, fromDate, toDate) {
     if (!rootId) return { header: [], rows: [] };
     var root = DriveApp.getFolderById(rootId);
     var folder = _findOrCreateChild_(root, SYSTEM_FOLDER_NAME);
-    var months = {};
+    // PR #18: walk days, dedupe files (legacy monthly may share a file
+    // across multiple days)
     var days = _dateRange_(fromDate, toDate);
-    days.forEach(function (d) { months[d.slice(0, 7).replace('-', '_')] = true; });
+    var seenFileIds = {};
+    var filesToRead = [];
+    days.forEach(function (d) {
+      var f = _findArchiveFileByDate_(folder, 'Attendance', d);
+      if (f && !seenFileIds[f.getId()]) {
+        seenFileIds[f.getId()] = true;
+        filesToRead.push(f);
+      }
+    });
 
     var userLc = String(user || '').toLowerCase().trim();
     var header = [];
     var rows = [];
 
-    Object.keys(months).forEach(function (yyyymm) {
-      var file = _findFileInFolder_(folder, 'Attendance_' + yyyymm);
-      if (!file) return;
+    filesToRead.forEach(function (file) {
       var archSs = SpreadsheetApp.openById(file.getId());
       var sh = archSs.getSheets()[0];
       var lastRow = sh.getLastRow();
@@ -2748,10 +2779,10 @@ function readArchiveLog_(team, date) {
     if (!rootId) return { ok: false, error: 'archive not configured' };
     var root = DriveApp.getFolderById(rootId);
     var folder = _findOrCreateChild_(root, _folderNameForTeam_(team));
-    var yyyymm = date.slice(0, 7).replace('-', '_');
-    var baseName = TEAM_TO_TAB[team].replace(/_Log$/, '') + '_Log_' + yyyymm;
-    var file = _findFileInFolder_(folder, baseName);
-    if (!file) return { ok: true, header: [], rows: [], note: 'no archive file for ' + yyyymm };
+    // PR #18 — daily file first, monthly fallback
+    var basePrefix = TEAM_TO_TAB[team].replace(/_Log$/, '') + '_Log';
+    var file = _findArchiveFileByDate_(folder, basePrefix, date);
+    if (!file) return { ok: true, header: [], rows: [], note: 'no archive file for ' + date };
 
     var archSs = SpreadsheetApp.openById(file.getId());
     var sh = archSs.getSheets()[0];
@@ -3174,18 +3205,24 @@ function _readUserArchiveRange_(team, user, fromDate, toDate) {
     var folder = _findOrCreateChild_(root, _folderNameForTeam_(team));
 
     // Build unique set of yyyy_mm months touched by [fromDate, toDate]
-    var months = {};
+    // PR #18 — walk days, dedupe files
     var days = _dateRange_(fromDate, toDate);
-    days.forEach(function (d) { months[d.slice(0, 7).replace('-', '_')] = true; });
+    var basePrefix = TEAM_TO_TAB[team].replace(/_Log$/, '') + '_Log';
+    var seenFileIds = {};
+    var filesToRead = [];
+    days.forEach(function (d) {
+      var f = _findArchiveFileByDate_(folder, basePrefix, d);
+      if (f && !seenFileIds[f.getId()]) {
+        seenFileIds[f.getId()] = true;
+        filesToRead.push(f);
+      }
+    });
 
     var userLc = String(user || '').toLowerCase().trim();
     var header = [];
     var out = [];
 
-    Object.keys(months).forEach(function (yyyymm) {
-      var baseName = TEAM_TO_TAB[team].replace(/_Log$/, '') + '_Log_' + yyyymm;
-      var file = _findFileInFolder_(folder, baseName);
-      if (!file) return;
+    filesToRead.forEach(function (file) {
       var archSs = SpreadsheetApp.openById(file.getId());
       var sh = archSs.getSheets()[0];
       var lastRow = sh.getLastRow();
