@@ -934,6 +934,9 @@
         // Whitelist + config don't change day-to-day — keep the first day's copy
         whitelist: day.whitelist,
         config:    day.config,
+        // PR #32 — availableUsers is cumulative team-scoped, doesn't change
+        // per day — keep the first day's copy
+        availableUsers: Array.isArray(day.availableUsers) ? [...day.availableUsers] : [],
       };
     }
     // Merge: add any new teams, append rows for existing teams
@@ -2749,14 +2752,18 @@
   }
 
   function getAllUsers(data) {
-    // Names come from FIVE sources so the filter dropdown is always
+    // Names come from SIX sources so the filter dropdown is always
     // populated, even when the selected date has no activity:
-    //   1. Live tab           → anyone currently shifted in (fresh heartbeat)
-    //   2. Attendance         → anyone marked Present today
-    //   3. Sessions           → anyone with a shift record today
-    //   4. Team logs          → anyone who has logged a task today
-    //   5. localStorage cache → everyone seen on prior dashboard loads
-    //                           (persisted union across sessions/dates)
+    //   0. data.availableUsers  → backend-computed list (PR #32) — cumulative
+    //                              team-scoped: walks Attendance active +
+    //                              last 60 days archive, filtered to TL's
+    //                              allowed teams. PRIMARY source.
+    //   1. Live tab             → anyone currently shifted in (fresh heartbeat)
+    //   2. Attendance           → anyone marked Present today
+    //   3. Sessions             → anyone with a shift record today
+    //   4. Team logs            → anyone who has logged a task today
+    //   5. localStorage cache   → everyone seen on prior dashboard loads
+    //                              (persisted union across sessions/dates)
     // Same Map keyed by name → first team we see them under wins.
     const set = new Map();
     const cache = _loadKnownUsersCache();
@@ -2771,6 +2778,13 @@
         cache[v] = team || '—';
       }
     };
+
+    // 0. PR #32 — backend-computed availableUsers. Cumulative + team-scoped.
+    //    BRN TL gets only BRN team users; super_admin gets everyone.
+    //    Stays the same regardless of selected date range.
+    if (data && Array.isArray(data.availableUsers)) {
+      data.availableUsers.forEach(name => addUser(name, ''));
+    }
 
     // 1. Live (state-level, not part of `data`) — pulled in via callsite
     if (state && state.liveData && Array.isArray(state.liveData.users)) {
