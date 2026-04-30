@@ -1767,7 +1767,7 @@
             <div class="timer-label" id="timerLabel">Current Task</div>
             <div class="timer-display" id="timerDisplay">00:00:00</div>
             <div class="timer-task">
-              <span id="currentTaskLine"><b>Photo Review</b> · property #34821</span>
+              <span id="currentTaskLine" style="color: var(--dim);">Fill the form to start a task</span>
             </div>
           </div>
 
@@ -2502,6 +2502,27 @@ function restoreSnapshot(reason) {
         });
       }
     }
+
+    // 4b. PR #53 — Sync currentTaskLine with the restored form values.
+    // Without this, the snapshot-restore path leaves the hardcoded HTML
+    // placeholder visible (was "Photo Review · property #34821" — fake
+    // example data). Mirrors the inner logic of renderForm's input
+    // listener so a half-typed task shows correctly on resume, and a
+    // blank form shows the friendly "Fill the form…" prompt.
+    try {
+      const body = document.getElementById('formBody');
+      const taskLabel = (typeof TASK_FIELD_LABEL !== 'undefined') ? TASK_FIELD_LABEL[state.team] : '';
+      const taskEl = body && taskLabel ? body.querySelector(`[data-field="${CSS.escape(taskLabel)}"]`) : null;
+      const addrEl = body ? body.querySelector(`[data-field="Property Address"], [data-field="Ticket Link / Property"], [data-field="Ticket Link"]`) : null;
+      const taskVal = taskEl ? taskEl.value : '';
+      const addrVal = addrEl ? addrEl.value : '';
+      const line = document.getElementById('currentTaskLine');
+      if (line) {
+        line.innerHTML = taskVal
+          ? `<b>${taskVal}</b>${addrVal ? ' · ' + truncate(addrVal, 40) : ''}`
+          : `<span style="color: var(--dim);">Fill the form to start a task</span>`;
+      }
+    } catch (_) {}
 
     // 5. Header / chips / screen
     const teamLabel = (typeof TEAM_LABELS !== 'undefined' && TEAM_LABELS[state.team]) || state.team;
