@@ -2050,6 +2050,13 @@
       // Summary cards now read Live data as a mid-shift fallback for
       // Break Hours + Avg Util, so refresh them on every Live poll.
       try { renderSummaryCards(); } catch (_) {}
+      // If the User dropdown is currently open, rebuild it so newly-active
+      // users appear without requiring a close+reopen.
+      try {
+        if ($('userAc') && $('userAc').classList.contains('open')) {
+          buildUserPanel($('userInput') ? $('userInput').value : '');
+        }
+      } catch (_) {}
     }
   }
 
@@ -2979,18 +2986,28 @@
     //   4. Team logs            → anyone who has logged a task today
     //   5. localStorage cache   → everyone seen on prior dashboard loads
     //                              (persisted union across sessions/dates)
-    // Same Map keyed by name → first team we see them under wins.
+    // Map keyed by name. Earliest source registers the entry, but later
+    // sources can UPGRADE a placeholder team ('—' / '') with a real team
+    // when they have one — otherwise availableUsers (which sends team='')
+    // would lock everyone in as unknown-team and break per-team filtering.
     const set = new Map();
     const cache = _loadKnownUsersCache();
     const addUser = (name, team) => {
       const v = String(name || '').trim();
       if (!v) return;
-      if (!set.has(v)) set.set(v, team || cache[v] || '—');
+      const teamStr = String(team || '').trim();
+      const existing = set.get(v);
+      const existingIsUnknown = !existing || existing === '—';
+      if (!set.has(v)) {
+        set.set(v, teamStr || cache[v] || '—');
+      } else if (existingIsUnknown && teamStr) {
+        set.set(v, teamStr);
+      }
       // Update persistent cache so the dropdown stays populated next time
-      if (team && cache[v] !== team) {
-        cache[v] = team;
+      if (teamStr && cache[v] !== teamStr) {
+        cache[v] = teamStr;
       } else if (!cache[v]) {
-        cache[v] = team || '—';
+        cache[v] = teamStr || '—';
       }
     };
 
@@ -3207,13 +3224,18 @@
   }
 
   function buildUserPanel(q) {
-    if (!state.data) return;
+    // Defensive: build a synthetic data shim if state.data hasn't loaded —
+    // we still want to fall through to state.liveData / cache so the
+    // dropdown isn't empty when the data fetch is mid-flight or when the
+    // fast-path response is missing availableUsers (e.g. Apps Script not
+    // yet redeployed). NEVER mutate state.data — local var only.
+    const sd = state.data || { teams: [] };
     // Team-scoped: when a team filter is active and not "all teams", build
     // the user list DIRECTLY from team-aware data sources (Live, Attendance,
     // _aggregates, team logs). This avoids the over-strict "hide unknown
     // team" rule that emptied the dropdown when most users came in via
     // availableUsers (which lacks team info).
-    const allTeamCount = (state.data.teams || []).length;
+    const allTeamCount = (sd.teams || []).length;
     const teamFilterActive =
       Array.isArray(filters.teams) &&
       filters.teams.length > 0 &&
@@ -3221,7 +3243,7 @@
 
     let candidates;
     if (!teamFilterActive) {
-      candidates = getAllUsers(state.data);
+      candidates = getAllUsers(sd);
     } else {
       const allowed = new Set(filters.teams.map(t => String(t).trim()));
       const usersByName = new Map();
@@ -3239,29 +3261,29 @@
         });
       }
       // 2. Attendance — User col + (Team OR HomeTeam) col.
-      if (state.data.attendance && Array.isArray(state.data.attendance.rows)) {
-        const ah = (state.data.attendance.header || []).map(h => String(h).toLowerCase());
+      if (sd.attendance && Array.isArray(sd.attendance.rows)) {
+        const ah = (sd.attendance.header || []).map(h => String(h).toLowerCase());
         const uIdx = ah.indexOf('user');
         const tIdx = ah.indexOf('team') >= 0 ? ah.indexOf('team') : ah.indexOf('hometeam');
         if (uIdx >= 0 && tIdx >= 0) {
-          state.data.attendance.rows.forEach(r => {
+          sd.attendance.rows.forEach(r => {
             const t = String(r[tIdx] || '').trim();
             if (allowed.has(t)) add(r[uIdx], t);
           });
         }
       }
       // 3. DailyAggregates — col 1=Team, col 2=User, col 3=HomeTeam.
-      if (Array.isArray(state.data._aggregates)) {
-        state.data._aggregates.forEach(r => {
+      if (Array.isArray(sd._aggregates)) {
+        sd._aggregates.forEach(r => {
           const t = String(r[1] || '').trim();
           const h = String(r[3] || '').trim();
           if (allowed.has(t) || allowed.has(h)) add(r[2], t || h);
         });
       }
       // 4. Team task logs — only the selected teams' tabs.
-      if (state.data.logs) {
+      if (sd.logs) {
         filters.teams.forEach(team => {
-          const e = state.data.logs[team] || { header: [], rows: [] };
+          const e = sd.logs[team] || { header: [], rows: [] };
           const hLower = (e.header || []).map(h => String(h).toLowerCase());
           const ui = hLower.indexOf('user') >= 0 ? hLower.indexOf('user') : hLower.indexOf('name');
           if (ui >= 0) e.rows.forEach(r => add(r[ui], team));
