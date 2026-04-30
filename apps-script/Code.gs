@@ -579,17 +579,21 @@ function markAttendance_(ss, b) {
   });
 }
 
-// Sessions schema (13 cols, post PR #16):
-//   A=Name | B=Date | C=Start | D=End | E=Production(min) | F=Break(min)
-//   G=Dinner(min) | H=Meeting(min) | I=Training(min) | J=Idle(min)
-//   K=Break Exceeded(min) | L=Auto Break(min) | M=Task Duration(min)
+// Sessions schema (13 cols, post break-breakdown PR):
+//   A=Name | B=Date | C=Start | D=End | E=Production(min)
+//   F=Break(min, TOTAL = manual+dinner+auto) | G=Dinner(min)
+//   H=Meeting(min) | I=Training(min) | J=Idle(min)
+//   K=BreakExceeded(Yes/No)  ← was "Break Exceeded (min)" excess
+//   L=Auto Break(min) | M=Task Duration(min)
 //
-// PR #16: Task Duration = sum of every logged task's duration for that
-// shift. Used as the numerator for the new util formula
-// (taskDur ÷ 480 min × 100).
+// F now stores the rolled-up TOTAL break (manual+dinner+auto) so the
+// Sessions headline matches the Live tab and Mac app banner. Manual is
+// derivable: F - G - L. K is now a Yes/No flag (was excess minutes).
 //
 // Backward compat: rows / archive files written before PR #10 have 11
-// cols. Pre-PR-#16 have 12. Read paths treat missing cols as 0.
+// cols. Pre-PR-#16 have 12. Pre-this-PR rows have F=manual-only and
+// K=excess-minutes; new readers should treat numeric K as exceeded if
+// >0 and string K as the canonical flag.
 var BREAK_ALLOWANCE_MIN = 60;  // 1 hour break allowance per day
 var UTIL_DENOM_MIN      = 8 * 60;  // PR #16 — utilization denominator
 
@@ -623,15 +627,20 @@ function closeSession_(ss, b) {
     var nowTs = timeIST_();
 
     var prodMin      = Number(b.productionMin) || 0;
+    // breakMin is the ROLLED-UP TOTAL (manual + dinner + auto). Stored in F.
     var breakMin     = Number(b.breakMin)      || 0;
     var dinnerMin    = Number(b.dinnerMin)     || 0;
     var meetingMin   = Number(b.meetingMin)    || 0;
     var trainingMin  = Number(b.trainingMin)   || 0;
     var idleMin      = Number(b.idleMin)       || 0;
     var autoBreakMin = Number(b.autoBreakMin)  || 0;
-    var taskDurMin   = Number(b.taskDurMin)    || 0;  // PR #16
-    // Total break = manual + auto; "Break Exceeded" measured against total.
-    var breakExceeded = Math.max(0, (breakMin + autoBreakMin) - BREAK_ALLOWANCE_MIN);
+    var taskDurMin   = Number(b.taskDurMin)    || 0;
+    // BreakExceeded is now a Yes/No string. Trust client value if present;
+    // else derive from total against the daily allowance.
+    var breakExceeded = String(b.breakExceeded || '');
+    if (breakExceeded !== 'Yes' && breakExceeded !== 'No') {
+      breakExceeded = (breakMin >= BREAK_ALLOWANCE_MIN) ? 'Yes' : 'No';
+    }
 
     // Find existing row for [user, today] — Name in col A, Date in col B
     var rng = sh.getDataRange().getValues();
@@ -639,7 +648,7 @@ function closeSession_(ss, b) {
       if (rng[i][0] === user && rng[i][1] === today) {
         sh.getRange(i + 1, 4).setValue(nowTs);         // End
         sh.getRange(i + 1, 5).setValue(prodMin);       // Production
-        sh.getRange(i + 1, 6).setValue(breakMin);      // Break (manual)
+        sh.getRange(i + 1, 6).setValue(breakMin);      // F = TOTAL break
         sh.getRange(i + 1, 7).setValue(dinnerMin);     // Dinner
         sh.getRange(i + 1, 8).setValue(meetingMin);    // Meeting
         sh.getRange(i + 1, 9).setValue(trainingMin);   // Training
@@ -875,19 +884,18 @@ function clearForceReset_(ss, b) {
 }
 
 // ─── Heartbeat: upsert current activity into "Live" sheet (keyed by user) ─
-// Schema (12 cols, in column order):
-//   A=ShiftStartAt | B=User | C=HomeTeam | D=Team | E=Activity | F=TasksDone
-//   G=ProdMin | H=BreakMin | I=IdleMin | J=TaskStartedAt | K=TaskEndedAt
-//   L=UpdatedAt (PST date + IST time)
-// Ensure Live sheet exists with the canonical header row.
+// Schema (16 cols, post break-breakdown PR):
+//   A=ShiftStartAt B=User C=HomeTeam D=Team E=Activity F=TasksDone
+//   G=ProdMin H=BreakMin(TOTAL=manual+dinner+auto) I=IdleMin
+//   J=TaskStartedAt K=TaskEndedAt L=UpdatedAt
+//   M=AutoBreakMin N=TaskDurMin O=DinnerMin P=BreakExceeded(Yes/No)
+// H stores the rolled-up TOTAL break (manual + dinner + auto) so the
+// sheet headline matches what the user sees in the Mac app banner.
+// Manual = H - M - O is derivable, never stored.
 function ensureLiveSheet_(ss) {
-  // Schema (14 cols, post PR #16):
-  //   A=ShiftStartAt B=User C=HomeTeam D=Team E=Activity F=TasksDone
-  //   G=ProdMin H=BreakMin I=IdleMin J=TaskStartedAt K=TaskEndedAt
-  //   L=UpdatedAt M=AutoBreakMin N=TaskDurMin
   var HEADER = ['ShiftStartAt','User','HomeTeam','Team','Activity','TasksDone',
                 'ProdMin','BreakMin','IdleMin','TaskStartedAt','TaskEndedAt',
-                'UpdatedAt','AutoBreakMin','TaskDurMin'];
+                'UpdatedAt','AutoBreakMin','TaskDurMin','DinnerMin','BreakExceeded'];
   var sh = ss.getSheetByName('Live');
   if (!sh) {
     sh = ss.insertSheet('Live');
@@ -954,6 +962,19 @@ function heartbeat_(ss, b) {
     var canonTeam     = resolveTeam_(b.team)     || String(b.team || '');
     var canonHomeTeam = resolveTeam_(b.homeTeam) || String(b.homeTeam || '');
 
+    // Client now sends breakMin as TOTAL (manual + dinner + auto).
+    // Older clients that only send manual still work — H will under-report
+    // by dinner+auto until the client updates, but no crash and the
+    // breakdown columns (M=auto, O=dinner) still get written if present.
+    var hbBreakTotal = Number(b.breakMin || 0);
+    var hbDinnerMin  = Number(b.dinnerMin || 0);
+    var hbAutoMin    = Number(b.autoBreakMin || 0);
+    var hbExceeded   = String(b.breakExceeded || '');
+    if (hbExceeded !== 'Yes' && hbExceeded !== 'No') {
+      // Fallback: derive from total + 60-min allowance if client didn't send.
+      hbExceeded = (hbBreakTotal >= 60) ? 'Yes' : 'No';
+    }
+
     // Row order MUST match HEADER in ensureLiveSheet_.
     var row = [
       shiftStartAt,                                           // A ShiftStartAt
@@ -963,7 +984,7 @@ function heartbeat_(ss, b) {
       String(b.activity || ''),                               // E Activity (may be 'auto_break')
       Number(b.tasksDone || 0),                               // F TasksDone
       Number(b.productionMin || 0),                           // G ProdMin
-      Number(b.breakMin || 0),                                // H BreakMin (manual only — auto in col M)
+      hbBreakTotal,                                           // H BreakMin (TOTAL — manual+dinner+auto)
       Number(b.idleMin || 0),                                 // I IdleMin
       // J TaskStartedAt: client sends ms-epoch when a new task opens.
       // If omitted, preserve the existing value so TLs keep seeing the
@@ -973,8 +994,10 @@ function heartbeat_(ss, b) {
         : existingTaskStarted,
       existingTaskEndedAt,                                    // K TaskEndedAt (preserved; only _bumpLiveAfterTask_ writes it)
       nowPSTdateISTtime_(),                                   // L UpdatedAt
-      Number(b.autoBreakMin || 0),                            // M AutoBreakMin (PR #10)
-      Number(b.taskDurMin   || 0)                             // N TaskDurMin (PR #16)
+      hbAutoMin,                                              // M AutoBreakMin
+      Number(b.taskDurMin   || 0),                            // N TaskDurMin
+      hbDinnerMin,                                            // O DinnerMin
+      hbExceeded                                              // P BreakExceeded (Yes/No)
     ];
     if (matchedRow > 0) {
       sh.getRange(matchedRow, 1, 1, row.length).setValues([row]);
@@ -1015,10 +1038,14 @@ function shiftStart_(ss, b) {
       canonHomeTeam,                   // C HomeTeam
       canonTeam,                       // D Team
       'production',                    // E Activity
-      0, 0, 0, 0,                      // F-I TasksDone/ProdMin/BreakMin/IdleMin
+      0, 0, 0, 0,                      // F-I TasksDone/ProdMin/BreakMin(total)/IdleMin
       '',                              // J TaskStartedAt
       '',                              // K TaskEndedAt
-      nowPSTdateISTtime_()             // L UpdatedAt
+      nowPSTdateISTtime_(),            // L UpdatedAt
+      0,                               // M AutoBreakMin
+      0,                               // N TaskDurMin
+      0,                               // O DinnerMin
+      'No'                             // P BreakExceeded
     ]);
     return { ok: true, upsert: 'insert', row: sh.getLastRow(), shiftStartAt: shiftStartAt };
   });
@@ -1104,8 +1131,9 @@ function liveActivity_(ss, p) {
   var users = [];
   var byTeam = {};
   // Column map: A=ShiftStartAt(0) B=User(1) C=HomeTeam(2) D=Team(3)
-  //   E=Activity(4) F=TasksDone(5) G=ProdMin(6) H=BreakMin(7) I=IdleMin(8)
-  //   J=TaskStartedAt(9) K=TaskEndedAt(10) L=UpdatedAt(11)
+  //   E=Activity(4) F=TasksDone(5) G=ProdMin(6) H=BreakMin(7,TOTAL)
+  //   I=IdleMin(8) J=TaskStartedAt(9) K=TaskEndedAt(10) L=UpdatedAt(11)
+  //   M=AutoBreakMin(12) N=TaskDurMin(13) O=DinnerMin(14) P=BreakExceeded(15)
   vals.forEach(function (r, idx) {
     var rDisp = disp[idx] || [];
     // UpdatedAt can come back as either a String (preferred — written via
@@ -1161,9 +1189,11 @@ function liveActivity_(ss, p) {
       activity:   String(r[4] || ''),       // may be 'auto_break'
       tasksDone:  Number(r[5] || 0),
       prodMin:    Number(r[6] || 0),
-      breakMin:   Number(r[7] || 0),         // manual only
-      autoBreakMin: Number(r[12] || 0),      // M (PR #10) — Auto Break minutes
-      taskDurMin: Number(r[13] || 0),        // N (PR #16) — Task duration sum
+      breakMin:   Number(r[7] || 0),         // TOTAL break (manual + dinner + auto)
+      autoBreakMin: Number(r[12] || 0),      // M — Auto Break minutes (breakdown)
+      dinnerMin:  Number(r[14] || 0),        // O — Dinner minutes (breakdown)
+      breakExceeded: String(r[15] || 'No'),  // P — 'Yes' / 'No'
+      taskDurMin: Number(r[13] || 0),        // N — Task duration sum
       idleMin:    Number(r[8] || 0),
       taskStartedAt: parseTaskStartedAt_(r[9]),
       taskEndedAt: String(r[10] || ''),
@@ -3423,12 +3453,18 @@ function computeDailyAggregates_(date, ss) {
 
     var e = byKey[primaryKey];
     e.productionMin    = Number(sr[4]) || 0;
+    // sr[5] = Sessions F. Post break-breakdown PR this is TOTAL break
+    // (manual+dinner+auto). Pre-PR rows have manual-only — under-reports.
     e.breakMin         = Number(sr[5]) || 0;
     e.dinnerMin        = Number(sr[6]) || 0;
     e.meetingMin       = Number(sr[7]) || 0;
     e.trainingMin      = Number(sr[8]) || 0;
     e.idleMin          = Number(sr[9]) || 0;
-    e.breakExceededMin = Number(sr[10]) || 0;
+    // sr[10] = Sessions K. Post-PR this is 'Yes'/'No' string; pre-PR an
+    // excess-minutes integer. Treat 'Yes' OR positive number as 1, else 0.
+    var rawExceeded = sr[10];
+    var n10 = Number(rawExceeded);
+    e.breakExceededMin = (rawExceeded === 'Yes' || (!isNaN(n10) && n10 > 0)) ? 1 : 0;
     e.autoBreakMin     = Number(sr[11]) || 0;
     // sr[12] = TaskDurMin from Sessions — already counted from team logs
     e.shiftStart       = String(sr[2] || '').trim();
@@ -4004,10 +4040,13 @@ function autoCloseStaleShifts_() {
     var shiftStartStr = String(liveDisp[i][0] || '').trim();
     var updatedAtStr  = String(liveDisp[i][11] || '').trim();
     var prodMin       = Number(liveVals[i][6]) || 0;
+    // Live H is now the TOTAL break (manual+dinner+auto) — copy through.
     var breakMin      = Number(liveVals[i][7]) || 0;
     var idleMin       = Number(liveVals[i][8]) || 0;
-    var autoBreakMin  = Number(liveVals[i][12]) || 0;  // M (PR #10)
-    var taskDurMin    = Number(liveVals[i][13]) || 0;  // N (PR #16)
+    var autoBreakMin  = Number(liveVals[i][12]) || 0;
+    var taskDurMin    = Number(liveVals[i][13]) || 0;
+    var dinnerMin     = Number(liveVals[i][14]) || 0;          // O DinnerMin
+    var liveExceeded  = String(liveVals[i][15] || '');         // P BreakExceeded
 
     // PST date for the Sessions row = first 10 chars of shiftStartAt.
     var pstDate  = shiftStartStr.slice(0, 10).replace(/_/g, '-');
@@ -4016,7 +4055,9 @@ function autoCloseStaleShifts_() {
     var endTm    = updatedAtStr.slice(11) || timeIST_();
     if (!pstDate) continue;
 
-    var breakExceeded = Math.max(0, (breakMin + autoBreakMin) - BREAK_ALLOWANCE_MIN);
+    var breakExceeded = (liveExceeded === 'Yes' || liveExceeded === 'No')
+      ? liveExceeded
+      : ((breakMin >= BREAK_ALLOWANCE_MIN) ? 'Yes' : 'No');
     var key = user.toLowerCase() + '|' + pstDate;
 
     if (sessIndex[key]) {
@@ -4024,16 +4065,18 @@ function autoCloseStaleShifts_() {
       var rowIdx = sessIndex[key];
       sessSh.getRange(rowIdx, 4).setValue(endTm);
       sessSh.getRange(rowIdx, 5).setValue(prodMin);
-      sessSh.getRange(rowIdx, 6).setValue(breakMin);
+      sessSh.getRange(rowIdx, 6).setValue(breakMin);       // F = TOTAL break
+      sessSh.getRange(rowIdx, 7).setValue(dinnerMin);      // G = Dinner
       sessSh.getRange(rowIdx, 10).setValue(idleMin);
-      sessSh.getRange(rowIdx, 11).setValue(breakExceeded);
+      sessSh.getRange(rowIdx, 11).setValue(breakExceeded); // K = Yes/No
       sessSh.getRange(rowIdx, 12).setValue(autoBreakMin);  // L = Auto Break
-      sessSh.getRange(rowIdx, 13).setValue(taskDurMin);    // M = Task Duration (PR #16)
+      sessSh.getRange(rowIdx, 13).setValue(taskDurMin);    // M = Task Duration
+      // K is a string now — formatting cols E..M as integer is harmless for it.
       sessSh.getRange(rowIdx, 5, 1, 9).setNumberFormat('0');
     } else {
       // Append new Sessions row — auto-closed shift
       sessSh.appendRow([user, pstDate, startTm, endTm,
-                        prodMin, breakMin, 0, 0, 0, idleMin, breakExceeded,
+                        prodMin, breakMin, dinnerMin, 0, 0, idleMin, breakExceeded,
                         autoBreakMin, taskDurMin]);
       sessSh.getRange(sessSh.getLastRow(), 5, 1, 9).setNumberFormat('0');
     }
@@ -4824,9 +4867,11 @@ function _readUserLiveRow_(ss, user) {
         activity:     String(vals[i][4] || ''),       // may be 'auto_break'
         tasksDone:    Number(vals[i][5]) || 0,
         prodMin:      Number(vals[i][6]) || 0,
-        breakMin:     Number(vals[i][7]) || 0,        // manual only
-        autoBreakMin: Number(vals[i][12]) || 0,       // M (PR #10)
-        taskDurMin:   Number(vals[i][13]) || 0,       // N (PR #16)
+        breakMin:     Number(vals[i][7]) || 0,        // TOTAL (manual+dinner+auto)
+        autoBreakMin: Number(vals[i][12]) || 0,       // M
+        taskDurMin:   Number(vals[i][13]) || 0,       // N
+        dinnerMin:    Number(vals[i][14]) || 0,       // O
+        breakExceeded: String(vals[i][15] || 'No'),   // P (Yes/No)
         idleMin:      Number(vals[i][8]) || 0
       };
     }
@@ -4971,17 +5016,20 @@ function myStats_(ss, p) {
     totals: {
       shifts: totals.shifts,
       productionMin: totals.production,
-      breakMin:      totals.break_,           // manual break only
-      autoBreakMin:  totals.autoBreak,        // PR #10 — auto-break minutes
-      totalBreakMin: totals.break_ + totals.autoBreak,
+      // breakMin is now the rolled-up TOTAL (manual+dinner+auto). For old
+      // Sessions rows written before this PR, F was manual-only — those
+      // shifts under-report by dinner+auto until backfilled.
+      breakMin:      totals.break_,
+      autoBreakMin:  totals.autoBreak,
+      totalBreakMin: totals.break_,           // alias for backward compat
       dinnerMin:     totals.dinner,
       meetingMin:    totals.meeting,
       trainingMin:   totals.training,
       idleMin:       totals.idle,
-      taskDurMin:    totals.taskDur,          // PR #16 — sum of task durations
+      taskDurMin:    totals.taskDur,
       productiveMin: productiveMin,
       denomMin:      denomMin,
-      utilization:   utilization              // PR #16 — taskDur / 480 × 100
+      utilization:   utilization
     },
     teams:    allTeams,
     selectedTeam: requestedTeam || null,

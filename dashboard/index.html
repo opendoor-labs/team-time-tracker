@@ -1218,10 +1218,13 @@
     const rows = data._aggregates || [];
     // DailyAggregates schema (cols 0..17):
     //   0=Date 1=Team 2=User 3=HomeTeam 4=Tasks 5=TaskDurMin 6=ProductionMin
-    //   7=BreakMin 8=AutoBreakMin 9=DinnerMin 10=MeetingMin 11=TrainingMin
-    //   12=IdleMin 13=BreakExceededMin 14=ShiftStart 15=ShiftEnd 16=Util 17=Source
+    //   7=BreakMin (TOTAL = manual+dinner+auto) 8=AutoBreakMin 9=DinnerMin
+    //   10=MeetingMin 11=TrainingMin 12=IdleMin
+    //   13=BreakExceededCount (1 per shift exceeded; was excess-min pre-PR)
+    //   14=ShiftStart 15=ShiftEnd 16=Util 17=Source
     let totalTasks = 0;
-    let prodMin = 0, breakMin = 0, autoBreakMin = 0;
+    let prodMin = 0, breakMin = 0, autoBreakMin = 0, dinnerMin = 0;
+    let exceededShifts = 0;
     let taskDurMin = 0;
     const userSet = new Set();
     const dayCount = new Set();
@@ -1238,18 +1241,22 @@
       totalTasks += Number(r[4]) || 0;
       taskDurMin += Number(r[5]) || 0;
       prodMin += Number(r[6]) || 0;
-      breakMin += Number(r[7]) || 0;
+      breakMin += Number(r[7]) || 0;            // TOTAL break
       autoBreakMin += Number(r[8]) || 0;
+      dinnerMin += Number(r[9]) || 0;
+      if ((Number(r[13]) || 0) > 0) exceededShifts += 1;
       if (user) userSet.add(user.toLowerCase());
       dayCount.add(String(r[0] || '').slice(0, 10));
     });
     const days = Math.max(1, dayCount.size);
-    const denomMin = 480 * days;  // 8 hrs × dayCount
+    const denomMin = 480 * days;
     const utilization = denomMin > 0
       ? Math.max(0, Math.min(100, Math.round((taskDurMin / denomMin) * 100)))
       : 0;
     const prodHours = (prodMin / 60).toFixed(1);
-    const breakHours = ((breakMin + autoBreakMin) / 60).toFixed(1);
+    // breakMin is the rolled-up total — do NOT add autoBreakMin again.
+    const breakHours = (breakMin / 60).toFixed(1);
+    const manualBreakMin = Math.max(0, breakMin - autoBreakMin - dinnerMin);
     const teamsCount = (data.teams || []).filter(t => teamInFilter(t)).length;
 
     cardsEl.classList.remove('hidden');
@@ -1267,7 +1274,7 @@
       <div class="card" data-c="break">
         <div class="k"><span class="icon">☕</span>Break Hours</div>
         <div class="v">${breakHours}<span class="unit">hrs</span></div>
-        <div class="sub">Manual ${breakMin}m · Auto ${autoBreakMin}m</div>
+        <div class="sub">Manual ${manualBreakMin}m · Dinner ${dinnerMin}m · Auto ${autoBreakMin}m${exceededShifts > 0 ? ` · <b style="color:#ff6b5b;">⚠️ ${exceededShifts} shift${exceededShifts>1?'s':''} exceeded</b>` : ''}</div>
       </div>
       <div class="card" data-c="util">
         <div class="k"><span class="icon">%</span>Avg Utilization</div>
@@ -1449,10 +1456,14 @@
         if (!userMatches(u.user)) return;
         const nm = String(u.user || '').toLowerCase().trim();
         if (sessionUserKey.has(nm + '|' + today)) return;
+        // u.breakMin is now the rolled-up TOTAL (manual+dinner+auto).
+        // Manual is derivable: total - auto - dinner.
         const ab = Number(u.autoBreakMin) || 0;
+        const dn = Number(u.dinnerMin)    || 0;
+        const tot = Number(u.breakMin)    || 0;
         prodMin  += Number(u.prodMin)  || 0;
-        breakMin += (Number(u.breakMin) || 0) + ab;
-        manualBreakMin += Number(u.breakMin) || 0;
+        breakMin += tot;
+        manualBreakMin += Math.max(0, tot - ab - dn);
         autoBreakMin += ab;
         const wm = Number(u.shiftMinutesElapsed) ||
                    wallMinutesSinceIst_(u.shiftStartAt);
@@ -1722,8 +1733,8 @@
       // in the table as numeric cells with no column label above them.
       if (key === 'sessions') {
         const SESS_HEADER = ['Name', 'Date', 'Start', 'End',
-          'Production (min)', 'Break (min)', 'Dinner (min)', 'Meeting (min)',
-          'Training (min)', 'Idle (min)', 'Break Exceeded (min)',
+          'Production (min)', 'Break Total (min)', 'Dinner (min)', 'Meeting (min)',
+          'Training (min)', 'Idle (min)', 'Break Exceeded',
           'Auto Break (min)', 'Task Duration (min)'];
         // Find max column count across all rows
         let maxCols = header.length;
@@ -2141,21 +2152,25 @@
         const act = activityClass(u.activity);
         const tasks = Number(u.tasksDone || 0);
         const prod = Math.round(Number(u.prodMin || 0));
-        const brk = Math.round(Number(u.breakMin || 0));
+        // u.breakMin is now the rolled-up TOTAL (manual+dinner+auto).
+        const totBrk = Math.round(Number(u.breakMin || 0));
         const autoBrk = Math.round(Number(u.autoBreakMin || 0));
+        const dinBrk = Math.round(Number(u.dinnerMin || 0));
+        const manBrk = Math.max(0, totBrk - autoBrk - dinBrk);
+        const exceeded = String(u.breakExceeded || '') === 'Yes';
         const age = Number(u.ageMin || 0);
         const staleHtml = age > 6 ? `<div class="live-user-stale">⚠️ stale ${Math.round(age)}m ago</div>` : '';
+        const exceedHtml = exceeded ? `<div class="live-user-stale" style="color:#ff6b5b;">⚠️ Break exceeded (${totBrk}m)</div>` : '';
         const shiftStart = String(u.shiftStartAt || '');
         const shiftStartHm = (shiftStart.match(/\s(\d{2}:\d{2})/) || [])[1] || '';
         const shiftHtml = shiftStartHm ? `<div class="live-user-shift">🟢 Shift: ${shiftStartHm} IST</div>` : '';
-        // PR #10: render Auto Break with the lock icon and a clearer label
         const actLabel = (act === 'auto_break')
           ? '🔒 Auto Break'
           : String(u.activity || 'idle');
-        // Show break breakdown when auto-break has any minutes
-        const brkMeta = autoBrk > 0
-          ? `${tasks} tasks · ${prod}m prod · ${brk + autoBrk}m break (manual ${brk}m · auto ${autoBrk}m)`
-          : `${tasks} tasks · ${prod}m prod · ${brk}m break`;
+        // Show breakdown when any non-manual portion is non-zero
+        const brkMeta = (autoBrk > 0 || dinBrk > 0)
+          ? `${tasks} tasks · ${prod}m prod · ${totBrk}m break (M ${manBrk} · D ${dinBrk} · A ${autoBrk})`
+          : `${tasks} tasks · ${prod}m prod · ${totBrk}m break`;
         return `
           <div class="live-user">
             <div class="live-user-name">
@@ -2164,6 +2179,7 @@
             </div>
             <div class="live-user-meta">${brkMeta}</div>
             ${shiftHtml}
+            ${exceedHtml}
             ${staleHtml}
           </div>`;
       }).join('');
