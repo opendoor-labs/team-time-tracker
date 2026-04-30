@@ -3205,18 +3205,72 @@
 
   function buildUserPanel(q) {
     if (!state.data) return;
-    // Team-scoped: when a team filter is active, only show users whose
-    // home team is in the selected set. Users with unknown team ('—')
-    // are hidden under a team filter (we can't tell where they belong);
-    // they reappear when the team filter is cleared.
-    const teamScoped = getAllUsers(state.data).filter(u => {
-      if (!filters.teams || filters.teams === null) return true;  // all teams
-      const t = String(u.team || '').trim();
-      if (!t || t === '—') return false;  // unknown — hide under team filter
-      return filters.teams.includes(t);
-    });
+    // Team-scoped: when a team filter is active and not "all teams", build
+    // the user list DIRECTLY from team-aware data sources (Live, Attendance,
+    // _aggregates, team logs). This avoids the over-strict "hide unknown
+    // team" rule that emptied the dropdown when most users came in via
+    // availableUsers (which lacks team info).
+    const allTeamCount = (state.data.teams || []).length;
+    const teamFilterActive =
+      Array.isArray(filters.teams) &&
+      filters.teams.length > 0 &&
+      filters.teams.length < allTeamCount;
+
+    let candidates;
+    if (!teamFilterActive) {
+      candidates = getAllUsers(state.data);
+    } else {
+      const allowed = new Set(filters.teams.map(t => String(t).trim()));
+      const usersByName = new Map();
+      const add = (name, team) => {
+        const n = String(name || '').trim();
+        if (!n) return;
+        if (!usersByName.has(n)) usersByName.set(n, String(team || '').trim() || '—');
+      };
+      // 1. Live activity rows — match either active team OR home team.
+      if (state && state.liveData && Array.isArray(state.liveData.users)) {
+        state.liveData.users.forEach(u => {
+          const t = String(u.team || '').trim();
+          const h = String(u.homeTeam || '').trim();
+          if (allowed.has(t) || allowed.has(h)) add(u.user, t || h);
+        });
+      }
+      // 2. Attendance — User col + (Team OR HomeTeam) col.
+      if (state.data.attendance && Array.isArray(state.data.attendance.rows)) {
+        const ah = (state.data.attendance.header || []).map(h => String(h).toLowerCase());
+        const uIdx = ah.indexOf('user');
+        const tIdx = ah.indexOf('team') >= 0 ? ah.indexOf('team') : ah.indexOf('hometeam');
+        if (uIdx >= 0 && tIdx >= 0) {
+          state.data.attendance.rows.forEach(r => {
+            const t = String(r[tIdx] || '').trim();
+            if (allowed.has(t)) add(r[uIdx], t);
+          });
+        }
+      }
+      // 3. DailyAggregates — col 1=Team, col 2=User, col 3=HomeTeam.
+      if (Array.isArray(state.data._aggregates)) {
+        state.data._aggregates.forEach(r => {
+          const t = String(r[1] || '').trim();
+          const h = String(r[3] || '').trim();
+          if (allowed.has(t) || allowed.has(h)) add(r[2], t || h);
+        });
+      }
+      // 4. Team task logs — only the selected teams' tabs.
+      if (state.data.logs) {
+        filters.teams.forEach(team => {
+          const e = state.data.logs[team] || { header: [], rows: [] };
+          const hLower = (e.header || []).map(h => String(h).toLowerCase());
+          const ui = hLower.indexOf('user') >= 0 ? hLower.indexOf('user') : hLower.indexOf('name');
+          if (ui >= 0) e.rows.forEach(r => add(r[ui], team));
+        });
+      }
+      candidates = Array.from(usersByName.entries())
+        .map(([name, team]) => ({ name, team }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     q = (q || '').toLowerCase().trim();
-    const matches = teamScoped
+    const matches = candidates
       .filter(u => !q || u.name.toLowerCase().includes(q) || u.team.toLowerCase().includes(q))
       .slice(0, 200);
     const panel = $('userPanel');
