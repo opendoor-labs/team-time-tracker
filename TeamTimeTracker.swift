@@ -21,6 +21,7 @@ import Cocoa
 import WebKit
 import IOKit
 import CoreGraphics
+import CommonCrypto   // PR #38 — for SHA256 self-integrity check
 
 // ── Constants ──────────────────────────────────────────────────────────
 let APP_VERSION = "2.7.5"
@@ -29,6 +30,59 @@ let HTML_URL = "https://team-time-tracker-osoe.onrender.com/index.html"
 let MY_DASH_URL = "https://team-time-tracker-osoe.onrender.com/dashboard/my/index.html"
 let INSTALL_DIR = NSHomeDirectory() + "/Library/TeamTracker"
 let HTML_PATH = INSTALL_DIR + "/index.html"
+// PR #38 — Self-integrity check: install.sh writes the binary's SHA256
+// to this file (chmod 444). At launch we re-hash the binary and compare.
+// Mismatch → log + alert + exit. Soft-mode: missing file is permitted
+// (existing pilot users installed before PR #36 don't have this file).
+let BINARY_HASH_PATH = INSTALL_DIR + "/binary.sha256"
+
+// PR #38 — Compute SHA256 of a file, hex-encoded lowercase.
+func sha256OfFile(_ path: String) -> String? {
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+    var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+    data.withUnsafeBytes { ptr in
+        _ = CC_SHA256(ptr.baseAddress, CC_LONG(data.count), &hash)
+    }
+    return hash.map { String(format: "%02x", $0) }.joined()
+}
+
+// PR #38 — At launch, verify our own binary matches the recorded hash.
+// Returns true if check passes (or hash file missing in soft mode).
+// Returns false if a hash file exists AND the hashes mismatch — caller
+// should refuse to start.
+func runSelfIntegrityCheck() -> Bool {
+    let fm = FileManager.default
+    guard fm.fileExists(atPath: BINARY_HASH_PATH) else {
+        // Soft mode: pre-PR-#36 installs have no hash file. Allow start.
+        // (Server-side allowlist in Apps Script is the strict gate.)
+        NSLog("[ttk] integrity: no binary.sha256 (legacy install) — soft pass")
+        return true
+    }
+    guard let expected = (try? String(contentsOfFile: BINARY_HASH_PATH))?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !expected.isEmpty else {
+        NSLog("[ttk] integrity: binary.sha256 unreadable — soft pass")
+        return true
+    }
+    let myPath = Bundle.main.executablePath ?? ""
+    guard let actual = sha256OfFile(myPath) else {
+        NSLog("[ttk] integrity: failed to hash own binary — soft pass")
+        return true
+    }
+    if actual != expected {
+        NSLog("[ttk] INTEGRITY VIOLATION: expected \(expected) got \(actual)")
+        let alert = NSAlert()
+        alert.messageText = "Team Time Tracker — Integrity Check Failed"
+        alert.informativeText = "This app's binary has been modified since install. " +
+            "For your security, the app will not start.\n\n" +
+            "Please re-install via the official command. If you didn't modify " +
+            "the app, contact your TL or arun.mohan@opendoor.com immediately."
+        alert.alertStyle = .critical
+        alert.runModal()
+        return false
+    }
+    NSLog("[ttk] integrity: self-hash verified ✓")
+    return true
+}
 
 let HTML_REFRESH_TIMEOUT: TimeInterval = 5.0
 let CONFIG_POLL_INTERVAL: TimeInterval = 300   // 5 min
@@ -47,6 +101,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
 
     // ── Launch ─────────────────────────────────────────────────────────
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // ── PR #38 — Self-integrity check ───────────────────────────────
+        // Refuse to start if the binary has been tampered with since
+        // install. Soft mode: legacy installs without binary.sha256 file
+        // pass through (server-side allowlist is the strict gate).
+        if !runSelfIntegrityCheck() {
+            NSLog("[ttk] integrity check failed — exiting")
+            NSApp.terminate(nil)
+            return
+        }
+
         // ── Singleton guard ─────────────────────────────────────────────
         // Defense in depth: even if LaunchServices + LaunchAgent race and
         // spawn two processes, only one stays alive. Count every process
