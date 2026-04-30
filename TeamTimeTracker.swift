@@ -576,12 +576,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler,
     }
 
     // ── Apps Script API ────────────────────────────────────────────────
+    // PR #39 — Cache binary SHA256 once at app launch (read from
+    // ~/Library/TeamTracker/binary.sha256). Sent with every API call
+    // for server-side allowlist validation.
+    static var cachedBinaryHash: String = {
+        guard let s = try? String(contentsOfFile: BINARY_HASH_PATH) else { return "" }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }()
+
     func postToApi(action: String, payload: [String: Any],
                    done: @escaping ([String: Any]) -> Void) {
         var body = payload
         body["action"] = action
         body["user"] = NSFullUserName()
         body["version"] = APP_VERSION
+        // PR #39 — include binary hash so server can validate against allowlist
+        body["binaryHash"] = AppDelegate.cachedBinaryHash
         guard let data = try? JSONSerialization.data(withJSONObject: body),
               let url = URL(string: SHEET_URL) else {
             done(["ok": false, "error": "bad_url"]); return

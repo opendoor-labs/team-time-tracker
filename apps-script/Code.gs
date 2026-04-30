@@ -119,6 +119,20 @@ function doPost(e) {
     if (_debugAuditFor_(ss, data.email || data.user || '')) {
       audit_(ss, data.action || 'post', data.email || data.user || '', data);
     }
+    // PR #39 — Mac-app actions must include a valid binaryHash matching
+    // the Config!B13 allowlist. Soft mode: missing hash is logged but
+    // allowed (existing pilot users predate PR #38 and don't send it).
+    // After all users are on PR #38, flip Config!B14 = "strict" to
+    // reject missing-hash requests.
+    var MAC_ACTIONS = ['logTask','markAttendance','closeSession',
+                       'heartbeat','liveStatus','shiftStart','idleAlert'];
+    if (MAC_ACTIONS.indexOf(data.action) >= 0) {
+      var binCheck = _verifyBinaryHash_(ss, data);
+      if (!binCheck.ok) {
+        return json_({ ok: false, error: 'binary_rejected',
+                       hash: binCheck.hashShort });
+      }
+    }
     switch (data.action) {
       case 'logTask':         return json_(logTask_(ss, data));
       case 'markAttendance':  return json_(markAttendance_(ss, data));
@@ -134,6 +148,71 @@ function doPost(e) {
     }
   } catch (err) {
     return json_({ ok: false, error: String(err) });
+  }
+}
+
+// PR #39 — Server-side binary hash validation.
+// Reads Config!B13 (comma-separated allowlist of valid SHA256s).
+// Reads Config!B14 (mode: "soft" or "strict"; defaults to "soft").
+//
+// Soft mode (default during pilot rollout):
+//   - Hash present + matches allowlist → allow
+//   - Hash present + NOT in allowlist → reject + log + email
+//   - Hash missing                    → allow + log (legacy install)
+//
+// Strict mode (after all users re-installed):
+//   - Hash missing                    → reject + log
+//   - Otherwise same as soft
+//
+// Updating allowlist: edit Config!B13 with current build's SHA256
+// (printed by install.sh during install). Multiple values separated
+// by commas to support multiple binary versions during rollout.
+function _verifyBinaryHash_(ss, data) {
+  try {
+    var sh = ss.getSheetByName('Config');
+    if (!sh) return { ok: true };  // no config → no enforcement
+    var allowed = String(sh.getRange('B13').getValue() || '').trim();
+    var mode    = String(sh.getRange('B14').getValue() || 'soft').toLowerCase().trim();
+    var hash    = String(data.binaryHash || '').trim().toLowerCase();
+    var hashShort = hash ? hash.slice(0, 16) + '…' : '(none)';
+
+    // No allowlist configured → no enforcement (initial deploy)
+    if (!allowed) return { ok: true };
+
+    if (!hash) {
+      // Missing hash header
+      try {
+        handleLogError_(ss, {
+          source: 'apps-script', kind: 'binary-hash-missing',
+          message: 'Mac app request without binaryHash',
+          user: String(data.user || ''), context: data.action || ''
+        });
+      } catch (_) {}
+      return mode === 'strict'
+        ? { ok: false, hashShort: hashShort }
+        : { ok: true };
+    }
+
+    var allowedList = allowed.split(',').map(function (s) {
+      return String(s || '').trim().toLowerCase();
+    }).filter(Boolean);
+    if (allowedList.indexOf(hash) >= 0) {
+      return { ok: true };
+    }
+
+    // Hash present but unknown — always reject
+    try {
+      handleLogError_(ss, {
+        source: 'apps-script', kind: 'binary-hash-mismatch',
+        message: 'Mac app sent unknown binary hash',
+        user: String(data.user || ''),
+        context: (data.action || '') + ' hash=' + hashShort
+      });
+    } catch (_) {}
+    return { ok: false, hashShort: hashShort };
+  } catch (err) {
+    // Never fail closed on Config read errors — just allow
+    return { ok: true };
   }
 }
 
