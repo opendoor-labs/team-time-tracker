@@ -165,7 +165,10 @@ cat > "$LAUNCH_AGENTS/$PLIST_NAME.plist" << AGENT
         <string>$APP_DIR/Contents/MacOS/TeamTimeTracker</string>
     </array>
     <key>RunAtLoad</key>        <true/>
-    <key>KeepAlive</key>        <true/>
+    <!-- PR #35 — KeepAlive=false so users can fully quit the app.
+         Was overly aggressive (true = "can't be stopped" feel).
+         App still auto-starts on every login via RunAtLoad. -->
+    <key>KeepAlive</key>        <false/>
     <key>StandardOutPath</key>  <string>/tmp/teamtracker.log</string>
     <key>StandardErrorPath</key><string>/tmp/teamtracker-error.log</string>
 </dict>
