@@ -2127,7 +2127,7 @@ const RULES = {
 
   // Auto-break: only when Mac is LOCKED / CLOSED for 15 min.
   // Does NOT trigger from mouse inactivity alone.
-  MAC_LOCK_BREAK_SEC:  900,   // 15 min — production value
+  MAC_LOCK_BREAK_SEC:  720,   // PR #46 — 12 min (was 900/15 min); auto-break threshold
 
   // Welcome-back modal: only show for MANUAL breaks longer than this
   MANUAL_BREAK_WELCOME_SEC: 300, // 5 min — production value
@@ -4223,7 +4223,10 @@ function lockMac() {
     document.getElementById('lockCountdown').textContent = lockedSec + 's';
     updateIdleBanner();
 
-    if (lockedSec >= RULES.MAC_LOCK_BREAK_SEC && state.activity !== 'break') {
+    // PR #46 — auto-break ONLY triggers when user was in production at lock
+    // time. Previously fired for any non-break activity, which incorrectly
+    // overrode dinner/meeting/training when user locked Mac while on those.
+    if (lockedSec >= RULES.MAC_LOCK_BREAK_SEC && state.activity === 'production') {
       triggerAutoBreak();
       if (statusEl) {
         statusEl.textContent = `☕ Auto Break logged — unlock to resume Production`;
@@ -4261,12 +4264,18 @@ function unlockMac() {
   // crossed, ALWAYS credit lockedMs to state.totals.break (regardless
   // of whether autoBreak was already set), and trigger autoBreak if
   // it isn't set yet.
+  // PR #46 — same scope tightening: only credit auto_break and trigger
+  // when the user was in PRODUCTION when they locked. If they locked while
+  // on dinner/meeting/training, the lock time stays attributed to that
+  // activity (matches user expectation: auto-break never overrides
+  // explicitly chosen non-production activities).
   if (lockedSec >= RULES.MAC_LOCK_BREAK_SEC &&
+      state.activity === 'production' &&
       state.shiftEnded !== true && state.shiftActive === true) {
     // PR #10: credit lock duration to auto_break bucket (not the manual
     // break bucket) so TLs / dashboards see the breakdown.
     state.totals.auto_break = (state.totals.auto_break || 0) + lockedMs;
-    if (!state.autoBreak && state.activity !== 'break') {
+    if (!state.autoBreak) {
       triggerAutoBreak();
     }
     // Update the auto-break log row's duration so the Recent Tasks
