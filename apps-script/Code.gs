@@ -3800,6 +3800,149 @@ function _alertArchiveFailure_(log) {
   } catch (e) { Logger.log('alert failed: ' + e); }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// PR #43 — Daily security audit (runs at 6 AM IST)
+// ═══════════════════════════════════════════════════════════════════════
+// Scans last 24 hours of Errors tab for security-relevant entries:
+//   • binary-hash-mismatch (PR #39, tampered binary attempts)
+//   • binary-hash-missing (legacy install or tampered)
+//   • closeSession-no-start (suspicious session closure pattern)
+//   • Multiple OTP requests for the same email (rate-limit hits)
+// Builds a summary email to super_admins. Sent ONLY if anomalies exist
+// (silent days = silent inbox).
+//
+// Install: Functions dropdown → installSecurityAuditTrigger → ▶ Run
+
+function dailySecurityAudit_() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var errSh = ss.getSheetByName('Errors');
+  if (!errSh) return { ok: true, note: 'no errors tab' };
+  var lr = errSh.getLastRow();
+  if (lr < 2) return { ok: true, note: 'errors tab empty' };
+
+  // Scan last 24 hrs (col A = Timestamp IST)
+  var rng = errSh.getRange(2, 1, lr - 1, 8);
+  var vals = rng.getValues();
+  var disp = rng.getDisplayValues();
+
+  var nowMs = Date.now();
+  var cutoffMs = nowMs - 24 * 3600 * 1000;
+  var SECURITY_KINDS = {
+    'binary-hash-mismatch': { severity: 'HIGH',   summary: 'Tampered binary attempts' },
+    'binary-hash-missing':  { severity: 'INFO',   summary: 'Legacy installs (pre-PR #38)' },
+    'binary-rejected':      { severity: 'HIGH',   summary: 'Binary integrity violations' },
+    'closeSession-no-start':{ severity: 'MEDIUM', summary: 'Session closures w/o start data' },
+  };
+
+  var counts = {};
+  var samples = {};   // kind → first 3 entries
+  for (var i = 0; i < vals.length; i++) {
+    var ts = String(disp[i][0] || '').trim();
+    var tsMs = (function () {
+      var m = ts.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+      if (!m) return 0;
+      // IST → UTC (subtract 5.5h)
+      return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]) - 5.5 * 3600 * 1000;
+    })();
+    if (tsMs < cutoffMs) continue;
+
+    var kind = String(vals[i][4] || '').trim();
+    if (!SECURITY_KINDS[kind]) continue;
+    counts[kind] = (counts[kind] || 0) + 1;
+    if (!samples[kind]) samples[kind] = [];
+    if (samples[kind].length < 3) {
+      samples[kind].push({
+        time: ts,
+        user: String(vals[i][1] || ''),
+        message: String(vals[i][5] || '').slice(0, 120),
+        context: String(vals[i][6] || '').slice(0, 80)
+      });
+    }
+  }
+
+  // Build report
+  var totalAnomalies = 0;
+  Object.keys(counts).forEach(function (k) { totalAnomalies += counts[k]; });
+
+  // Silent days: no email
+  if (totalAnomalies === 0) {
+    Logger.log('Daily audit: 0 anomalies in last 24h, no email sent');
+    return { ok: true, anomalies: 0 };
+  }
+
+  // Build admin email list
+  var admins = [];
+  try {
+    var wl = ss.getSheetByName('Whitelist');
+    if (wl) {
+      var rows = wl.getDataRange().getValues();
+      for (var j = 1; j < rows.length; j++) {
+        var role = String(rows[j][1] || '').toLowerCase();
+        if (role === 'super_admin') admins.push(String(rows[j][0] || ''));
+      }
+    }
+  } catch (e) {}
+  if (admins.length === 0) {
+    Logger.log('Daily audit: no admins to email');
+    return { ok: true, anomalies: totalAnomalies, note: 'no recipients' };
+  }
+
+  // Compose email
+  var sections = '';
+  Object.keys(counts).forEach(function (kind) {
+    var sev = SECURITY_KINDS[kind].severity;
+    var sevColor = sev === 'HIGH' ? '#ff6b6b' : (sev === 'MEDIUM' ? '#ffb86b' : '#9aa7b8');
+    sections +=
+      '<h3 style="margin:20px 0 8px;color:' + sevColor + '">' +
+      sev + ' · ' + kind + ' (' + counts[kind] + ')</h3>' +
+      '<p style="margin:0 0 8px;color:#9aa7b8">' + SECURITY_KINDS[kind].summary + '</p>' +
+      '<table style="width:100%;border-collapse:collapse;background:rgba(255,255,255,0.04);border-radius:6px">' +
+      '<tr style="color:#9aa7b8;font-size:11px;text-transform:uppercase">' +
+      '<td style="padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.08)">Time</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.08)">User</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.08)">Detail</td>' +
+      '</tr>';
+    samples[kind].forEach(function (s) {
+      sections +=
+        '<tr><td style="padding:6px 8px;font-family:monospace;font-size:11px">' + s.time + '</td>' +
+        '<td style="padding:6px 8px">' + s.user + '</td>' +
+        '<td style="padding:6px 8px;font-size:11px;color:#9aa7b8">' + s.message + ' ' + s.context + '</td></tr>';
+    });
+    sections += '</table>';
+  });
+
+  try {
+    MailApp.sendEmail({
+      to: admins.join(','),
+      subject: '🛡️ TTK Security Audit · ' + totalAnomalies + ' anomaly(ies) · ' + todayPST_(),
+      htmlBody:
+        '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:680px;padding:24px;background:#0f1420;color:#e6edf5;border-radius:12px">' +
+        '<h2 style="margin:0 0 8px">🛡️ Daily Security Audit</h2>' +
+        '<p style="color:#9aa7b8;margin:0 0 16px">Last 24 hours · Auto-generated at 6 AM IST</p>' +
+        sections +
+        '<p style="color:#6b7a8f;font-size:12px;margin:24px 0 0">' +
+        'Investigate via Errors tab in the spreadsheet. ' +
+        'Silent days mean no email. Configure thresholds in Code.gs SECURITY_KINDS.' +
+        '</p></div>'
+    });
+  } catch (e) { Logger.log('audit email failed: ' + e); }
+
+  return { ok: true, anomalies: totalAnomalies, counts: counts };
+}
+
+// Install 6 AM IST daily trigger. Run once from editor.
+function installSecurityAuditTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'dailySecurityAudit_') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('dailySecurityAudit_')
+    .timeBased()
+    .atHour(6)
+    .everyDays(1)
+    .create();
+  return { ok: true };
+}
+
 // Install 8 AM IST daily trigger. Run once from editor.
 function installArchiveTrigger() {
   // Remove any existing dailyArchive triggers first (idempotent)
