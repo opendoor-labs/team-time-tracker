@@ -3137,6 +3137,8 @@
         if (e.target.checked) filters.teams = [...new Set([...filters.teams, t])];
         else filters.teams = filters.teams.filter(x => x !== t);
         resyncRoleFiltersToTeams();
+        // Rebuild user dropdown so it re-scopes to the new team selection.
+        try { buildUserPanel($('userInput') ? $('userInput').value : ''); } catch (_) {}
         updateFilterUI();
         renderSummaryCards();
         renderTabs();
@@ -3203,9 +3205,18 @@
 
   function buildUserPanel(q) {
     if (!state.data) return;
-    const all = getAllUsers(state.data);
+    // Team-scoped: when a team filter is active, only show users whose
+    // home team is in the selected set. Users with unknown team ('—')
+    // are hidden under a team filter (we can't tell where they belong);
+    // they reappear when the team filter is cleared.
+    const teamScoped = getAllUsers(state.data).filter(u => {
+      if (!filters.teams || filters.teams === null) return true;  // all teams
+      const t = String(u.team || '').trim();
+      if (!t || t === '—') return false;  // unknown — hide under team filter
+      return filters.teams.includes(t);
+    });
     q = (q || '').toLowerCase().trim();
-    const matches = all
+    const matches = teamScoped
       .filter(u => !q || u.name.toLowerCase().includes(q) || u.team.toLowerCase().includes(q))
       .slice(0, 200);
     const panel = $('userPanel');
