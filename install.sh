@@ -149,6 +149,17 @@ if [ ! -f "$APP_DIR/Contents/MacOS/TeamTimeTracker" ]; then
 fi
 echo "      ✅ Bundle created + signed"
 
+# ── PR #36 — Capture binary SHA256 fingerprint for runtime integrity ──
+# Self-integrity check (PR #38) reads this file at app launch and
+# refuses to run if the in-memory binary's hash doesn't match. Server
+# (PR #39) also keeps an allowlist; tampered binaries get rejected.
+# File is locked read-only so casual modification fails silently.
+BIN_HASH=$(shasum -a 256 "$APP_DIR/Contents/MacOS/TeamTimeTracker" | awk '{print $1}')
+echo "$BIN_HASH" > "$INSTALL_DIR/binary.sha256"
+chmod 444 "$INSTALL_DIR/binary.sha256"
+echo "      🔐 Binary SHA256: ${BIN_HASH:0:16}…"
+echo "      🔐 Saved to $INSTALL_DIR/binary.sha256 (read-only)"
+
 # ── Step 5: LaunchAgent (auto-start on login) ──
 echo "[5/6] Setting up auto-start..."
 mkdir -p "$LAUNCH_AGENTS"
