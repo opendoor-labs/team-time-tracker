@@ -3860,11 +3860,11 @@ function startClock() {
     markSnapshotDirty();
     saveSnapshotIfDirty();
 
-    // Update stats — Break display = manual + auto (user wants combined total
-    // visible; breakdown shown in subtext / dashboards).
+    // Update stats — Break display = manual + dinner + auto (rolled-up
+    // total, matches Live tab H + Sessions F + dashboards).
     document.getElementById('sProd').textContent = fmtHM(state.totals.production);
     document.getElementById('sBreak').textContent = fmtHM(
-      (state.totals.break || 0) + (state.totals.auto_break || 0)
+      (state.totals.break || 0) + (state.totals.dinner || 0) + (state.totals.auto_break || 0)
     );
     document.getElementById('sMeet').textContent = fmtHM(state.totals.meeting);
     document.getElementById('sIdle').textContent = fmtHM(state.idleTotalMs || 0);
@@ -4260,13 +4260,25 @@ function lockMac() {
       if (cdEl) cdEl.classList.add('fired');
     }
 
-    // After auto-break has fired, credit each tick's wall-clock delta to
-    // state.totals.auto_break so heartbeat reports growing minutes.
-    // clockInterval skips ticks while macLocked (by design — see PR #1
-    // / PR #10 guard), so without this lockInterval credit, auto-break
-    // minutes stay at 0 until unlockMac runs.
-    if (state.autoBreak && tickDelta > 0 && tickDelta < 5000) {
-      state.totals.auto_break = (state.totals.auto_break || 0) + tickDelta;
+    // Credit lock-window ticks. clockInterval skips while macLocked, so
+    // without this, time during a lock would silently vanish from totals.
+    //   • production + autoBreak fired → auto_break bucket (existing)
+    //   • non-production (dinner/break/meeting/training) → that bucket
+    //     directly (PR #48 fix — was being lost entirely)
+    //   • production + autoBreak NOT yet fired (within 12-min threshold)
+    //     → no credit here; unlockMac decides retroactively
+    // Track running total in state._lockTickCredited so unlockMac can
+    // avoid double-counting.
+    if (tickDelta > 0 && tickDelta < 5000) {
+      let lockBucket = null;
+      if (state.autoBreak) lockBucket = 'auto_break';
+      else if (state.activity && state.activity !== 'production' && state.activity !== 'idle') {
+        lockBucket = state.activity;
+      }
+      if (lockBucket) {
+        state.totals[lockBucket] = (state.totals[lockBucket] || 0) + tickDelta;
+        state._lockTickCredited = (state._lockTickCredited || 0) + tickDelta;
+      }
     }
   }, 1000);
 }
@@ -4289,17 +4301,21 @@ function unlockMac() {
   // crossed, ALWAYS credit lockedMs to state.totals.break (regardless
   // of whether autoBreak was already set), and trigger autoBreak if
   // it isn't set yet.
-  // PR #46 — same scope tightening: only credit auto_break and trigger
-  // when the user was in PRODUCTION when they locked. If they locked while
-  // on dinner/meeting/training, the lock time stays attributed to that
-  // activity (matches user expectation: auto-break never overrides
-  // explicitly chosen non-production activities).
+  // PR #46 — auto-break only triggers when user was in PRODUCTION at lock.
+  // PR #48 — also credit lock duration when user was on a non-production
+  // activity (dinner/break/meeting/training) so that time isn't lost.
+  // lockInterval may have already credited some of lockedMs via
+  // state._lockTickCredited; subtract that to avoid double-counting if
+  // the WebView happened to keep ticking during the lock.
+  const lockTickCredited = state._lockTickCredited || 0;
+  const remainingMs = Math.max(0, lockedMs - lockTickCredited);
+  state._lockTickCredited = 0;
+
   if (lockedSec >= RULES.MAC_LOCK_BREAK_SEC &&
       state.activity === 'production' &&
       state.shiftEnded !== true && state.shiftActive === true) {
-    // PR #10: credit lock duration to auto_break bucket (not the manual
-    // break bucket) so TLs / dashboards see the breakdown.
-    state.totals.auto_break = (state.totals.auto_break || 0) + lockedMs;
+    // Auto-break path — only when locked during PRODUCTION ≥ threshold.
+    state.totals.auto_break = (state.totals.auto_break || 0) + remainingMs;
     if (!state.autoBreak) {
       triggerAutoBreak();
     }
@@ -4318,6 +4334,12 @@ function unlockMac() {
         if (typeof renderRecentList === 'function') renderRecentList();
       }
     } catch (e) { try { Logger && Logger.log && Logger.log('autobreak entry update failed: ' + e); } catch (_) {} }
+  } else if (state.activity && state.activity !== 'production' && state.activity !== 'idle' &&
+             state.shiftEnded !== true && state.shiftActive === true) {
+    // PR #48 — Lock during dinner/break/meeting/training: credit the lock
+    // duration to that activity bucket. Without this, the lock time vanishes
+    // from totals and Sheet shows DinnerMin=0 even after a 35-min dinner.
+    state.totals[state.activity] = (state.totals[state.activity] || 0) + remainingMs;
   }
 
   state.macLocked = false;
