@@ -4041,6 +4041,40 @@ function switchActivity(act) {
 
   if (prev === act) return;
 
+  // ── PR #52 — Log completed away activity to Recent list (UI-only) ──
+  // When leaving Break / Dinner / Meeting / Training, push a synthetic
+  // entry showing how long the user spent in that activity. Mirrors how
+  // auto-break shows up in the list.
+  // Guards:
+  //   • prevAwayMs ≥ 10s — skip accidental clicks
+  //   • !state.autoBreak — auto-break is handled separately by
+  //     triggerAutoBreak + handleNativeUnlock; never duplicate it.
+  //   • Never sent to backend (no logTask call) — heartbeat already
+  //     credits the time bucket; logTask would double-count.
+  if (prevWasAway && prevAwayMs >= 10000 && !state.autoBreak) {
+    const ACT_LOG_LABEL = {
+      break:    '☕ Break',
+      meeting:  '👥 Meeting',
+      training: '📚 Training',
+      dinner:   '🍱 Dinner'
+    };
+    const label = ACT_LOG_LABEL[prev];
+    if (label) {
+      try {
+        loggedTasks.forEach(t => t._isNew = false);
+        loggedTasks.unshift({
+          time:            nowTimeLabel(),
+          type:            label,
+          addr:            'activity',
+          durationMs:      prevAwayMs,
+          _activitySwitch: true,
+          _isNew:          true
+        });
+        if (typeof renderRecentList === 'function') renderRecentList();
+      } catch (_) {}
+    }
+  }
+
   // Starting any non-production activity — track the start time so we
   // can compute duration on return. Reset autoBreak flag (they manually
   // chose this activity, it's not an auto-trigger).
@@ -4732,6 +4766,38 @@ function confirmEndShift() {
 
 async function confirmEndShiftFinal() {
   closeModal('endShiftConfirmModal');
+
+  // ── PR #52 — If user ends shift while on Break/Dinner/Meeting/Training,
+  // log that final away activity to Recent list before stopping timers.
+  // Same guards as switchActivity hook (≥10s, skip auto-break).
+  try {
+    if (state.activity && state.activity !== 'production' && state.activity !== 'idle' &&
+        state.breakStartedAt && !state.autoBreak) {
+      const finalMs = Date.now() - state.breakStartedAt;
+      if (finalMs >= 10000) {
+        const ACT_LOG_LABEL = {
+          break:    '☕ Break',
+          meeting:  '👥 Meeting',
+          training: '📚 Training',
+          dinner:   '🍱 Dinner'
+        };
+        const label = ACT_LOG_LABEL[state.activity];
+        if (label) {
+          loggedTasks.forEach(t => t._isNew = false);
+          loggedTasks.unshift({
+            time:            nowTimeLabel(),
+            type:            label,
+            addr:            'activity',
+            durationMs:      finalMs,
+            _activitySwitch: true,
+            _isNew:          true
+          });
+          if (typeof renderRecentList === 'function') renderRecentList();
+        }
+      }
+    }
+  } catch (_) {}
+
   // Stop all timers — including the per-200ms clock tick whose only job
   // is to update counters + save snapshots. If we don't stop it here, it
   // keeps running and re-writes the snapshot (with shiftEnded=true but
