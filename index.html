@@ -512,34 +512,43 @@
   .idle-banner .imain { flex: 1; }
   .idle-banner .imain b { color: var(--teal); }
 
-  /* Break-exceeded banner — shown when total break exceeds the daily allowance */
+  /* Break-exceeded banner — sticky red with pulsing dot + breakdown sub-line.
+     Total break = manual + dinner + auto; threshold = RULES.BREAK_ALLOWANCE_MIN. */
   .break-limit-banner {
     display: none;
     margin: 8px 22px 0;
     padding: 11px 14px;
     border-radius: 10px;
-    background: linear-gradient(135deg, rgba(255,69,58,0.18), rgba(255,159,10,0.12));
-    border: 1px solid rgba(255,69,58,0.45);
+    background: linear-gradient(180deg, #dc2626, #b91c1c);
+    border: 1px solid #7f1d1d;
+    box-shadow: 0 2px 8px rgba(220,38,38,0.35);
     align-items: center;
-    gap: 10px;
-    font-size: 12px;
-    color: #ffd1cc;
+    gap: 12px;
+    font-size: 13px;
+    color: #fff;
+    font-weight: 600;
   }
   .break-limit-banner.show { display: flex; }
   .break-limit-banner .bdot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: #ff6b5b;
-    box-shadow: 0 0 10px #ff6b5b;
-    animation: blink 1.2s ease-in-out infinite;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 8px rgba(255,255,255,0.7);
+    animation: blink 1.4s ease-in-out infinite;
+    flex-shrink: 0;
   }
-  .break-limit-banner .bmain { flex: 1; }
-  .break-limit-banner .bmain b { color: #ff9f8a; }
-  .break-limit-banner .bexceed {
+  .break-limit-banner .bmain { flex: 1; line-height: 1.4; }
+  .break-limit-banner .bmain b { color: #fff; }
+  .break-limit-banner .blimit { opacity: 0.85; font-weight: 500; }
+  .break-limit-banner .bsub {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.92;
+    margin-top: 2px;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    font-weight: 700;
-    color: #ff6b5b;
-    white-space: nowrap;
+  }
+  #breakExceedAmount {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
   }
 
   /* Admin broadcast banner — driven by Config!B6 in the Google Sheet.
@@ -1781,13 +1790,13 @@
             <div id="idleTimer" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--teal); font-weight: 700;">0s</div>
           </div>
 
-          <!-- Break-exceeded banner — appears only after break total > 60 min -->
+          <!-- Break-exceeded banner — sticky, live-updating once total break ≥ 60 min -->
           <div class="break-limit-banner" id="breakLimitBanner">
             <div class="bdot"></div>
             <div class="bmain">
-              <b>⚠️ Break limit exceeded</b> — daily allowance is <b>1 hour</b>. Extra break time is logged.
+              <div><b>⚠️ Break exceeded</b> — total breaks today: <b id="breakExceedAmount">0m</b> <span class="blimit">(limit: 60m)</span></div>
+              <div class="bsub" id="breakExceedBreakdown">Manual 0m · Dinner 0m · Auto 0m</div>
             </div>
-            <div class="bexceed" id="breakExceedAmount">+0m</div>
           </div>
 
           <div class="form-wrap" id="taskFormCard">
@@ -3893,6 +3902,14 @@ function sendHeartbeat() {
   const reportedActivity = (state.activity === 'break' && state.autoBreak)
     ? 'auto_break'
     : state.activity;
+  // breakMin is now the ROLLED-UP TOTAL (manual + dinner + auto).
+  // dinnerMin + autoBreakMin are still sent for the breakdown display.
+  // Manual = breakMin - dinnerMin - autoBreakMin (derivable, never stored).
+  const _manualBreakMin = Math.round((state.totals.break      || 0) / 60000);
+  const _dinnerMin      = Math.round((state.totals.dinner     || 0) / 60000);
+  const _autoBreakMin   = Math.round((state.totals.auto_break || 0) / 60000);
+  const _totalBreakMin  = _manualBreakMin + _dinnerMin + _autoBreakMin;
+  const _breakLimit     = (window.RULES && RULES.BREAK_ALLOWANCE_MIN) || 60;
   nativeFire('heartbeat', {
     user: state.user,
     team: state.team,
@@ -3900,10 +3917,10 @@ function sendHeartbeat() {
     activity: reportedActivity,
     tasksDone: state.tasksDone || 0,
     productionMin: Math.round((state.totals.production || 0) / 60000),
-    // breakMin = MANUAL break only. autoBreakMin tracked separately in
-    // its own field (server stores in Live col M / Sessions col L).
-    breakMin:      Math.round((state.totals.break || 0) / 60000),
-    autoBreakMin:  Math.round((state.totals.auto_break || 0) / 60000),
+    breakMin:      _totalBreakMin,
+    autoBreakMin:  _autoBreakMin,
+    dinnerMin:     _dinnerMin,
+    breakExceeded: _totalBreakMin >= _breakLimit ? 'Yes' : 'No',
     // PR #16: taskDurMin = sum of logged task durations. Used as
     // numerator in util formula (taskDur ÷ 8 hrs × 100).
     taskDurMin:    Math.round((state.totals.taskDuration || 0) / 60000),
@@ -3913,20 +3930,28 @@ function sendHeartbeat() {
   });
 }
 
-// Show/hide the break-exceeded banner. Toasts once when the user first crosses the line.
+// Show/hide the break-exceeded banner. Sticky once shown — number live-updates each tick.
+// Total break = manual break + dinner + auto-break. Limit is RULES.BREAK_ALLOWANCE_MIN (60).
 function updateBreakLimitBanner() {
   const t = state.totals || {};
-  const breakMs = (t.break || 0) + (t.auto_break || 0);
-  const breakMin = breakMs / 60000;
-  const limit = RULES.BREAK_ALLOWANCE_MIN || 60;
-  const banner = document.getElementById('breakLimitBanner');
+  const manualMs  = t.break      || 0;
+  const dinnerMs  = t.dinner     || 0;
+  const autoMs    = t.auto_break || 0;
+  const totalMin  = (manualMs + dinnerMs + autoMs) / 60000;
+  const limit     = RULES.BREAK_ALLOWANCE_MIN || 60;
+  const banner    = document.getElementById('breakLimitBanner');
   if (!banner) return;
 
-  if (breakMin > limit) {
-    const excessMin = Math.floor(breakMin - limit);
+  if (totalMin >= limit) {
+    const totalRounded  = Math.floor(totalMin);
+    const manualMin     = Math.round(manualMs / 60000);
+    const dinnerMin     = Math.round(dinnerMs / 60000);
+    const autoMin       = Math.round(autoMs   / 60000);
     banner.classList.add('show');
     const lbl = document.getElementById('breakExceedAmount');
-    if (lbl) lbl.textContent = '+' + excessMin + 'm';
+    if (lbl) lbl.textContent = totalRounded + 'm';
+    const sub = document.getElementById('breakExceedBreakdown');
+    if (sub) sub.textContent = `Manual ${manualMin}m · Dinner ${dinnerMin}m · Auto ${autoMin}m`;
     if (!state._breakExceededToasted) {
       state._breakExceededToasted = true;
       toast('⚠️', `Break limit (${limit}m) exceeded — extra time is logged`);
@@ -4658,10 +4683,23 @@ function confirmEndShift() {
   // Build summary from state.totals
   const t = state.totals || {};
   const u = computeUtilization();
+  const _manualMs = t.break      || 0;
+  const _dinnerMs = t.dinner     || 0;
+  const _autoMs   = t.auto_break || 0;
+  const _totalBreakMs = _manualMs + _dinnerMs + _autoMs;
+  const _limitMin = (window.RULES && RULES.BREAK_ALLOWANCE_MIN) || 60;
+  const _exceeded = (_totalBreakMs / 60000) >= _limitMin;
+  const exceededLine = _exceeded
+    ? `<b>Break exceeded:</b> <span style="color:#ff6b5b;font-weight:700;">Yes ⚠️</span><br>`
+    : `<b>Break exceeded:</b> No<br>`;
   const summary = `
     <b>Production:</b> ${fmtHM(t.production)}<br>
-    <b>Break:</b> ${fmtHM(t.break)} · <b>Meeting:</b> ${fmtHM(t.meeting)}<br>
-    <b>Dinner:</b> ${fmtHM(t.dinner || 0)} · <b>Training:</b> ${fmtHM(t.training)}<br>
+    <b>Break (total):</b> ${fmtHM(_totalBreakMs)}<br>
+    &nbsp;&nbsp;├ Manual: ${fmtHM(_manualMs)}<br>
+    &nbsp;&nbsp;├ Dinner: ${fmtHM(_dinnerMs)}<br>
+    &nbsp;&nbsp;└ Auto: ${fmtHM(_autoMs)}<br>
+    ${exceededLine}
+    <b>Meeting:</b> ${fmtHM(t.meeting)} · <b>Training:</b> ${fmtHM(t.training)}<br>
     <b>Idle (after 5m):</b> ${fmtHM(state.idleTotalMs)}<br>
     <b>Tasks logged:</b> ${state.tasksDone || 0}<br>
     <b>Total shift:</b> ${fmtHM(u.totalMs)} · <b>Utilization:</b> ${u.pct}%
@@ -4685,19 +4723,24 @@ async function confirmEndShiftFinal() {
   state.shiftEndTime = Date.now();
 
   // Tell backend the session is done — shape matches closeSession_ in Apps Script.
-  // Backend writes these into the 12-column Sessions schema (PR #10):
-  //   Name, Date, Start, End, Production, Break, Dinner, Meeting, Training,
-  //   Idle, Break Exceeded, Auto Break
-  // breakMin = manual break only; autoBreakMin sent separately so the
-  // Sessions row shows the breakdown.
+  // breakMin is the ROLLED-UP TOTAL (manual + dinner + auto). Server writes it
+  // into Sessions F. Server also gets dinnerMin + autoBreakMin separately for
+  // the breakdown columns (G + L). breakExceeded is computed against the
+  // total against RULES.BREAK_ALLOWANCE_MIN.
   const t = state.totals || {};
   const toMin = (ms) => Math.round((ms || 0) / 60000);
+  const _manualBreakMin  = toMin(t.break);
+  const _dinnerMinClose  = toMin(t.dinner);
+  const _autoBreakMinClose = toMin(t.auto_break);
+  const _totalBreakClose = _manualBreakMin + _dinnerMinClose + _autoBreakMinClose;
+  const _breakLimitClose = (window.RULES && RULES.BREAK_ALLOWANCE_MIN) || 60;
   nativeFire('closeSession', {
     user:          state.user,
     productionMin: toMin(t.production),
-    breakMin:      toMin(t.break),                  // manual only
-    autoBreakMin:  toMin(t.auto_break),             // PR #10
-    dinnerMin:     toMin(t.dinner),
+    breakMin:      _totalBreakClose,                // total (manual + dinner + auto)
+    autoBreakMin:  _autoBreakMinClose,
+    dinnerMin:     _dinnerMinClose,
+    breakExceeded: _totalBreakClose >= _breakLimitClose ? 'Yes' : 'No',
     meetingMin:    toMin(t.meeting),
     trainingMin:   toMin(t.training),
     idleMin:       toMin(state.idleTotalMs),

@@ -595,19 +595,17 @@
     document.getElementById('statProdSub').textContent =
       'Prod: ' + minToHM(totals.productionMin||0) + ' · Meeting: ' + minToHM(totals.meetingMin||0)
       + ' · Training: ' + minToHM(totals.trainingMin||0);
-    // Break Time = manual break + auto break + dinner. PR #10: auto-break
-    // is tracked separately so users can see when the system auto-flipped
-    // them off Production after Mac lock ≥ 15 min. Shown as a breakdown
-    // in the sub-text so they understand the total.
-    var breakMin     = Number(totals.breakMin     || 0);
+    // Break Time — totals.breakMin is now the rolled-up TOTAL (manual+
+    // dinner+auto) from the server. Manual is derivable: total - auto - dinner.
+    var totalBreak   = Number(totals.breakMin     || 0);
     var autoBreakMin = Number(totals.autoBreakMin || 0);
     var dinnerMin    = Number(totals.dinnerMin    || 0);
-    var totalBreak   = breakMin + autoBreakMin + dinnerMin;
+    var manualBreakMin = Math.max(0, totalBreak - autoBreakMin - dinnerMin);
     document.getElementById('statBreak').textContent = minToHM(totalBreak);
     var subParts = [];
-    if (breakMin > 0)     subParts.push('Manual ' + minToHM(breakMin));
-    if (autoBreakMin > 0) subParts.push('🔒 Auto ' + minToHM(autoBreakMin));
-    if (dinnerMin > 0)    subParts.push('Dinner ' + minToHM(dinnerMin));
+    if (manualBreakMin > 0) subParts.push('Manual ' + minToHM(manualBreakMin));
+    if (dinnerMin > 0)      subParts.push('Dinner ' + minToHM(dinnerMin));
+    if (autoBreakMin > 0)   subParts.push('🔒 Auto ' + minToHM(autoBreakMin));
     document.getElementById('statBreakSub').textContent =
       subParts.length ? subParts.join(' · ') : 'includes dinner';
 
