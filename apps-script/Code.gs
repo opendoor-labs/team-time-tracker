@@ -209,11 +209,62 @@ function _verifyBinaryHash_(ss, data) {
         context: (data.action || '') + ' hash=' + hashShort
       });
     } catch (_) {}
+    // PR #40 — email alert (rate-limited so we don't spam on retries)
+    try { _alertBinaryRejection_(ss, data, hashShort); } catch (_) {}
     return { ok: false, hashShort: hashShort };
   } catch (err) {
     // Never fail closed on Config read errors — just allow
     return { ok: true };
   }
+}
+
+// PR #40 — Email super_admins on first binary rejection per (user, hash).
+// Rate-limited via CacheService so a tampered binary that retries every
+// 30 sec doesn't spam the admin inbox. Cache key burns for 1 hour.
+function _alertBinaryRejection_(ss, data, hashShort) {
+  var user = String(data.user || 'unknown');
+  var hash = String(data.binaryHash || 'none');
+  var cache = CacheService.getScriptCache();
+  var dedupeKey = 'binAlert:' + user + ':' + hash.slice(0, 16);
+  if (cache.get(dedupeKey)) return;       // already alerted in last hour
+  cache.put(dedupeKey, '1', 3600);
+
+  var admins = [];
+  try {
+    var wl = ss.getSheetByName('Whitelist');
+    if (!wl) return;
+    var rows = wl.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++) {
+      var role = String(rows[i][1] || '').toLowerCase();
+      if (role === 'super_admin') admins.push(String(rows[i][0] || ''));
+    }
+  } catch (e) { return; }
+  if (admins.length === 0) return;
+
+  try {
+    MailApp.sendEmail({
+      to: admins.join(','),
+      subject: '🚨 TTK binary integrity violation — ' + user,
+      htmlBody:
+        '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:560px;padding:24px;background:#0f1420;color:#e6edf5;border-radius:12px">' +
+        '<h2 style="margin:0 0 16px;color:#ff6b6b">⚠️ Binary Integrity Violation</h2>' +
+        '<p style="color:#9aa7b8;margin:0 0 16px">A Mac app instance sent an API request with a SHA256 hash that is NOT on the allowlist. The request was rejected.</p>' +
+        '<table style="width:100%;border-collapse:collapse;margin:16px 0">' +
+        '<tr><td style="padding:6px 8px;color:#6b7a8f">User:</td><td style="padding:6px 8px"><b>' + user + '</b></td></tr>' +
+        '<tr><td style="padding:6px 8px;color:#6b7a8f">Action attempted:</td><td style="padding:6px 8px">' + (data.action || '?') + '</td></tr>' +
+        '<tr><td style="padding:6px 8px;color:#6b7a8f">Hash sent:</td><td style="padding:6px 8px;font-family:monospace">' + hashShort + '</td></tr>' +
+        '<tr><td style="padding:6px 8px;color:#6b7a8f">Time (IST):</td><td style="padding:6px 8px">' + nowIST_() + '</td></tr>' +
+        '</table>' +
+        '<p style="color:#9aa7b8;margin:16px 0">Possible causes:</p>' +
+        '<ul style="color:#9aa7b8;margin:0 0 16px">' +
+        '<li>User has tampered binary (intentional or via malware)</li>' +
+        '<li>User installed an old build whose hash is not yet on Config!B13</li>' +
+        '<li>Allowlist was rotated and forgot to add new build hash</li>' +
+        '</ul>' +
+        '<p style="color:#9aa7b8;margin:0">Check Errors tab + Config!B13 (allowlist). Rate-limited: this user/hash pair won\'t alert again for 1 hour.</p>' +
+        '</div>'
+    });
+  } catch (e) { Logger.log('binary alert failed: ' + e); }
 }
 
 // Opt-in audit — only writes when Config!B8 starts with "debug:<email>".
