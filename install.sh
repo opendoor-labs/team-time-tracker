@@ -160,6 +160,18 @@ chmod 444 "$INSTALL_DIR/binary.sha256"
 echo "      🔐 Binary SHA256: ${BIN_HASH:0:16}…"
 echo "      🔐 Saved to $INSTALL_DIR/binary.sha256 (read-only)"
 
+# ── PR #37 — Filesystem lockdown ──
+# Make .app bundle + install dir read-only so a casual `cp` overwrite
+# fails. Doesn't stop a determined attacker (they can chmod back), but
+# raises the bar significantly above "just drop a malicious binary in
+# place". Combined with the integrity check (PR #38) and server-side
+# allowlist (PR #39), this is layered defense.
+chmod -R a-w "$APP_DIR" 2>/dev/null || true
+chmod -R a-w "$INSTALL_DIR" 2>/dev/null || true
+# Re-add execute bit on the binary (chmod -R a-w stripped it)
+chmod +x "$APP_DIR/Contents/MacOS/TeamTimeTracker" 2>/dev/null || true
+echo "      🔐 Bundle + install dir locked read-only"
+
 # ── Step 5: LaunchAgent (auto-start on login) ──
 echo "[5/6] Setting up auto-start..."
 mkdir -p "$LAUNCH_AGENTS"
