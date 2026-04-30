@@ -1053,6 +1053,9 @@
             _aggregates: agg.rows,
             _aggregatesHeader: agg.header,
             _multiDayLazy: true,
+            // PR #48 — backend availableUsers (cumulative team-scoped)
+            // so the User-filter dropdown is populated on the fast path.
+            availableUsers: Array.isArray(agg.availableUsers) ? [...agg.availableUsers] : [],
             // Empty placeholders — populated when user clicks a tab
             logs: {},
             attendance: { header: [], rows: [] },

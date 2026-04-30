@@ -3632,14 +3632,19 @@ function aggregatesRange_(ss, p) {
 
   var teamFilter = wl.isAdmin ? null : wl.teams;
   var data = readDailyAggregates_(fromDate, toDate, teamFilter);
+  var teams = wl.isAdmin ? Object.keys(TEAM_TO_TAB) : wl.teams;
   return {
     ok: true,
     fromDate: fromDate,
     toDate: toDate,
-    teams: wl.isAdmin ? Object.keys(TEAM_TO_TAB) : wl.teams,
+    teams: teams,
     isAdmin: wl.isAdmin,
     header: data.header,
-    rows: data.rows
+    rows: data.rows,
+    // PR #48 — include availableUsers so the User-filter dropdown is
+    // populated when the dashboard takes the fast-path. Without this the
+    // dropdown went empty for super_admins (legacy slow-path only).
+    availableUsers: _availableUsersForTeams_(ss, teams, wl.isAdmin)
   };
 }
 
