@@ -1663,7 +1663,7 @@
 <div class="menubar">
   <span class="spacer"></span>
   <span class="right-item"><span class="tracker-icon">T</span></span>
-  <span class="right-item" id="menuClock">Tue 22 Apr · 9:42 AM</span>
+  <span class="right-item" id="menuClock">—</span>
 </div>
 
 <div class="desktop">
@@ -1696,7 +1696,7 @@
           <div class="logo-orb">☀️</div>
           <h2 id="greetHead">Good morning</h2>
           <div class="greeting-sub">
-            <b id="greetDate">Tuesday, April 22, 2026</b> · <span id="greetTime">9:42 AM IST</span>
+            <b id="greetDate">Today</b> · <span id="greetTime">—</span>
           </div>
 
           <div class="quote-card">
@@ -1753,7 +1753,7 @@
                 <div class="avatar">AR</div>
                 <div>
                   <div class="name" id="headName">&nbsp;</div>
-                  <div class="team-lbl" id="headTeam">Listings · Tuesday, April 22</div>
+                  <div class="team-lbl" id="headTeam">&nbsp;</div>
                 </div>
               </div>
             </div>
@@ -1946,7 +1946,7 @@
         <div class="start-day">
           <div class="logo-orb" style="background: linear-gradient(135deg, var(--orange), var(--red));">🌴</div>
           <h2>Enjoy your day off!</h2>
-          <div class="greeting-sub">Marked <b>On Leave</b> for Tuesday, April 22, 2026.</div>
+          <div class="greeting-sub">Marked <b>On Leave</b> for <span id="leaveScreenDate">today</span>.</div>
           <div class="quote-card" style="border-color: rgba(255,159,10,0.18); background: linear-gradient(135deg, rgba(255,159,10,0.08), rgba(255,69,58,0.05));">
             <div class="quote-label" style="color: var(--orange);">✅ What happens next</div>
             <div class="quote-text" style="font-style: normal; font-size: 13px;">
@@ -1965,7 +1965,7 @@
         <div class="start-day">
           <div class="logo-orb" style="background: linear-gradient(135deg, var(--purple), var(--indigo));">🏖️</div>
           <h2>Have a great week off!</h2>
-          <div class="greeting-sub">Marked <b>Week Off</b> for Tuesday, April 22, 2026.</div>
+          <div class="greeting-sub">Marked <b>Week Off</b> for <span id="weekoffScreenDate">today</span>.</div>
           <div class="quote-card" style="border-color: rgba(191,90,242,0.18); background: linear-gradient(135deg, rgba(191,90,242,0.08), rgba(94,92,230,0.05));">
             <div class="quote-label" style="color: var(--purple);">✅ What happens next</div>
             <div class="quote-text" style="font-style: normal; font-size: 13px;">
@@ -2046,7 +2046,7 @@
     <div class="icon-circle leave">🌴</div>
     <h3>Mark today as On Leave?</h3>
     <p>
-      This will log <b>Tuesday, April 22, 2026</b> as <b>On Leave</b> for you and notify your TL on Slack.
+      This will log <b><span id="leaveModalDate">today</span></b> as <b>On Leave</b> for you and notify your TL on Slack.
       The app won't ask you to start again today.
     </p>
     <div class="modal-actions">
@@ -2062,7 +2062,7 @@
     <div class="icon-circle weekoff">🏖️</div>
     <h3>Mark today as Week Off?</h3>
     <p>
-      This will log <b>Tuesday, April 22, 2026</b> as <b>Week Off</b> for you. Your TL is notified
+      This will log <b><span id="weekoffModalDate">today</span></b> as <b>Week Off</b> for you. Your TL is notified
       and the leaderboard excludes today from averages.
     </p>
     <div class="modal-actions">
@@ -2932,6 +2932,16 @@ function loadDailyQuote() {
   })();
 }
 
+// PR #55 — Single source of truth for "today's long date" used in greeting,
+// header strip, and leave/weekoff confirm modals. Returns e.g. "Wednesday,
+// April 30, 2026". Was previously hardcoded as "Tuesday, April 22, 2026"
+// in 7 places, frozen at v2.7 launch.
+function _todayLongDate() {
+  return new Date().toLocaleDateString(undefined, {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+  });
+}
+
 function updateClock() {
   const d = new Date();
   const opts = { weekday: 'short', day: '2-digit', month: 'short' };
@@ -2939,6 +2949,11 @@ function updateClock() {
   const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
   document.getElementById('menuClock').textContent = date + ' · ' + time;
   document.getElementById('greetTime').textContent = time + ' IST';
+  // PR #55 — also keep the Start screen greeting date fresh. Previously
+  // the date in "Good evening, R.Arun · Tuesday, April 22, 2026" was
+  // hardcoded HTML and never updated.
+  const gd = document.getElementById('greetDate');
+  if (gd) gd.textContent = _todayLongDate();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3014,7 +3029,7 @@ function startWorking(skipIntro) {
   renderTeamSwitch();
 
   const label = document.querySelector(`#teamSelect option[value="${state.team}"]`).textContent;
-  document.getElementById('headTeam').textContent = `${label} · Tuesday, April 22`;
+  document.getElementById('headTeam').textContent = `${label} · ${_todayLongDate()}`;
   document.getElementById('currentTaskLine').innerHTML = `<span style="color: var(--dim);">Fill the form to start a task</span>`;
   document.getElementById('timerDisplay').textContent = '00:00:00';
 
@@ -3120,7 +3135,7 @@ function switchTeam(newTeamKey) {
   applyFormFreezeState();
 
   const label = TEAM_LABELS[newTeamKey];
-  document.getElementById('headTeam').textContent = `${label} · Tuesday, April 22`;
+  document.getElementById('headTeam').textContent = `${label} · ${_todayLongDate()}`;
   document.getElementById('currentTaskLine').innerHTML =
     `<span style="color: var(--dim);">Switched to ${label} — fill the form to start a task</span>`;
   document.getElementById('timerDisplay').textContent = '00:00:00';
@@ -3821,19 +3836,31 @@ function fmtDurationShort(ms) {
 }
 
 function markLeave() {
+  // PR #55 — populate today's date in the modal body before showing
+  const md = document.getElementById('leaveModalDate');
+  if (md) md.textContent = _todayLongDate();
   document.getElementById('leaveConfirmModal').classList.add('show');
 }
 function confirmLeave() {
   closeModal('leaveConfirmModal');
+  // PR #55 — populate today's date on the result screen before showing
+  const ld = document.getElementById('leaveScreenDate');
+  if (ld) ld.textContent = _todayLongDate();
   showScreen('leaveScreen');
   nativeFire('markAttendance', { user: state.user, team: state.homeTeam, status: 'Leave' });
   toast('🌴', 'Marked On Leave · TL notified');
 }
 function markWeekOff() {
+  // PR #55 — populate today's date in the modal body before showing
+  const md = document.getElementById('weekoffModalDate');
+  if (md) md.textContent = _todayLongDate();
   document.getElementById('weekoffConfirmModal').classList.add('show');
 }
 function confirmWeekOff() {
   closeModal('weekoffConfirmModal');
+  // PR #55 — populate today's date on the result screen before showing
+  const wd = document.getElementById('weekoffScreenDate');
+  if (wd) wd.textContent = _todayLongDate();
   showScreen('weekoffScreen');
   nativeFire('markAttendance', { user: state.user, team: state.homeTeam, status: 'WeekOff' });
   toast('🏖️', 'Marked Week Off · TL notified');

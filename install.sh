@@ -130,7 +130,11 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
     <key>CFBundleShortVersionString</key><string>2.7.0</string>
     <key>CFBundleExecutable</key>        <string>TeamTimeTracker</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
-    <key>LSUIElement</key>               <true/>
+    <!-- LSUIElement removed (PR #55) — app must appear in Dock. The Swift
+         binary calls setActivationPolicy(.regular) + setDockIcon() to draw
+         the branded purple/sun emoji icon, but LaunchServices reads this
+         plist key first; if it was true, the runtime promotion never showed
+         in the Dock. -->
     <key>NSHighResolutionCapable</key>   <true/>
     <key>NSAppSleepDisabled</key>        <true/>
 </dict>
