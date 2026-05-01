@@ -213,11 +213,66 @@ function _verifyBinaryHash_(ss, data) {
       return { ok: true };
     }
 
-    // Hash present but unknown — always reject
+    // PR #57 — Auto-register hashes for users on the Employee Roster.
+    // Original design (PR #38/39): admin manually maintains Config!B13
+    // by appending each new build's hash. This doesn't scale: every
+    // re-install on a different Mac produces a unique hash, so a
+    // 115-user team would generate dozens of "Binary Integrity Violation"
+    // emails per week and break each user's tracker until manually
+    // allow-listed.
+    //
+    // New behavior: if the requesting user is on the Employee Roster
+    // (1dqbnwu03rMA73Yr6F1q0IJVGFjnGZE4oDg-1G-vsRmI, col A=Name) AND
+    // their hash is unknown, append the hash to Config!B13 and allow.
+    // Logs an INFO event so the daily security audit shows the auto-
+    // registration. ScriptLock prevents two simultaneous registrations
+    // from clobbering Config!B13.
+    //
+    // Hash-mismatch from a name NOT on the roster is still rejected and
+    // alerts super_admins — that's the genuine tampering signal.
+    try {
+      var requestor = String(data.user || '').trim();
+      if (requestor && _isOnEmployeeRoster_(requestor)) {
+        var lock = LockService.getScriptLock();
+        try { lock.waitLock(3000); } catch (lockErr) {
+          // Couldn't get lock — allow this request, will register on next.
+          return { ok: true };
+        }
+        try {
+          // Re-read B13 inside the lock so we don't overwrite a concurrent
+          // registration. Append our hash if not already present.
+          var fresh = String(sh.getRange('B13').getValue() || '').trim();
+          var freshList = fresh
+            ? fresh.split(',').map(function (s) { return s.trim(); }).filter(Boolean)
+            : [];
+          if (freshList.indexOf(hash) < 0) {
+            freshList.push(hash);
+            sh.getRange('B13').setValue(freshList.join(','));
+          }
+        } finally { lock.releaseLock(); }
+
+        // Log the auto-registration so it's visible in Errors tab + daily audit.
+        try {
+          handleLogError_(ss, {
+            source: 'apps-script', kind: 'binary-hash-auto-registered',
+            message: 'Auto-registered hash for roster member ' + requestor,
+            user: requestor, context: 'hash=' + hashShort + ' action=' + (data.action || '')
+          });
+        } catch (_) {}
+
+        return { ok: true };
+      }
+    } catch (regErr) {
+      try { Logger.log('auto-register failed: ' + regErr); } catch (_) {}
+      // Fall through to reject path below if anything blew up.
+    }
+
+    // Hash present but unknown AND user is NOT on the roster — real
+    // tampering signal. Reject + log + email super_admins.
     try {
       handleLogError_(ss, {
         source: 'apps-script', kind: 'binary-hash-mismatch',
-        message: 'Mac app sent unknown binary hash',
+        message: 'Mac app sent unknown binary hash (user not on roster)',
         user: String(data.user || ''),
         context: (data.action || '') + ' hash=' + hashShort
       });
@@ -229,6 +284,29 @@ function _verifyBinaryHash_(ss, data) {
     // Never fail closed on Config read errors — just allow
     return { ok: true };
   }
+}
+
+// PR #57 — Membership check against the Employee Roster sheet (col A=Name).
+// Used by _verifyBinaryHash_ to decide whether to auto-register an unknown
+// hash. Case-insensitive, trim-tolerant, name-based match. Returns false
+// on any error so the caller falls through to the reject path safely.
+function _isOnEmployeeRoster_(name) {
+  var nameLc = String(name || '').toLowerCase().trim();
+  if (!nameLc) return false;
+  try {
+    var rss = SpreadsheetApp.openById(EMPLOYEE_ROSTER_SHEET_ID);
+    var sh  = rss.getSheets()[0];
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return false;
+    var values = sh.getRange(2, 1, lastRow - 1, 1).getDisplayValues();  // col A only
+    for (var i = 0; i < values.length; i++) {
+      var rosterName = String(values[i][0] || '').toLowerCase().trim();
+      if (rosterName && rosterName === nameLc) return true;
+    }
+  } catch (err) {
+    try { Logger.log('roster check failed: ' + err); } catch (_) {}
+  }
+  return false;
 }
 
 // PR #40 — Email super_admins on first binary rejection per (user, hash).
@@ -3882,10 +3960,11 @@ function dailySecurityAudit_() {
   var nowMs = Date.now();
   var cutoffMs = nowMs - 24 * 3600 * 1000;
   var SECURITY_KINDS = {
-    'binary-hash-mismatch': { severity: 'HIGH',   summary: 'Tampered binary attempts' },
-    'binary-hash-missing':  { severity: 'INFO',   summary: 'Legacy installs (pre-PR #38)' },
-    'binary-rejected':      { severity: 'HIGH',   summary: 'Binary integrity violations' },
-    'closeSession-no-start':{ severity: 'MEDIUM', summary: 'Session closures w/o start data' },
+    'binary-hash-mismatch':       { severity: 'HIGH',   summary: 'Tampered binary attempts (user NOT on roster)' },
+    'binary-hash-missing':        { severity: 'INFO',   summary: 'Legacy installs (pre-PR #38)' },
+    'binary-rejected':            { severity: 'HIGH',   summary: 'Binary integrity violations' },
+    'binary-hash-auto-registered':{ severity: 'INFO',   summary: 'New binary auto-allowed (roster member, PR #57)' },
+    'closeSession-no-start':      { severity: 'MEDIUM', summary: 'Session closures w/o start data' },
   };
 
   var counts = {};
