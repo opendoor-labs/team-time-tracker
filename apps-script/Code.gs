@@ -756,6 +756,14 @@ function closeSession_(ss, b) {
         sh.getRange(i + 1, 12).setValue(autoBreakMin); // L = Auto Break
         sh.getRange(i + 1, 13).setValue(taskDurMin);   // M = Task Duration (PR #16)
         sh.getRange(i + 1, 5, 1, 9).setNumberFormat('0');
+        // PR #59 — also clean up Live row on this branch. Previously
+        // _removeLiveRow_ was only called from the appendRow path below,
+        // so a user whose Sessions row already existed (e.g. mid-shift
+        // edge cases) would click End Shift, see "Nice work today!", and
+        // their Live row would linger. Now both branches sweep Live.
+        try { _removeLiveRow_(ss, user); } catch (e) {
+          try { Logger.log('removeLive failed (update path): ' + e); } catch (_) {}
+        }
         return { ok: true, updated: true, breakExceeded: breakExceeded };
       }
     }
