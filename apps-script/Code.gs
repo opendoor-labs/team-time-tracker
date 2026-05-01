@@ -180,13 +180,26 @@ function _verifyBinaryHash_(ss, data) {
     if (!allowed) return { ok: true };
 
     if (!hash) {
-      // Missing hash header
+      // Missing hash header.
+      // PR #54 — Rate-limit logging: legacy installs (pre-PR #38) emit
+      // ~1 request every 4 minutes (heartbeat). Without dedupe, a single
+      // legacy user fills the 2,000-row Errors tab cap in ~17 hours,
+      // crowding out real high-severity rows. Dedupe per user per 24 hr —
+      // first request each day still logs (so daily audit + ops know who
+      // is on legacy), subsequent requests are silently allowed through
+      // unchanged. Same CacheService dedupe pattern as _alertBinaryRejection_.
       try {
-        handleLogError_(ss, {
-          source: 'apps-script', kind: 'binary-hash-missing',
-          message: 'Mac app request without binaryHash',
-          user: String(data.user || ''), context: data.action || ''
-        });
+        var userLc = String(data.user || 'unknown').toLowerCase();
+        var dedupeCache = CacheService.getScriptCache();
+        var missKey = 'binMissLog:' + userLc;
+        if (!dedupeCache.get(missKey)) {
+          dedupeCache.put(missKey, '1', 86400);  // 24 hours
+          handleLogError_(ss, {
+            source: 'apps-script', kind: 'binary-hash-missing',
+            message: 'Mac app request without binaryHash',
+            user: String(data.user || ''), context: data.action || ''
+          });
+        }
       } catch (_) {}
       return mode === 'strict'
         ? { ok: false, hashShort: hashShort }
