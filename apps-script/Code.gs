@@ -625,9 +625,17 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
         sh.getRange(rowIdx, 5).setValue('production');          // E Activity
         sh.getRange(rowIdx, 6).setValue(tasksDone);             // F TasksDone
         sh.getRange(rowIdx, 7).setValue(prodMin);               // G ProdMin
-        sh.getRange(rowIdx, 10).setValue(taskStartedStr);       // J TaskStartedAt (derived)
-        sh.getRange(rowIdx, 11).setValue(taskEndedStr);         // K TaskEndedAt
-        sh.getRange(rowIdx, 12).setValue(nowPSTdateISTtime_()); // L UpdatedAt
+        // PR #58 — chain .setNumberFormat('@') before .setValue() on every
+        // date-string cell. Sheets occasionally auto-coerces a cell to Date
+        // type (column-level @ format gets overridden when Sheets pattern-
+        // matches the value), which makes the cell render as
+        // "Sat May 01 2026 03:02:20 GMT+0530 (India Standard Time)" instead
+        // of the canonical "2026-05-01 21:40:54". The display heals on next
+        // write, but the cosmetic flicker confused users. Cell-level @
+        // takes precedence over Sheets auto-detect, so this eliminates it.
+        sh.getRange(rowIdx, 10).setNumberFormat('@').setValue(taskStartedStr);       // J TaskStartedAt
+        sh.getRange(rowIdx, 11).setNumberFormat('@').setValue(taskEndedStr);         // K TaskEndedAt
+        sh.getRange(rowIdx, 12).setNumberFormat('@').setValue(nowPSTdateISTtime_()); // L UpdatedAt
         return { ok: true, rowIdx: rowIdx };
       }
     }
@@ -1091,10 +1099,27 @@ function heartbeat_(ss, b) {
       hbExceeded                                              // P BreakExceeded (Yes/No)
     ];
     if (matchedRow > 0) {
+      // PR #58 — lock the four date-string columns to plain text BEFORE the
+      // bulk setValues, so Sheets doesn't auto-coerce ShiftStartAt /
+      // TaskStartedAt / TaskEndedAt / UpdatedAt to Date objects.
+      try {
+        sh.getRange(matchedRow,  1).setNumberFormat('@'); // A ShiftStartAt
+        sh.getRange(matchedRow, 10).setNumberFormat('@'); // J TaskStartedAt
+        sh.getRange(matchedRow, 11).setNumberFormat('@'); // K TaskEndedAt
+        sh.getRange(matchedRow, 12).setNumberFormat('@'); // L UpdatedAt
+      } catch (_) {}
       sh.getRange(matchedRow, 1, 1, row.length).setValues([row]);
       return { ok: true, upsert: 'update', row: matchedRow };
     }
     sh.appendRow(row);
+    // PR #58 — same lockdown for newly-inserted rows.
+    try {
+      var newRow = sh.getLastRow();
+      sh.getRange(newRow,  1).setNumberFormat('@');
+      sh.getRange(newRow, 10).setNumberFormat('@');
+      sh.getRange(newRow, 11).setNumberFormat('@');
+      sh.getRange(newRow, 12).setNumberFormat('@');
+    } catch (_) {}
     return { ok: true, upsert: 'insert', row: sh.getLastRow() };
   });
 }
@@ -1114,8 +1139,10 @@ function shiftStart_(ss, b) {
     var vals = sh.getDataRange().getValues();
     for (var i = 1; i < vals.length; i++) {
       if (String(vals[i][1]).toLowerCase() === user.toLowerCase()) {
-        sh.getRange(i + 1, 1).setValue(shiftStartAt);           // A ShiftStartAt
-        sh.getRange(i + 1, 12).setValue(nowPSTdateISTtime_());  // L UpdatedAt
+        // PR #58 — chain .setNumberFormat('@') on date-string cells to
+        // prevent Sheets auto-coercing them to Date objects.
+        sh.getRange(i + 1,  1).setNumberFormat('@').setValue(shiftStartAt);          // A
+        sh.getRange(i + 1, 12).setNumberFormat('@').setValue(nowPSTdateISTtime_());  // L
         if (b.homeTeam) sh.getRange(i + 1, 3).setValue(canonHomeTeam); // C HomeTeam
         if (b.team)     sh.getRange(i + 1, 4).setValue(canonTeam);     // D Team
         return { ok: true, upsert: 'update', row: i + 1, shiftStartAt: shiftStartAt };
@@ -1138,6 +1165,15 @@ function shiftStart_(ss, b) {
       0,                               // O DinnerMin
       'No'                             // P BreakExceeded
     ]);
+    // PR #58 — lock date-string columns of the new row to plain text so
+    // Sheets doesn't coerce them on next read.
+    try {
+      var newRow = sh.getLastRow();
+      sh.getRange(newRow,  1).setNumberFormat('@'); // A ShiftStartAt
+      sh.getRange(newRow, 10).setNumberFormat('@'); // J TaskStartedAt
+      sh.getRange(newRow, 11).setNumberFormat('@'); // K TaskEndedAt
+      sh.getRange(newRow, 12).setNumberFormat('@'); // L UpdatedAt
+    } catch (_) {}
     return { ok: true, upsert: 'insert', row: sh.getLastRow(), shiftStartAt: shiftStartAt };
   });
 }
