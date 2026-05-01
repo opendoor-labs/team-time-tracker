@@ -45,6 +45,16 @@ echo "      ✅ Ready"
 # ── Step 2: Download app files ──
 echo "[2/6] Downloading app files..."
 mkdir -p "$INSTALL_DIR"
+# PR #56 — Unlock dirs before re-installing. Step 4 (and PR #37) chmod
+# the install dir + .app bundle to read-only so casual `cp` overwrites
+# fail. That hardening also means curl can't overwrite the existing
+# TeamTimeTracker.swift on a re-install — fails with curl error 56
+# "Failure writing output to destination". Re-grant write to the user
+# (only) before downloading so re-installs are seamless. The end-of-
+# install chmod -R a-w step re-locks them once the new bundle is in
+# place. Silent on first install (no prior locked files).
+chmod -R u+w "$INSTALL_DIR" 2>/dev/null || true
+chmod -R u+w "$APP_DIR"     2>/dev/null || true
 curl -fsSL "$SWIFT_URL" -o "$INSTALL_DIR/TeamTimeTracker.swift"
 SWIFT_SIZE=$(wc -c < "$INSTALL_DIR/TeamTimeTracker.swift" | tr -d ' ')
 if [ "$SWIFT_SIZE" -lt 10000 ]; then
