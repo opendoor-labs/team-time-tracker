@@ -664,7 +664,11 @@ function _bumpLiveAfterTask_(ss, user, team, homeTeam, durSec, isSystem) {
     //   A=ShiftStartAt B=User C=HomeTeam D=Team E=Activity F=TasksDone
     //   G=ProdMin H=BreakMin I=IdleMin J=TaskStartedAt K=TaskEndedAt L=UpdatedAt
     for (var i = 1; i < vals.length; i++) {
-      if (String(vals[i][1]).toLowerCase() === String(user).toLowerCase()) {
+      // PR #61 — trim+lower BOTH sides. Mac sends user pre-trimmed
+      // ('var user = ... .trim()'), but the stored cell value can have
+      // invisible whitespace from older writes; mismatched comparison
+      // silently fails matching → appendRow → duplicate rows.
+      if (String(vals[i][1] || '').trim().toLowerCase() === String(user).trim().toLowerCase()) {
         var rowIdx = i + 1;
         var tasksDone = Number(vals[i][5] || 0) + tsInc;
         var prodMin   = Number(vals[i][6] || 0) + addMin;
@@ -791,8 +795,13 @@ function closeSession_(ss, b) {
 
     // Find existing row for [user, today] — Name in col A, Date in col B
     var rng = sh.getDataRange().getValues();
+    var userKey = String(user || '').trim().toLowerCase();
+    var todayKey = String(today || '').trim();
     for (var i = 1; i < rng.length; i++) {
-      if (rng[i][0] === user && rng[i][1] === today) {
+      // PR #61 — case- and whitespace-insensitive match for user (and
+      // trim date for safety). Same root cause as the Live-tab matcher.
+      if (String(rng[i][0] || '').trim().toLowerCase() === userKey &&
+          String(rng[i][1] || '').trim() === todayKey) {
         sh.getRange(i + 1, 4).setValue(nowTs);         // End
         sh.getRange(i + 1, 5).setValue(prodMin);       // Production
         sh.getRange(i + 1, 6).setValue(breakMin);      // F = TOTAL break
@@ -1099,8 +1108,12 @@ function heartbeat_(ss, b) {
     var existingTaskEndedAt  = '';
     var vals = sh.getDataRange().getValues();
     var matchedRow = -1;
+    var userKey = String(user || '').trim().toLowerCase();
     for (var i = 1; i < vals.length; i++) {
-      if (String(vals[i][1]).toLowerCase() === user.toLowerCase()) {
+      // PR #61 — trim cell value to defeat invisible-whitespace mismatch
+      // (Live row B="Ranjith " vs Mac sending "Ranjith" → was creating
+      // duplicate rows; trim normalizes both sides).
+      if (String(vals[i][1] || '').trim().toLowerCase() === userKey) {
         matchedRow = i + 1;
         existingShiftStart   = String(vals[i][0]  || '');
         existingTaskStarted  = String(vals[i][9]  || '');
@@ -1193,8 +1206,10 @@ function shiftStart_(ss, b) {
     var canonHomeTeam = resolveTeam_(b.homeTeam) || String(b.homeTeam || '');
     // Column map: A=ShiftStartAt B=User C=HomeTeam D=Team ... L=UpdatedAt
     var vals = sh.getDataRange().getValues();
+    var userKey = String(user || '').trim().toLowerCase();
     for (var i = 1; i < vals.length; i++) {
-      if (String(vals[i][1]).toLowerCase() === user.toLowerCase()) {
+      // PR #61 — trim cell value (see heartbeat_ comment).
+      if (String(vals[i][1] || '').trim().toLowerCase() === userKey) {
         // PR #58 — chain .setNumberFormat('@') on date-string cells to
         // prevent Sheets auto-coercing them to Date objects.
         sh.getRange(i + 1,  1).setNumberFormat('@').setValue(shiftStartAt);          // A
