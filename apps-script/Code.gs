@@ -286,10 +286,31 @@ function _verifyBinaryHash_(ss, data) {
   }
 }
 
-// PR #57 — Membership check against the Employee Roster sheet (col A=Name).
-// Used by _verifyBinaryHash_ to decide whether to auto-register an unknown
-// hash. Case-insensitive, trim-tolerant, name-based match. Returns false
-// on any error so the caller falls through to the reject path safely.
+// PR #57 + PR #60 — Membership check against the Employee Roster sheet
+// (col A = Name). Used by _verifyBinaryHash_ to decide whether to auto-
+// register an unknown hash.
+//
+// Two-pass match:
+//   1. Exact match (case-insensitive, trim) — original behavior.
+//   2. Bidirectional name-token prefix match (PR #60) — handles the very
+//      common situation where the Mac app's `data.user` is a short name
+//      like "Ranjith" but the roster has the full name "Ranjith Kumar P"
+//      (or vice versa: Mac sends full name, roster has just the first
+//      name). Only matches if EXACTLY ONE roster row is a name-token
+//      prefix of the request, OR vice versa — ambiguous matches (two
+//      "Ranjith *" rows) fall through to reject so an admin can
+//      disambiguate.
+//
+// This eliminates the need to manually rename roster rows every time a
+// user installs with a localStorage that doesn't match the canonical
+// roster name (e.g. legacy installs from before PR #22's OTP flow).
+//
+// Security properties:
+//   • A random attacker spoofing data.user="John" still gets rejected
+//     unless "John" or "John *" exactly matches a roster row.
+//   • Common first-name collisions (two "Ravi *" rows) reject — admin
+//     must disambiguate before auto-register works for those users.
+//   • No regression vs. PR #57 — exact-match callers behave identically.
 function _isOnEmployeeRoster_(name) {
   var nameLc = String(name || '').toLowerCase().trim();
   if (!nameLc) return false;
@@ -299,10 +320,37 @@ function _isOnEmployeeRoster_(name) {
     var lastRow = sh.getLastRow();
     if (lastRow < 2) return false;
     var values = sh.getRange(2, 1, lastRow - 1, 1).getDisplayValues();  // col A only
+
+    // Build trimmed-lowercase roster list, dropping blanks
+    var roster = [];
     for (var i = 0; i < values.length; i++) {
-      var rosterName = String(values[i][0] || '').toLowerCase().trim();
-      if (rosterName && rosterName === nameLc) return true;
+      var rn = String(values[i][0] || '').toLowerCase().trim();
+      if (rn) roster.push(rn);
     }
+
+    // Pass 1 — exact match
+    for (var p = 0; p < roster.length; p++) {
+      if (roster[p] === nameLc) return true;
+    }
+
+    // Pass 2 — bidirectional name-token prefix match. Handles:
+    //   • Mac sends "Ranjith"        + roster has "Ranjith Kumar P" → match
+    //   • Mac sends "Ranjith Kumar P"+ roster has "Ranjith"         → match
+    // Match condition (whole-word boundary, not substring):
+    //   roster_entry === name + " ..."   OR   name === roster_entry + " ..."
+    // ScriptLock-safe: no shared state, just a count of unique matches.
+    var matches = 0;
+    for (var q = 0; q < roster.length; q++) {
+      var rn2 = roster[q];
+      if (rn2 === nameLc) {
+        // (Already returned in pass 1, but keep this defensive.)
+        matches++;
+      } else if (rn2.indexOf(nameLc + ' ') === 0 || nameLc.indexOf(rn2 + ' ') === 0) {
+        matches++;
+      }
+      if (matches > 1) return false;  // ambiguous → admin must disambiguate
+    }
+    return matches === 1;
   } catch (err) {
     try { Logger.log('roster check failed: ' + err); } catch (_) {}
   }
