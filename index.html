@@ -2134,9 +2134,9 @@ const RULES = {
   // This is a SEPARATE tracked metric, independent of activity state.
   IDLE_THRESHOLD_SEC:  300,   // 5 min — production value
 
-  // Auto-break: only when Mac is LOCKED / CLOSED for 15 min.
-  // Does NOT trigger from mouse inactivity alone.
-  MAC_LOCK_BREAK_SEC:  720,   // PR #46 — 12 min (was 900/15 min); auto-break threshold
+  // Auto-break: only when total "away" time hits 15 min.
+  // PR #62 — Now includes pure-idle, lock, and any combination.
+  MAC_LOCK_BREAK_SEC:  900,   // 15 min — auto-break threshold (per away period)
 
   // Welcome-back modal: only show for MANUAL breaks longer than this
   MANUAL_BREAK_WELCOME_SEC: 300, // 5 min — production value
@@ -4208,6 +4208,88 @@ function setStatusChip(act) {
 // Idle tracking — SEPARATE METRIC, runs regardless of activity
 // After 5 min of no activity, begin adding to idleTotalMs.
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// PR #62 — Unified "away period" tracker
+// ───────────────────────────────────────────────────────────────────
+// Replaces the separate idle and auto-break logic with one counter
+// (state._awayMs) that accumulates across lock + unlocked-no-input,
+// resets on user input or activity switch.
+//
+// Crediting per period:
+//   • 0–5 min away  → nothing (grace period)
+//   • 5–15 min away → credit FULL counter to Idle (cap at 15)
+//   • 15+ min away  → first 15 to Idle, rest to Auto Break
+//
+// Welcome modal fires on UNLOCK if any credit was made (idle ≥ 5 min
+// OR auto-break > 0). Pure-idle (no lock) does NOT show modal — silent
+// transition back to active when user types.
+//
+// During Break/Dinner/Meeting/Training: away counter is reset on entry
+// and not ticked. Lock time still credits to that activity bucket via
+// the existing PR #48 path.
+// ═══════════════════════════════════════════════════════════════════
+function _applyAwayCredits() {
+  var IDLE_MS = RULES.IDLE_THRESHOLD_SEC * 1000;       // 300_000 (5 min)
+  var AUTO_MS = RULES.MAC_LOCK_BREAK_SEC * 1000;       // 900_000 (15 min)
+  var totalAway = state._awayMs || 0;
+
+  // Idle credit: starts at 5-min mark, caps at 15 min
+  var expectedIdle = totalAway >= IDLE_MS ? Math.min(AUTO_MS, totalAway) : 0;
+  var idleDelta = expectedIdle - (state._awayPeriodIdleCredited || 0);
+  if (idleDelta > 0) {
+    state.idleTotalMs = (state.idleTotalMs || 0) + idleDelta;
+    state._awayPeriodIdleCredited = expectedIdle;
+  }
+
+  // Auto-break credit: starts past 15-min mark
+  var expectedAuto = Math.max(0, totalAway - AUTO_MS);
+  var autoDelta = expectedAuto - (state._awayPeriodAutoBreakCredited || 0);
+  if (autoDelta > 0) {
+    state.totals.auto_break = (state.totals.auto_break || 0) + autoDelta;
+    state._awayPeriodAutoBreakCredited = expectedAuto;
+
+    // Trigger auto-break ACTIVITY only when caused by Mac lock —
+    // pure-idle past 15 min credits time but doesn't change activity.
+    if (!state.autoBreak && state.macLocked) {
+      triggerAutoBreak();
+    }
+  }
+}
+
+function _resetAwayPeriod(reason) {
+  // reason: 'input' | 'unlock' | 'activity-change' | 'silent'
+  var idleMs = state._awayPeriodIdleCredited || 0;
+  var autoMs = state._awayPeriodAutoBreakCredited || 0;
+
+  // Show welcome modal only on unlock when there was meaningful credit.
+  // Pure-idle → active (input event) is silent, no modal.
+  if (reason === 'unlock' && (idleMs > 0 || autoMs > 0)) {
+    try { showWelcomeAfterAway(idleMs, autoMs); } catch (_) {}
+  }
+
+  state._awayMs = 0;
+  state._awayPeriodIdleCredited = 0;
+  state._awayPeriodAutoBreakCredited = 0;
+  state._awayMsAtLock = 0;
+}
+
+function showWelcomeAfterAway(idleMs, autoMs) {
+  if (state.shiftEnded === true || state.shiftActive !== true) return;
+  if ((idleMs || 0) <= 0 && (autoMs || 0) <= 0) return;
+  var firstName = (state.user || '').split(/\s+/)[0] || 'there';
+  document.getElementById('welcomeTitle').textContent = 'Welcome back, ' + firstName + '!';
+  if (autoMs > 0) {
+    document.getElementById('welcomeKind').textContent = '🔒 Auto-break ended';
+    document.getElementById('welcomeSub').innerHTML = idleMs > 0
+      ? 'You were idle for <b>' + fmtDurationShort(idleMs) + '</b> and on auto-break for <b>' + fmtDurationShort(autoMs) + '</b>. Ready to resume Production?'
+      : 'You were on auto-break for <b>' + fmtDurationShort(autoMs) + '</b>. Ready to resume Production?';
+  } else {
+    document.getElementById('welcomeKind').textContent = '⏸ Idle ended';
+    document.getElementById('welcomeSub').innerHTML = 'You were idle for <b>' + fmtDurationShort(idleMs) + '</b>. Ready to resume Production?';
+  }
+  document.getElementById('welcomeModal').classList.add('show');
+}
+
 function startIdle() {
   stopIdle();
   state.idleStreakSec = 0;
@@ -4221,14 +4303,13 @@ function startIdle() {
   document.querySelector('#idleBanner .idot').style.boxShadow = '0 0 8px var(--teal)';
 
   idleInterval = setInterval(() => {
-    // Don't tick idle while Mac is locked — that's tracked via auto-break instead
+    // Don't tick while Mac is locked — lockInterval handles that
     if (state.macLocked) return;
 
-    // ── Only count idle during PRODUCTION ──
-    // Meetings, breaks, dinner, training are legitimate time-off —
-    // idleness during those modes should NOT accumulate as "idle"
+    // ── Only count away/idle during PRODUCTION ──
     if (state.activity !== 'production') {
-      // Keep streak at 0 so the banner reads "on <mode>" instead of counting up
+      // PR #62 — leaving production resets the away period (no modal)
+      if ((state._awayMs || 0) > 0) _resetAwayPeriod('activity-change');
       state.idleStreakSec = 0;
       updateIdleBanner();
       return;
@@ -4236,17 +4317,24 @@ function startIdle() {
 
     state.idleStreakSec += 1;
 
-    // Past the 5-min threshold, every additional second counts toward idleTotalMs
-    if (state.idleStreakSec > RULES.IDLE_THRESHOLD_SEC) {
-      state.idleTotalMs += 1000;
-    }
+    // PR #62 — tick the unified away counter. _applyAwayCredits decides
+    // when to start crediting Idle (5-min mark) and Auto Break (15-min mark).
+    state._awayMs = (state._awayMs || 0) + 1000;
+    _applyAwayCredits();
 
     updateIdleBanner();
   }, 1000);
 
-  // Any activity resets the streak (but not total)
+  // Any activity resets streak + away counter (silently — no modal for
+  // pure-idle → active transitions)
   if (!window._idleReset) {
-    window._idleReset = () => { if (!state.macLocked) state.idleStreakSec = 0; };
+    window._idleReset = () => {
+      if (state.macLocked) return;
+      if ((state._awayMs || 0) > 0 && state.activity === 'production') {
+        _resetAwayPeriod('input');
+      }
+      state.idleStreakSec = 0;
+    };
     ['mousemove','keydown','mousedown','scroll','touchstart'].forEach(evt =>
       window.addEventListener(evt, window._idleReset, { passive: true })
     );
@@ -4301,6 +4389,9 @@ function lockMac() {
   if (state.shiftEnded === true || state.shiftActive !== true) return;
   state.macLocked = true;
   state.macLockedAt = Date.now();
+  // PR #62 — remember pre-lock away counter so unlockMac can reconcile
+  // (covers the case where WebView was suspended and lockInterval didn't tick)
+  state._awayMsAtLock = state._awayMs || 0;
   document.getElementById('lockOverlay').classList.add('show');
   document.getElementById('unlockMacBtn').style.display = 'inline-block';
   document.getElementById('lockMacBtn').style.display = 'none';
@@ -4330,35 +4421,25 @@ function lockMac() {
     document.getElementById('lockCountdown').textContent = lockedSec + 's';
     updateIdleBanner();
 
-    // PR #46 — auto-break ONLY triggers when user was in production at lock
-    // time. Previously fired for any non-break activity, which incorrectly
-    // overrode dinner/meeting/training when user locked Mac while on those.
-    if (lockedSec >= RULES.MAC_LOCK_BREAK_SEC && state.activity === 'production') {
-      triggerAutoBreak();
-      if (statusEl) {
-        statusEl.textContent = `☕ Auto Break logged — unlock to resume Production`;
-        statusEl.classList.add('fired');
-      }
-      if (cdEl) cdEl.classList.add('fired');
-    }
-
-    // Credit lock-window ticks. clockInterval skips while macLocked, so
-    // without this, time during a lock would silently vanish from totals.
-    //   • production + autoBreak fired → auto_break bucket (existing)
-    //   • non-production (dinner/break/meeting/training) → that bucket
-    //     directly (PR #48 fix — was being lost entirely)
-    //   • production + autoBreak NOT yet fired (within 12-min threshold)
-    //     → no credit here; unlockMac decides retroactively
-    // Track running total in state._lockTickCredited so unlockMac can
-    // avoid double-counting.
+    // PR #62 — Production lock: tick the unified away counter. The
+    // 5-min Idle and 15-min Auto Break thresholds are applied inside
+    // _applyAwayCredits — which also fires triggerAutoBreak() when the
+    // 15-min mark is crossed.
+    //
+    // Non-production lock (dinner/meeting/break/training): credit the
+    // lock duration to that activity bucket directly (PR #48 logic).
     if (tickDelta > 0 && tickDelta < 5000) {
-      let lockBucket = null;
-      if (state.autoBreak) lockBucket = 'auto_break';
-      else if (state.activity && state.activity !== 'production' && state.activity !== 'idle') {
-        lockBucket = state.activity;
-      }
-      if (lockBucket) {
-        state.totals[lockBucket] = (state.totals[lockBucket] || 0) + tickDelta;
+      if (state.activity === 'production' || state.autoBreak) {
+        state._awayMs = (state._awayMs || 0) + tickDelta;
+        _applyAwayCredits();
+        if (state.autoBreak && statusEl && !statusEl.classList.contains('fired')) {
+          statusEl.textContent = `☕ Auto Break logged — unlock to resume Production`;
+          statusEl.classList.add('fired');
+          if (cdEl) cdEl.classList.add('fired');
+        }
+      } else if (state.activity && state.activity !== 'idle') {
+        // PR #48 — manual non-production activity during lock
+        state.totals[state.activity] = (state.totals[state.activity] || 0) + tickDelta;
         state._lockTickCredited = (state._lockTickCredited || 0) + tickDelta;
       }
     }
@@ -4368,62 +4449,8 @@ function lockMac() {
 function unlockMac() {
   if (!state.macLocked) return;
   const lockedMs = Date.now() - state.macLockedAt;
-  const lockedSec = Math.floor(lockedMs / 1000);
 
-  // ── Credit lock duration to Break + ensure auto-break is set ────────
-  // Time accounting during a lock is tricky:
-  //   • clockInterval has a `!state.macLocked` guard, so it doesn't
-  //     increment any bucket (incl. break) while the Mac is locked.
-  //   • lockInterval may or may not tick depending on whether macOS
-  //     suspended the WebView. If it does tick, it triggers
-  //     triggerAutoBreak() at the 15-min mark — but that only flips
-  //     state.activity / state.autoBreak; it doesn't credit time.
-  // Net result without this block: the entire lock duration vanishes
-  // from the daily totals. Fix: on unlock, if the threshold was
-  // crossed, ALWAYS credit lockedMs to state.totals.break (regardless
-  // of whether autoBreak was already set), and trigger autoBreak if
-  // it isn't set yet.
-  // PR #46 — auto-break only triggers when user was in PRODUCTION at lock.
-  // PR #48 — also credit lock duration when user was on a non-production
-  // activity (dinner/break/meeting/training) so that time isn't lost.
-  // lockInterval may have already credited some of lockedMs via
-  // state._lockTickCredited; subtract that to avoid double-counting if
-  // the WebView happened to keep ticking during the lock.
-  const lockTickCredited = state._lockTickCredited || 0;
-  const remainingMs = Math.max(0, lockedMs - lockTickCredited);
-  state._lockTickCredited = 0;
-
-  if (lockedSec >= RULES.MAC_LOCK_BREAK_SEC &&
-      state.activity === 'production' &&
-      state.shiftEnded !== true && state.shiftActive === true) {
-    // Auto-break path — only when locked during PRODUCTION ≥ threshold.
-    state.totals.auto_break = (state.totals.auto_break || 0) + remainingMs;
-    if (!state.autoBreak) {
-      triggerAutoBreak();
-    }
-    // Update the auto-break log row's duration so the Recent Tasks
-    // list shows the actual lock time (not "0s"). triggerAutoBreak
-    // adds the row with durationMs:0 because at the time it fires
-    // (either at the 15-min lockInterval tick OR via this retroactive
-    // path) the final lock duration isn't known until unlock.
-    try {
-      const entry = (typeof loggedTasks !== 'undefined') &&
-        loggedTasks.find(function (t) {
-          return t && t._system && t.type && t.type.indexOf('Auto Break') >= 0;
-        });
-      if (entry) {
-        entry.durationMs = lockedMs;
-        if (typeof renderRecentList === 'function') renderRecentList();
-      }
-    } catch (e) { try { Logger && Logger.log && Logger.log('autobreak entry update failed: ' + e); } catch (_) {} }
-  } else if (state.activity && state.activity !== 'production' && state.activity !== 'idle' &&
-             state.shiftEnded !== true && state.shiftActive === true) {
-    // PR #48 — Lock during dinner/break/meeting/training: credit the lock
-    // duration to that activity bucket. Without this, the lock time vanishes
-    // from totals and Sheet shows DinnerMin=0 even after a 35-min dinner.
-    state.totals[state.activity] = (state.totals[state.activity] || 0) + remainingMs;
-  }
-
+  // Tear down lock UI first
   state.macLocked = false;
   state.macLockedAt = null;
   if (lockInterval) clearInterval(lockInterval);
@@ -4432,25 +4459,66 @@ function unlockMac() {
   document.getElementById('unlockMacBtn').style.display = 'none';
   document.getElementById('lockMacBtn').style.display = 'block';
 
-  // If auto-break was triggered (live OR retroactively), show the unlock
-  // welcome modal asking to resume Production
-  if (state.activity === 'break' && state.autoBreak) {
-    showUnlockWelcome(lockedMs);
+  if (state.shiftEnded === true || state.shiftActive !== true) {
+    return;
   }
-  // NEW: If user was on a MANUAL break and the break lasted ≥ threshold,
-  // nudge them back to Production on unlock with the welcome modal.
-  else if (state.activity === 'break' && state.breakWasManual && state.breakStartedAt) {
-    const breakMs = Date.now() - state.breakStartedAt;
-    if (breakMs >= RULES.MANUAL_BREAK_WELCOME_SEC * 1000) {
-      showWelcomeBack(breakMs, 'manual');
-    } else {
-      updateIdleBanner();
-      toast('🔓', 'Mac unlocked');
+
+  // PR #62 — reconcile time accounting based on what activity user was in
+  // when locked. Three branches:
+  //   1) Production (or autoBreak from lock): use the unified away counter.
+  //      lockInterval ticks the counter during lock; this block reconciles
+  //      in case the WebView was suspended and ticks were missed.
+  //   2) Manual non-production (Dinner/Meeting/Break/Training): credit lock
+  //      duration to that activity bucket. PR #48 path. No idle, no auto-break.
+  //   3) Anything else: just unlock UI, no time accounting.
+  if (state.activity === 'production' || state.autoBreak) {
+    // Reconcile: state._awayMs should be at least (pre-lock counter + lockedMs).
+    // If lockInterval kept ticking, it's already there. If WebView was
+    // suspended, this brings it up to the correct total.
+    const expectedAwayMs = (state._awayMsAtLock || 0) + lockedMs;
+    if ((state._awayMs || 0) < expectedAwayMs) {
+      state._awayMs = expectedAwayMs;
     }
-  } else {
-    updateIdleBanner();
-    toast('🔓', 'Mac unlocked');
+    _applyAwayCredits();
+
+    // Update the auto-break log row's duration so the Recent Tasks list
+    // shows the actual lock time (not "0s").
+    try {
+      const entry = (typeof loggedTasks !== 'undefined') &&
+        loggedTasks.find(function (t) {
+          return t && t._system && t.type && t.type.indexOf('Auto Break') >= 0;
+        });
+      if (entry && state.autoBreak) {
+        entry.durationMs = lockedMs;
+        if (typeof renderRecentList === 'function') renderRecentList();
+      }
+    } catch (e) {}
+
+    // Show modal if we credited anything; resets the away period.
+    _resetAwayPeriod('unlock');
+    return;
   }
+
+  // PR #48 — non-production manual activity during lock: credit lock
+  // duration to that activity bucket. Idle + auto-break stay at 0.
+  if (state.activity && state.activity !== 'idle') {
+    const lockTickCredited = state._lockTickCredited || 0;
+    const remainingMs = Math.max(0, lockedMs - lockTickCredited);
+    state._lockTickCredited = 0;
+    state.totals[state.activity] = (state.totals[state.activity] || 0) + remainingMs;
+
+    // Manual break + lock ≥ 5 min → still nudge back to Production
+    if (state.activity === 'break' && state.breakWasManual && state.breakStartedAt) {
+      const breakMs = Date.now() - state.breakStartedAt;
+      if (breakMs >= RULES.MANUAL_BREAK_WELCOME_SEC * 1000) {
+        showWelcomeBack(breakMs, 'manual');
+        return;
+      }
+    }
+  }
+
+  updateIdleBanner();
+  toast('🔓', 'Mac unlocked');
 }
 
 function triggerAutoBreak() {
@@ -4525,6 +4593,12 @@ function closeWelcome() {
   setStatusChip('production');
   applyFormFreezeState();
   state.idleStreakSec = 0;
+  // PR #62 — explicitly reset the away period state so a fresh
+  // production session starts cleanly (no carried-over credits).
+  state._awayMs = 0;
+  state._awayPeriodIdleCredited = 0;
+  state._awayPeriodAutoBreakCredited = 0;
+  state._awayMsAtLock = 0;
   updateIdleBanner();
   toast('🎯', `Back on Production — let's go!`);
 }
