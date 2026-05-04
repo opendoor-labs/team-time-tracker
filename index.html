@@ -4239,6 +4239,20 @@ function _applyAwayCredits() {
   if (idleDelta > 0) {
     state.idleTotalMs = (state.idleTotalMs || 0) + idleDelta;
     state._awayPeriodIdleCredited = expectedIdle;
+    // PR #63 — DEDUCT double-credit from production. clockInterval keeps
+    // ticking state.totals.production during the first 5 min of unlocked-
+    // no-input (because state.idleStreakSec ≤ IDLE_THRESHOLD_SEC means
+    // the production-skip guard hasn't fired yet). When we now credit
+    // those minutes as Idle, we have to reclaim them from production —
+    // otherwise the same wall-clock seconds get counted twice and Sessions
+    // sums exceed actual shift duration. _awayProdOvercreditMs tracks
+    // how much was over-credited; we deduct only up to that amount so we
+    // never go negative.
+    var deductable = Math.min(idleDelta, state._awayProdOvercreditMs || 0);
+    if (deductable > 0) {
+      state.totals.production = Math.max(0, (state.totals.production || 0) - deductable);
+      state._awayProdOvercreditMs = (state._awayProdOvercreditMs || 0) - deductable;
+    }
   }
 
   // Auto-break credit: starts past 15-min mark
@@ -4247,6 +4261,14 @@ function _applyAwayCredits() {
   if (autoDelta > 0) {
     state.totals.auto_break = (state.totals.auto_break || 0) + autoDelta;
     state._awayPeriodAutoBreakCredited = expectedAuto;
+    // Same reclaim path for the auto-break case (covers pure-idle past
+    // 15 min with no Mac lock — production was over-credited during the
+    // 0-5 min grace and idle deduction only handled up to idleDelta).
+    var deductableAuto = Math.min(autoDelta, state._awayProdOvercreditMs || 0);
+    if (deductableAuto > 0) {
+      state.totals.production = Math.max(0, (state.totals.production || 0) - deductableAuto);
+      state._awayProdOvercreditMs = (state._awayProdOvercreditMs || 0) - deductableAuto;
+    }
 
     // Trigger auto-break ACTIVITY only when caused by Mac lock —
     // pure-idle past 15 min credits time but doesn't change activity.
@@ -4261,15 +4283,51 @@ function _resetAwayPeriod(reason) {
   var idleMs = state._awayPeriodIdleCredited || 0;
   var autoMs = state._awayPeriodAutoBreakCredited || 0;
 
-  // Show welcome modal only on unlock when there was meaningful credit.
-  // Pure-idle → active (input event) is silent, no modal.
-  if (reason === 'unlock' && (idleMs > 0 || autoMs > 0)) {
+  // PR #63 — Welcome modal fires on unlock OR on input transition (per
+  // the user's latest matrix: pure-idle ≥ 5 min should also surface a
+  // modal so the user knows time was credited as idle). Activity-change
+  // is silent (user explicitly switched, no surprise).
+  if ((reason === 'unlock' || reason === 'input') && (idleMs > 0 || autoMs > 0)) {
     try { showWelcomeAfterAway(idleMs, autoMs); } catch (_) {}
+  }
+
+  // PR #63 — Push idle/auto-break entries to Recent Logged Tasks so the
+  // user can see captured away time in their list (mirrors PR #52 for
+  // manual activity switches). Always log when there was credit, regardless
+  // of reason — captures every away period that produced minutes.
+  if (idleMs > 0 || autoMs > 0) {
+    try {
+      if (typeof loggedTasks !== 'undefined' && Array.isArray(loggedTasks)) {
+        loggedTasks.forEach(function (t) { t._isNew = false; });
+        if (autoMs > 0) {
+          loggedTasks.unshift({
+            time:        nowTimeLabel(),
+            type:        '🔒 Auto Break (away ≥ 15m)',
+            addr:        'system',
+            durationMs:  autoMs,
+            _system:     true,
+            _isNew:      true
+          });
+        }
+        if (idleMs > 0) {
+          loggedTasks.unshift({
+            time:            nowTimeLabel(),
+            type:            '⏸ Idle',
+            addr:            'activity',
+            durationMs:      idleMs,
+            _activitySwitch: true,
+            _isNew:          true
+          });
+        }
+        if (typeof renderRecentList === 'function') renderRecentList();
+      }
+    } catch (_) {}
   }
 
   state._awayMs = 0;
   state._awayPeriodIdleCredited = 0;
   state._awayPeriodAutoBreakCredited = 0;
+  state._awayProdOvercreditMs = 0;  // PR #63 — reset overcredit tracker
   state._awayMsAtLock = 0;
 }
 
@@ -4320,6 +4378,17 @@ function startIdle() {
     // PR #62 — tick the unified away counter. _applyAwayCredits decides
     // when to start crediting Idle (5-min mark) and Auto Break (15-min mark).
     state._awayMs = (state._awayMs || 0) + 1000;
+
+    // PR #63 — track production overcredit. clockInterval skips production
+    // crediting only when state.idleStreakSec > IDLE_THRESHOLD_SEC. So during
+    // the 0-5 min grace period, production is being incorrectly credited
+    // alongside this idleInterval tick. Track the overcredit so
+    // _applyAwayCredits can deduct from production when crediting idle.
+    // Only increment when streak is still in the grace window.
+    if (state.idleStreakSec <= RULES.IDLE_THRESHOLD_SEC) {
+      state._awayProdOvercreditMs = (state._awayProdOvercreditMs || 0) + 1000;
+    }
+
     _applyAwayCredits();
 
     updateIdleBanner();
@@ -4598,6 +4667,7 @@ function closeWelcome() {
   state._awayMs = 0;
   state._awayPeriodIdleCredited = 0;
   state._awayPeriodAutoBreakCredited = 0;
+  state._awayProdOvercreditMs = 0;  // PR #63
   state._awayMsAtLock = 0;
   updateIdleBanner();
   toast('🎯', `Back on Production — let's go!`);
